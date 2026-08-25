@@ -1,0 +1,152 @@
+# ============================================================================
+# Lakelink Fiber — Revenue Assurance Data Simulation Config
+# ============================================================================
+# Shared configuration for all pipeline steps and notebooks.
+# Load with:  import yaml; cfg = yaml.safe_load(open('/Workspace/.../config.yaml'))
+# Or in SDP:  read at module scope so every @dlt.table function can reference it.
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# Target catalog & schemas
+# ---------------------------------------------------------------------------
+catalog: cdm_tmforum
+
+schemas:
+  salesforce:    salesforce_source
+  oracle_erp:    oracle_erp_source
+  ironclad_clm:  ironclad_clm_source
+  refinitiv_fx:  refinitiv_fx_source
+  mdm:           mdm_source
+
+# ---------------------------------------------------------------------------
+# Reproducibility & key generation
+# ---------------------------------------------------------------------------
+seed: 42
+pk_start_offset: 900000
+
+# ---------------------------------------------------------------------------
+# Scale parameters
+# ---------------------------------------------------------------------------
+scale:
+  contacts_per_account: 3           # fixed fan-out per account
+  contracts_per_account: 1.4        # avg; some accounts have renewals/amendments
+  lines_per_contract: 4             # avg circuits/services per contract
+  opps_per_account: 1.8             # avg open + closed opportunities
+  fx_days: 2920                     # 365 * 8; match tmf bill history 2018-2025
+
+# ---------------------------------------------------------------------------
+# Controlled leakage injection (drives the 6 RA reconciliation checks)
+# Set to 0.0 for pristine/clean data generation.
+# ---------------------------------------------------------------------------
+leakage_rate: 0.06                  # ~6% of contract lines carry a seeded exception
+
+# ---------------------------------------------------------------------------
+# Product catalog (Salesforce Product2 / Pricebook source of truth)
+# ProductCode, Name, Family, list_mrr (monthly recurring revenue USD)
+# ---------------------------------------------------------------------------
+products:
+  - code: FIBER-DIA-1G
+    name: 1 Gbps Dedicated Internet Access
+    family: Dedicated Internet
+    list_mrr: 1200.0
+  - code: FIBER-DIA-10G
+    name: 10 Gbps Dedicated Internet Access
+    family: Dedicated Internet
+    list_mrr: 4800.0
+  - code: WAVE-10G
+    name: 10G Wavelength (point-to-point)
+    family: Wavelength
+    list_mrr: 5200.0
+  - code: WAVE-100G
+    name: 100G Wavelength (point-to-point)
+    family: Wavelength
+    list_mrr: 18500.0
+  - code: ELINE-1G
+    name: E-Line EVPL 1G
+    family: Ethernet
+    list_mrr: 900.0
+  - code: ELAN-MPLS
+    name: MPLS IP-VPN site
+    family: IP-VPN
+    list_mrr: 650.0
+  - code: SDWAN-EDGE
+    name: Managed SD-WAN edge
+    family: Managed
+    list_mrr: 450.0
+  - code: COLO-RACK
+    name: Colocation rack + cross-connect
+    family: Colocation
+    list_mrr: 1500.0
+
+# ---------------------------------------------------------------------------
+# FX currency pairs (Refinitiv / LSEG daily rate generation)
+# from_currency → to_currency with a base mid-market rate
+# ---------------------------------------------------------------------------
+fx_pairs:
+  - from: EUR
+    to: USD
+    base_rate: 1.08
+  - from: GBP
+    to: USD
+    base_rate: 1.27
+  - from: USD
+    to: USD
+    base_rate: 1.0
+  - from: CAD
+    to: USD
+    base_rate: 0.74
+  - from: AUD
+    to: USD
+    base_rate: 0.66
+  - from: JPY
+    to: USD
+    base_rate: 0.0067
+  - from: SGD
+    to: USD
+    base_rate: 0.74
+  - from: AED
+    to: USD
+    base_rate: 0.27
+
+# ---------------------------------------------------------------------------
+# Branding (for unstructured document generation: MSAs, invoices, dunning)
+# ---------------------------------------------------------------------------
+brand:
+  company: Lakelink Fiber
+  legal_name: "Lakelink Fiber Communications, Inc."
+  tagline: Enterprise Fiber & Wavelength Services
+  colors:
+    primary: "#0B3D5C"          # deep fiber blue
+    accent:  "#FF6A3D"          # signal orange
+    ink:     "#1c1c1c"
+    muted:   "#6b7280"
+  domain: lakelinkfiber.com
+  address: "410 Optical Way, Suite 900, Denver, CO 80202"
+  support: 1-800-LAKELINK
+  logo_url: https://upload.wikimedia.org/wikipedia/commons/6/63/Databricks_Logo.png
+
+# ---------------------------------------------------------------------------
+# Size-tier → segment mapping (Salesforce Segment__c field)
+# ---------------------------------------------------------------------------
+tier_segment_map:
+  Strategic: Strategic Enterprise
+  Enterprise: Enterprise
+  Mid-Market: Commercial
+  SMB: Small Business
+
+# ---------------------------------------------------------------------------
+# Size-tier distribution (power-law B2B account sizing)
+# cumulative thresholds for a [0,1) uniform hash
+# ---------------------------------------------------------------------------
+tier_distribution:
+  Strategic: 0.03               # top 3%
+  Enterprise: 0.15              # next 12%
+  Mid-Market: 0.50              # next 35%
+  SMB: 1.00                     # remaining 50%
+
+# Log-normal (mu, sigma) for annual_revenue_usd by tier
+tier_revenue_params:
+  Strategic:   {mu: 18.4, sigma: 0.5}
+  Enterprise:  {mu: 17.2, sigma: 0.5}
+  Mid-Market:  {mu: 15.8, sigma: 0.5}
+  SMB:         {mu: 14.2, sigma: 0.6}

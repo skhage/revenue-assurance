@@ -1,0 +1,1449 @@
+{
+  "datasets": [
+    {
+      "name": "gold_anomaly_scores",
+      "displayName": "Gold Anomaly Scores",
+      "queryLines": [
+        "SELECT\n",
+        "  item_id,\n",
+        "  check_type,\n",
+        "  customer_id,\n",
+        "  account_name,\n",
+        "  amount_at_risk,\n",
+        "  isolation_forest_score,\n",
+        "  zscore,\n",
+        "  composite_anomaly_score,\n",
+        "  anomaly_rank,\n",
+        "  review_priority\n",
+        "FROM\n",
+        "  cdm_tmforum.revenue_assurance.gold_anomaly_scores"
+      ]
+    },
+    {
+      "name": "gold_leakage_summary",
+      "displayName": "Gold Leakage Summary",
+      "queryLines": [
+        "SELECT\n",
+        "  check_type,\n",
+        "  severity,\n",
+        "  customer_id,\n",
+        "  account_name,\n",
+        "  amount_at_risk,\n",
+        "  known_leakage_flag\n",
+        "FROM\n",
+        "  cdm_tmforum.revenue_assurance.gold_leakage_summary"
+      ]
+    },
+    {
+      "name": "doc_invoices",
+      "displayName": "Doc Intelligence - Invoices",
+      "queryLines": [
+        "SELECT\n",
+        "  doc_invoice_number,\n",
+        "  doc_total_amount,\n",
+        "  db_invoice_amount,\n",
+        "  amount_mismatch,\n",
+        "  amount_variance\n",
+        "FROM\n",
+        "  cdm_tmforum.revenue_assurance.silver_doc_intelligence_invoices"
+      ]
+    },
+    {
+      "name": "gold_scorecard",
+      "displayName": "Gold Reconciliation Scorecard",
+      "queryLines": [
+        "SELECT\n",
+        "  customer_id,\n",
+        "  account_name,\n",
+        "  composite_health_score,\n",
+        "  CASE\n",
+        "    WHEN composite_health_score < 50 THEN 'RED'\n",
+        "    WHEN composite_health_score < 65 THEN 'AMBER'\n",
+        "    ELSE 'GREEN'\n",
+        "  END AS risk_tier,\n",
+        "  price_accuracy_score,\n",
+        "  discount_compliance_score,\n",
+        "  total_amount_at_risk,\n",
+        "  total_exceptions\n",
+        "FROM\n",
+        "  cdm_tmforum.revenue_assurance.gold_reconciliation_scorecard\n",
+        "ORDER BY\n",
+        "  total_amount_at_risk DESC\n",
+        "LIMIT 100"
+      ]
+    },
+    {
+      "name": "doc_contracts",
+      "displayName": "Doc Intelligence - Contracts",
+      "queryLines": [
+        "SELECT\n",
+        "  doc_contract_number,\n",
+        "  doc_sla_tier,\n",
+        "  db_sla_tier,\n",
+        "  sla_mismatch,\n",
+        "  term_mismatch,\n",
+        "  total_mismatches,\n",
+        "  account_name\n",
+        "FROM\n",
+        "  cdm_tmforum.revenue_assurance.silver_doc_intelligence_contracts"
+      ]
+    },
+    {
+      "name": "forecast",
+      "displayName": "Revenue Forecast vs Actuals",
+      "queryLines": [
+        "SELECT\n",
+        "  revenue_month,\n",
+        "  actual_revenue,\n",
+        "  forecast_revenue,\n",
+        "  forecast_upper_bound,\n",
+        "  forecast_lower_bound,\n",
+        "  budget_amount,\n",
+        "  budget_variance_pct,\n",
+        "  anomaly_status\n",
+        "FROM\n",
+        "  cdm_tmforum.revenue_assurance.gold_revenue_forecast_anomalies\n",
+        "ORDER BY\n",
+        "  revenue_month"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "9751ab32",
+      "displayName": "Executive Summary",
+      "layout": [
+        {
+          "widget": {
+            "name": "kpi_exceptions",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "gold_leakage_summary",
+                  "fields": [
+                    {
+                      "name": "count(check_type)",
+                      "expression": "COUNT(`check_type`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Total Exceptions",
+                "showTitle": true
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "count(check_type)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_at_risk",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "gold_leakage_summary",
+                  "fields": [
+                    {
+                      "name": "sum(amount_at_risk)",
+                      "expression": "SUM(`amount_at_risk`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Total $ At Risk",
+                "showTitle": true
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(amount_at_risk)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 0,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_health",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "gold_scorecard",
+                  "fields": [
+                    {
+                      "name": "avg(composite_health_score)",
+                      "expression": "AVG(`composite_health_score`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Avg Health Score",
+                "showTitle": true
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "avg(composite_health_score)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 0,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_high_anomaly",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "gold_anomaly_scores",
+                  "fields": [
+                    {
+                      "name": "count(review_priority)",
+                      "expression": "COUNT(`review_priority`)"
+                    }
+                  ],
+                  "filters": [
+                    {
+                      "expression": "`review_priority` IN ('HIGH')"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "HIGH Priority Anomalies",
+                "showTitle": true
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "count(review_priority)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 9,
+            "y": 0,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "bar_by_check",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "gold_leakage_summary",
+                  "fields": [
+                    {
+                      "name": "check_type",
+                      "expression": "`check_type`"
+                    },
+                    {
+                      "name": "count(check_type)",
+                      "expression": "COUNT(`check_type`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "title": "Exceptions by Check Type",
+                "showTitle": true
+              },
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "check_type",
+                  "displayName": "check_type",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "fieldName": "count(check_type)",
+                  "displayName": "check_type",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "check_type",
+                  "displayName": "check_type",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 3,
+            "width": 12,
+            "height": 7
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "leakage",
+      "displayName": "Leakage by Check Type",
+      "layout": [
+        {
+          "widget": {
+            "name": "stacked_bar",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "gold_leakage_summary",
+                  "fields": [
+                    {
+                      "name": "severity",
+                      "expression": "`severity`"
+                    },
+                    {
+                      "name": "check_type",
+                      "expression": "`check_type`"
+                    },
+                    {
+                      "name": "count(check_type)",
+                      "expression": "COUNT(`check_type`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "title": "Exceptions by Check Type & Severity",
+                "showTitle": true
+              },
+              "mark": {
+                "layout": "stack"
+              },
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "check_type",
+                  "displayName": "Check Type",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "fieldName": "count(check_type)",
+                  "displayName": "Exception Count",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "severity",
+                  "displayName": "Severity",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "pivot_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "gold_leakage_summary",
+                  "fields": [
+                    {
+                      "name": "check_type",
+                      "expression": "`check_type`"
+                    },
+                    {
+                      "name": "severity",
+                      "expression": "`severity`"
+                    },
+                    {
+                      "name": "sum(amount_at_risk)",
+                      "expression": "SUM(`amount_at_risk`)"
+                    }
+                  ],
+                  "cubeGroupingSets": {
+                    "sets": [
+                      {
+                        "fieldNames": [
+                          "check_type"
+                        ]
+                      },
+                      {
+                        "fieldNames": [
+                          "severity"
+                        ]
+                      }
+                    ]
+                  },
+                  "disaggregated": false,
+                  "orders": [
+                    {
+                      "direction": "ASC",
+                      "expression": "`check_type`"
+                    },
+                    {
+                      "direction": "ASC",
+                      "expression": "`severity`"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "title": "Leakage Detail by Check Type & Severity",
+                "showTitle": true
+              },
+              "widgetType": "pivot",
+              "encodings": {
+                "rows": [
+                  {
+                    "fieldName": "check_type"
+                  }
+                ],
+                "columns": [
+                  {
+                    "fieldName": "severity"
+                  }
+                ],
+                "cell": {
+                  "type": "single-cell",
+                  "fieldName": "sum(amount_at_risk)",
+                  "cellType": "text"
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 7,
+            "width": 12,
+            "height": 7
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "scorecard",
+      "displayName": "Customer Risk Scorecard",
+      "layout": [
+        {
+          "widget": {
+            "name": "risk_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "gold_scorecard",
+                  "fields": [
+                    {
+                      "name": "account_name",
+                      "expression": "`account_name`"
+                    },
+                    {
+                      "name": "composite_health_score",
+                      "expression": "`composite_health_score`"
+                    },
+                    {
+                      "name": "risk_tier",
+                      "expression": "`risk_tier`"
+                    },
+                    {
+                      "name": "price_accuracy_score",
+                      "expression": "`price_accuracy_score`"
+                    },
+                    {
+                      "name": "discount_compliance_score",
+                      "expression": "`discount_compliance_score`"
+                    },
+                    {
+                      "name": "total_amount_at_risk",
+                      "expression": "`total_amount_at_risk`"
+                    },
+                    {
+                      "name": "total_exceptions",
+                      "expression": "`total_exceptions`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Top 50 Riskiest Customers",
+                "showTitle": true
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "account_name",
+                    "displayName": "Account"
+                  },
+                  {
+                    "fieldName": "composite_health_score",
+                    "format": {
+                      "type": "number-plain",
+                      "abbreviation": "none",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 1
+                      }
+                    },
+                    "displayName": "Health Score"
+                  },
+                  {
+                    "fieldName": "risk_tier",
+                    "displayName": "Risk Tier",
+                    "style": {
+                      "type": "basic",
+                      "fontWeight": 700,
+                      "rules": [
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
+                              "value": "RED"
+                            },
+                            "operator": "="
+                          },
+                          "backgroundColor": "#DC2626",
+                          "foregroundColor": "#FFFFFF"
+                        },
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
+                              "value": "AMBER"
+                            },
+                            "operator": "="
+                          },
+                          "backgroundColor": "#F59E0B",
+                          "foregroundColor": "#FFFFFF"
+                        },
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
+                              "value": "GREEN"
+                            },
+                            "operator": "="
+                          },
+                          "backgroundColor": "#10B981",
+                          "foregroundColor": "#FFFFFF"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "fieldName": "price_accuracy_score",
+                    "displayName": "Price Accuracy"
+                  },
+                  {
+                    "fieldName": "discount_compliance_score",
+                    "displayName": "Discount Compliance"
+                  },
+                  {
+                    "fieldName": "total_amount_at_risk",
+                    "format": {
+                      "type": "number-currency",
+                      "abbreviation": "compact",
+                      "currencyCode": "USD"
+                    },
+                    "displayName": "$ At Risk"
+                  },
+                  {
+                    "fieldName": "total_exceptions",
+                    "displayName": "Exceptions"
+                  }
+                ]
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 9
+          }
+        },
+        {
+          "widget": {
+            "name": "tier_bar",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "gold_scorecard",
+                  "fields": [
+                    {
+                      "name": "risk_tier",
+                      "expression": "`risk_tier`"
+                    },
+                    {
+                      "name": "count(risk_tier)",
+                      "expression": "COUNT(`risk_tier`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "title": "Risk Tier Distribution",
+                "showTitle": true
+              },
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "risk_tier",
+                  "displayName": "risk_tier",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "fieldName": "count(risk_tier)",
+                  "displayName": "risk_tier",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "risk_tier",
+                  "displayName": "risk_tier",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 9,
+            "width": 12,
+            "height": 5
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "anomaly",
+      "displayName": "Anomaly Detection",
+      "layout": [
+        {
+          "widget": {
+            "name": "anomaly_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "gold_anomaly_scores",
+                  "fields": [
+                    {
+                      "name": "anomaly_rank",
+                      "expression": "`anomaly_rank`"
+                    },
+                    {
+                      "name": "check_type",
+                      "expression": "`check_type`"
+                    },
+                    {
+                      "name": "account_name",
+                      "expression": "`account_name`"
+                    },
+                    {
+                      "name": "amount_at_risk",
+                      "expression": "`amount_at_risk`"
+                    },
+                    {
+                      "name": "composite_anomaly_score",
+                      "expression": "`composite_anomaly_score`"
+                    },
+                    {
+                      "name": "review_priority",
+                      "expression": "`review_priority`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Top 20 Anomalies by Rank",
+                "showTitle": true
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "anomaly_rank"
+                  },
+                  {
+                    "fieldName": "check_type"
+                  },
+                  {
+                    "fieldName": "account_name"
+                  },
+                  {
+                    "fieldName": "amount_at_risk"
+                  },
+                  {
+                    "fieldName": "composite_anomaly_score"
+                  },
+                  {
+                    "fieldName": "review_priority"
+                  }
+                ]
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 12,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "scatter",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "gold_anomaly_scores",
+                  "fields": [
+                    {
+                      "name": "review_priority",
+                      "expression": "`review_priority`"
+                    },
+                    {
+                      "name": "amount_at_risk",
+                      "expression": "`amount_at_risk`"
+                    },
+                    {
+                      "name": "composite_anomaly_score",
+                      "expression": "`composite_anomaly_score`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "title": "Anomaly Score vs Amount at Risk",
+                "showTitle": true
+              },
+              "mark": {
+                "colors": [
+                  "#0B3D5C",
+                  "#FF6A3D",
+                  "#6b7280"
+                ]
+              },
+              "widgetType": "scatter",
+              "encodings": {
+                "x": {
+                  "fieldName": "amount_at_risk",
+                  "displayName": "Amount at Risk ($)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "fieldName": "composite_anomaly_score",
+                  "displayName": "Composite Anomaly Score",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "review_priority",
+                  "displayName": "Review Priority",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 8
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "doc_intel",
+      "displayName": "Document Intelligence",
+      "layout": [
+        {
+          "widget": {
+            "name": "kpi_contract_mismatch",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "doc_contracts",
+                  "fields": [
+                    {
+                      "name": "count(total_mismatches)",
+                      "expression": "COUNT(`total_mismatches`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Contract Mismatches",
+                "showTitle": true
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "count(total_mismatches)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_invoice_mismatch",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "doc_invoices",
+                  "fields": [
+                    {
+                      "name": "count(amount_mismatch)",
+                      "expression": "COUNT(`amount_mismatch`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Invoice Amount Mismatches",
+                "showTitle": true
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "count(amount_mismatch)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 0,
+            "width": 6,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "contract_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "doc_contracts",
+                  "fields": [
+                    {
+                      "name": "doc_contract_number",
+                      "expression": "`doc_contract_number`"
+                    },
+                    {
+                      "name": "account_name",
+                      "expression": "`account_name`"
+                    },
+                    {
+                      "name": "doc_sla_tier",
+                      "expression": "`doc_sla_tier`"
+                    },
+                    {
+                      "name": "db_sla_tier",
+                      "expression": "`db_sla_tier`"
+                    },
+                    {
+                      "name": "sla_mismatch",
+                      "expression": "`sla_mismatch`"
+                    },
+                    {
+                      "name": "term_mismatch",
+                      "expression": "`term_mismatch`"
+                    },
+                    {
+                      "name": "total_mismatches",
+                      "expression": "`total_mismatches`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Contract Document Mismatches",
+                "showTitle": true
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "doc_contract_number"
+                  },
+                  {
+                    "fieldName": "account_name"
+                  },
+                  {
+                    "fieldName": "doc_sla_tier"
+                  },
+                  {
+                    "fieldName": "db_sla_tier"
+                  },
+                  {
+                    "fieldName": "sla_mismatch"
+                  },
+                  {
+                    "fieldName": "term_mismatch"
+                  },
+                  {
+                    "fieldName": "total_mismatches"
+                  }
+                ]
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 3,
+            "width": 12,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "invoice_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "doc_invoices",
+                  "fields": [
+                    {
+                      "name": "doc_invoice_number",
+                      "expression": "`doc_invoice_number`"
+                    },
+                    {
+                      "name": "doc_total_amount",
+                      "expression": "`doc_total_amount`"
+                    },
+                    {
+                      "name": "db_invoice_amount",
+                      "expression": "`db_invoice_amount`"
+                    },
+                    {
+                      "name": "amount_variance",
+                      "expression": "`amount_variance`"
+                    },
+                    {
+                      "name": "amount_mismatch",
+                      "expression": "`amount_mismatch`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Invoice Variance Detail",
+                "showTitle": true
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "doc_invoice_number"
+                  },
+                  {
+                    "fieldName": "doc_total_amount"
+                  },
+                  {
+                    "fieldName": "db_invoice_amount"
+                  },
+                  {
+                    "fieldName": "amount_variance"
+                  },
+                  {
+                    "fieldName": "amount_mismatch"
+                  }
+                ]
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 9,
+            "width": 12,
+            "height": 5
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "forecast",
+      "displayName": "Forecast vs Actuals",
+      "layout": [
+        {
+          "widget": {
+            "name": "line_chart",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "forecast",
+                  "fields": [
+                    {
+                      "name": "revenue_month",
+                      "expression": "`revenue_month`"
+                    },
+                    {
+                      "name": "actual_revenue",
+                      "expression": "`actual_revenue`"
+                    },
+                    {
+                      "name": "forecast_revenue",
+                      "expression": "`forecast_revenue`"
+                    },
+                    {
+                      "name": "budget_amount",
+                      "expression": "`budget_amount`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "title": "Forecast vs Actuals vs Budget",
+                "showTitle": true
+              },
+              "mark": {
+                "colors": [
+                  "#0B3D5C",
+                  "#FF6A3D",
+                  "#6b7280"
+                ]
+              },
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "revenue_month",
+                  "displayName": "Month",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "fields": [
+                    {
+                      "fieldName": "actual_revenue",
+                      "displayName": "Actual Revenue"
+                    },
+                    {
+                      "fieldName": "forecast_revenue",
+                      "displayName": "Forecast"
+                    },
+                    {
+                      "fieldName": "budget_amount",
+                      "displayName": "Budget"
+                    }
+                  ],
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "forecast_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "forecast",
+                  "fields": [
+                    {
+                      "name": "revenue_month",
+                      "expression": "`revenue_month`"
+                    },
+                    {
+                      "name": "actual_revenue",
+                      "expression": "`actual_revenue`"
+                    },
+                    {
+                      "name": "forecast_revenue",
+                      "expression": "`forecast_revenue`"
+                    },
+                    {
+                      "name": "budget_amount",
+                      "expression": "`budget_amount`"
+                    },
+                    {
+                      "name": "budget_variance_pct",
+                      "expression": "`budget_variance_pct`"
+                    },
+                    {
+                      "name": "anomaly_status",
+                      "expression": "`anomaly_status`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Forecast Detail",
+                "showTitle": true
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "revenue_month",
+                    "format": {
+                      "type": "date",
+                      "date": "locale-short-month",
+                      "leadingZeros": false
+                    },
+                    "displayName": "Month"
+                  },
+                  {
+                    "fieldName": "actual_revenue",
+                    "format": {
+                      "type": "number-currency",
+                      "abbreviation": "compact",
+                      "currencyCode": "USD"
+                    },
+                    "displayName": "Actual"
+                  },
+                  {
+                    "fieldName": "forecast_revenue",
+                    "format": {
+                      "type": "number-currency",
+                      "abbreviation": "compact",
+                      "currencyCode": "USD"
+                    },
+                    "displayName": "Forecast"
+                  },
+                  {
+                    "fieldName": "budget_amount",
+                    "format": {
+                      "type": "number-currency",
+                      "abbreviation": "compact",
+                      "currencyCode": "USD"
+                    },
+                    "displayName": "Budget"
+                  },
+                  {
+                    "fieldName": "budget_variance_pct",
+                    "format": {
+                      "type": "number-percent",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 1
+                      }
+                    },
+                    "displayName": "Variance %",
+                    "style": {
+                      "type": "basic",
+                      "rules": [
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
+                              "value": "0.1"
+                            },
+                            "operator": ">"
+                          },
+                          "backgroundColor": "#DC2626",
+                          "foregroundColor": "#FFFFFF"
+                        },
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
+                              "value": "0.05"
+                            },
+                            "operator": ">"
+                          },
+                          "backgroundColor": "#F59E0B",
+                          "foregroundColor": "#FFFFFF"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "fieldName": "anomaly_status",
+                    "displayName": "Status",
+                    "style": {
+                      "type": "basic",
+                      "fontWeight": 700,
+                      "rules": [
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
+                              "value": "ANOMALY"
+                            },
+                            "operator": "="
+                          },
+                          "backgroundColor": "#DC2626",
+                          "foregroundColor": "#FFFFFF"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 7,
+            "width": 12,
+            "height": 7
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "canvasBackgroundColor": {
+        "light": "#F3F4F6",
+        "dark": "#111827"
+      },
+      "widgetBackgroundColor": {
+        "light": "#FFFFFF",
+        "dark": "#1F2937"
+      },
+      "selectionColor": {
+        "light": "#FF6A3D",
+        "dark": "#FF6A3D"
+      },
+      "visualizationColors": [
+        "#0B3D5C",
+        "#FF6A3D",
+        "#1E6A8C",
+        "#E04E2B",
+        "#2D8EB5",
+        "#F59E0B",
+        "#6b7280",
+        "#10B981"
+      ],
+      "widgetHeaderAlignment": "ALIGNMENT_UNSPECIFIED",
+      "widgetPadding": 16,
+      "widgetCornerRadius": 8,
+      "widgetShadow": 15,
+      "fontSettings": {
+        "base": {
+          "fontFamily": "Inter"
+        },
+        "widgetTitle": {
+          "fontColor": {
+            "light": "#0B3D5C",
+            "dark": "#E5E7EB"
+          },
+          "fontWeight": 700
+        }
+      }
+    },
+    "applyModeEnabled": false
+  }
+}
