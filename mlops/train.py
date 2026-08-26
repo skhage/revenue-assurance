@@ -6,19 +6,20 @@ import argparse
 import time
 
 import mlflow
-import mlflow.sklearn
+import mlflow.pyfunc
 from databricks.feature_engineering import FeatureEngineeringClient, FeatureLookup
 from mlflow.models import infer_signature
 from mlflow.tracking import MlflowClient
 from pyspark.sql import SparkSession
+from sklearn.ensemble import IsolationForest
 
 try:
     from features import FEATURE_COLUMNS, FEATURE_TABLE_NAME
-    from modeling import IsolationForestScoreModel
+    from modeling import IsolationForestPyfuncModel
     import modeling as _modeling_mod
 except ModuleNotFoundError:
     from mlops.features import FEATURE_COLUMNS, FEATURE_TABLE_NAME
-    from mlops.modeling import IsolationForestScoreModel
+    from mlops.modeling import IsolationForestPyfuncModel
     import mlops.modeling as _modeling_mod
 
 
@@ -72,7 +73,7 @@ def main() -> None:
     if len(training_pandas) < 20:
         raise RuntimeError("At least 20 exception rows are required to train IsolationForest")
 
-    model = IsolationForestScoreModel(
+    model = IsolationForest(
         n_estimators=300,
         contamination=args.contamination,
         max_samples="auto",
@@ -103,9 +104,9 @@ def main() -> None:
         mlflow.log_dict({"feature_columns": FEATURE_COLUMNS}, "feature_columns.json")
 
         feature_client.log_model(
-            model=model,
+            model=IsolationForestPyfuncModel(model),
             artifact_path="model",
-            flavor=mlflow.sklearn,
+            flavor=mlflow.pyfunc,
             training_set=training_set,
             registered_model_name=model_name,
             signature=signature,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from mlflow.pyfunc import PythonModel
 from sklearn.ensemble import IsolationForest
 
 
@@ -12,6 +13,18 @@ class IsolationForestScoreModel(IsolationForest):
 
     def predict(self, features):
         return -self.score_samples(features)
+
+
+class IsolationForestPyfuncModel(PythonModel):
+    """MLflow pyfunc wrapper returning continuous Isolation Forest scores."""
+
+    def __init__(self, model: IsolationForest):
+        self.model = model
+
+    def predict(
+        self, context, model_input: pd.DataFrame, params=None
+    ) -> np.ndarray:
+        return -self.model.score_samples(model_input)
 
 
 def add_composite_scores(
