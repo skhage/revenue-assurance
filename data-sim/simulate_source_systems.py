@@ -54,13 +54,19 @@
 
 # DBTITLE 1,Review Notes
 # MAGIC %md
-# MAGIC ## ⚠️ SUPERSEDED — See SDP Pipeline + config.yaml
+# MAGIC ## Config-driven + orchestrated (ws3-datasim)
 # MAGIC
-# MAGIC This notebook has been restructured into:
-# MAGIC - **`config.yaml`** — all shared variables (catalog, schemas, seed, scale, leakage rate, brand, products, FX pairs) in one YAML file reusable across notebooks and pipeline steps.
-# MAGIC - **Lakelink Revenue Assurance Source Sim** pipeline — Spark Declarative Pipeline that declares each output table as a materialized view with explicit dependency graph.
-# MAGIC
-# MAGIC The original notebook is retained as reference for the generation logic.
+# MAGIC This notebook is the **authoritative source-system generator** and is now:
+# MAGIC - **Config-driven** — it loads **`config.yaml`** at module scope (`import yaml`) and
+# MAGIC   derives catalog, schemas, seed, scale, leakage rate, product catalogue, FX pairs,
+# MAGIC   tier mapping/distribution, branding and the forecast step-change from it. There are
+# MAGIC   **no hardcoded duplicates** of those values — `config.yaml` is the single source of truth.
+# MAGIC - **Orchestrated** — `resources/datasim_job.yml` declares a serverless DAB **job**
+# MAGIC   (`simulate_source_systems`) that runs this notebook as a `notebook_task`, so
+# MAGIC   `databricks bundle run simulate_source_systems` regenerates the `*_source` schemas.
+# MAGIC - **Deterministic** — surrogate keys are stable hash keys (`xxhash64` of business keys
+# MAGIC   salted with the one authoritative `seed`), never `monotonically_increasing_id()`, so
+# MAGIC   the "same seed ⇒ reproducible outputs" claim in `04-source-data-spec.md` holds.
 # MAGIC
 # MAGIC ---
 # MAGIC
@@ -89,7 +95,7 @@
 # COMMAND ----------
 
 # DBTITLE 1,Dependencies
-# MAGIC %pip install faker xhtml2pdf --quiet
+# MAGIC %pip install faker pyyaml xhtml2pdf --quiet
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -100,49 +106,152 @@
 # COMMAND ----------
 
 # ---------------------------------------------------------------------------
+# Single source of truth: everything below is DERIVED FROM data-sim/config.yaml.
+# There are NO hardcoded catalog/schema/seed/scale/leakage values in this cell —
+# change config.yaml and re-run. The DAB job (resources/datasim_job.yml) passes
+# `catalog` and the reconciliation `schema` as notebook parameters. The catalog
+# overrides the config default for the selected bundle target; source schemas
+# remain config-driven.
+# ---------------------------------------------------------------------------
+import os
+import re
+import yaml
+
+
+def _find_config_yaml():
+    """Locate data-sim/config.yaml across notebook / job / local-review contexts.
+
+    Order of resolution:
+      1. explicit CONFIG_PATH environment variable (if set),
+      2. next to this file (works for `py_compile` and local review),
+      3. the notebook's own workspace directory (Databricks Repos/Workspace),
+      4. a small set of conventional workspace fallbacks.
+    """
+    candidates = []
+    # (1) explicit override
+    env_path = os.environ.get("CONFIG_PATH")
+    if env_path:
+        candidates.append(env_path)
+    # (2) alongside this module (local review / py_compile / bundled job)
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        candidates.append(os.path.join(here, "config.yaml"))
+    except NameError:
+        pass  # __file__ is not defined inside a Databricks notebook cell
+    # (3) the running notebook's directory (Databricks)
+    try:
+        nb_path = (dbutils.notebook.entry_point.getDbutils()  # type: ignore[name-defined]
+                   .notebook().getContext().notebookPath().get())
+        nb_dir = os.path.dirname(nb_path)
+        candidates.append("/Workspace" + nb_dir + "/config.yaml")
+        candidates.append(nb_dir + "/config.yaml")
+    except Exception:
+        pass
+    # (4) conventional fallbacks
+    candidates.append("config.yaml")
+    candidates.append("data-sim/config.yaml")
+    for c in candidates:
+        if c and os.path.exists(c):
+            return c
+    raise FileNotFoundError(
+        "config.yaml not found. Tried: " + ", ".join(str(c) for c in candidates)
+    )
+
+
+CONFIG_PATH = _find_config_yaml()
+with open(CONFIG_PATH) as _fh:
+    CFG = yaml.safe_load(_fh)
+if not isinstance(CFG, dict):
+    raise ValueError(f"Config must be a YAML mapping: {CONFIG_PATH}")
+print(f"Loaded config: {CONFIG_PATH}")
+
+# --- Notebook / job parameter overrides (optional) ---------------------------
+# The DAB job passes catalog + schema via base_parameters. In a bare notebook run
+# widgets may be absent, so every lookup falls back to config.yaml.
+def _param(name, default=None):
+    try:
+        return dbutils.widgets.get(name) or default  # type: ignore[name-defined]
+    except Exception:
+        return default
+
+
+# ---------------------------------------------------------------------------
 # Target catalog: co-located with the MDM golden data so joins are single-catalog.
-CATALOG = "cdm_tmforum"
+CATALOG = _param("catalog", CFG["catalog"])
+RECONCILIATION_SCHEMA = _param("schema")
 
-# Source-system schemas (see recommendations above)
-SCHEMA_SFDC   = "salesforce_source"
-SCHEMA_ERP    = "oracle_erp_source"
-SCHEMA_CLM    = "ironclad_clm_source"
-SCHEMA_FX     = "refinitiv_fx_source"
-SCHEMA_MDM    = "mdm_source"
+# Source-system schemas (from config.yaml `schemas:`)
+_schemas = CFG["schemas"]
+SCHEMA_SFDC   = _schemas["salesforce"]
+SCHEMA_ERP    = _schemas["oracle_erp"]
+SCHEMA_CLM    = _schemas["ironclad_clm"]
+SCHEMA_FX     = _schemas["refinitiv_fx"]
+SCHEMA_MDM    = _schemas["mdm"]
 
-# Reproducibility + PK offset (mirrors the tmf_ generator convention to avoid clashes)
-SEED = 42
-PK_START_OFFSET = 900000
+# Reproducibility + PK offset — the ONE authoritative seed lives in config.yaml.
+SEED = int(CFG["seed"])
+PK_START_OFFSET = int(CFG["pk_start_offset"])
 
 # Scale. Account count is derived from the real golden customer set at runtime; these
-# multipliers size the child tables. Keep modest for a first run, raise for scale demos.
-CONTACTS_PER_ACCOUNT   = 3
-CONTRACTS_PER_ACCOUNT  = 1.4      # avg; some accounts have renewals/amendments
-LINES_PER_CONTRACT     = 4        # avg circuits / services per contract
-OPPS_PER_ACCOUNT       = 1.8
-FX_DAYS                = 365 * 8  # match tmf bill history 2018-2025
+# multipliers (from config.yaml `scale:`) size the child tables.
+_scale = CFG["scale"]
+CONTACTS_PER_ACCOUNT   = int(_scale["contacts_per_account"])
+CONTRACTS_PER_ACCOUNT  = float(_scale["contracts_per_account"])  # avg; renewals/amendments
+LINES_PER_CONTRACT     = int(_scale["lines_per_contract"])       # avg circuits/services
+OPPS_PER_ACCOUNT       = float(_scale["opps_per_account"])
+FX_DAYS                = int(_scale["fx_days"])                   # match tmf history 2018-2025
 
-# Controlled leakage injection — drives the 6 RA checks. Set to 0.0 for pristine data.
-LEAKAGE_RATE = 0.06               # ~6% of contract lines carry a seeded exception
+# Controlled leakage injection — drives the RA checks. Set leakage_rate: 0.0 in
+# config.yaml for pristine data.
+LEAKAGE_RATE = float(CFG["leakage_rate"])
 
-# Branding for unstructured documents
+# Forecast anomaly: GL revenue step-change injection for the ai_forecast scene.
+# Deterministic and entirely driven by config.yaml `forecast_anomaly:`.
+_fc = CFG["forecast_anomaly"]
+FORECAST_ENABLED       = bool(_fc["enabled"])
+FORECAST_GL_ACCOUNT    = str(_fc["gl_account_code"])
+FORECAST_MONTHS        = [str(m) for m in _fc["months"]]
+FORECAST_MAGNITUDE_PCT = [float(x) for x in _fc["magnitude_pct"]]
+if len(FORECAST_MONTHS) != len(FORECAST_MAGNITUDE_PCT):
+    raise ValueError("forecast_anomaly.months and magnitude_pct must have equal lengths")
+if any(not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month) for month in FORECAST_MONTHS):
+    raise ValueError("forecast_anomaly.months entries must use yyyy-MM format")
+
+# Product catalog (Salesforce Product2 / Pricebook source of truth) from config.yaml.
+PRODUCTS = [(p["code"], p["name"], p["family"], float(p["list_mrr"]))
+            for p in CFG["products"]]
+
+# FX currency pairs (Refinitiv / LSEG) from config.yaml.
+FX_PAIRS = [(p["from"], p["to"], float(p["base_rate"])) for p in CFG["fx_pairs"]]
+
+# Size-tier → segment mapping + distribution + revenue params from config.yaml.
+TIER_SEGMENT_MAP  = dict(CFG["tier_segment_map"])
+TIER_DISTRIBUTION = dict(CFG["tier_distribution"])
+TIER_REVENUE_PARAMS = {k: (float(v["mu"]), float(v["sigma"]))
+                       for k, v in CFG["tier_revenue_params"].items()}
+
+# Branding for unstructured documents (from config.yaml `brand:`).
+_brand = CFG["brand"]
+_colors = _brand["colors"]
 BRAND = {
-    "company": "Lakelink Fiber",
-    "legal_name": "Lakelink Fiber Communications, Inc.",
-    "tagline": "Enterprise Fiber & Wavelength Services",
-    "primary": "#0B3D5C",     # deep fiber blue
-    "accent":  "#FF6A3D",     # signal orange
-    "ink":     "#1c1c1c",
-    "muted":   "#6b7280",
-    "domain":  "lakelinkfiber.com",
-    "address": "410 Optical Way, Suite 900, Denver, CO 80202",
-    "support": "1-800-LAKELINK",
+    "company": _brand["company"],
+    "legal_name": _brand["legal_name"],
+    "tagline": _brand["tagline"],
+    "primary": _colors["primary"],
+    "accent":  _colors["accent"],
+    "ink":     _colors["ink"],
+    "muted":   _colors["muted"],
+    "domain":  _brand["domain"],
+    "address": _brand["address"],
+    "support": _brand["support"],
 }
 # Databricks logo used as the Lakelink Fiber letterhead mark (per demo direction).
-DATABRICKS_LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/6/63/Databricks_Logo.png"
+DATABRICKS_LOGO_URL = _brand["logo_url"]
 
 print(f"Target: {CATALOG}  |  schemas: {SCHEMA_SFDC}, {SCHEMA_ERP}, {SCHEMA_CLM}, {SCHEMA_FX}, {SCHEMA_MDM}")
+print(f"Reconciliation schema (bundle context): {RECONCILIATION_SCHEMA or '(not supplied)'}")
 print(f"Seed={SEED}  PK offset={PK_START_OFFSET}  Leakage rate={LEAKAGE_RATE:.0%}")
+print(f"Forecast step-change: enabled={FORECAST_ENABLED}, account {FORECAST_GL_ACCOUNT}, months {FORECAST_MONTHS}, magnitude_pct {FORECAST_MAGNITUDE_PCT}")
 
 # COMMAND ----------
 
@@ -209,6 +318,16 @@ def lognormal(mu, sigma, seed_col):
 def rand_of(col):  # stable 0..1 per row+salt
     return lambda salt: (F.abs(F.hash(col, F.lit(salt))) % 100000) / 100000.0
 
+# --- helper: DETERMINISTIC surrogate key ------------------------------------
+# Replaces F.monotonically_increasing_id() (which is partition/layout dependent
+# and therefore NOT reproducible across runs). dkey() derives a stable,
+# non-negative 63-bit integer from a row's business key column(s), salted with
+# the authoritative SEED. Same seed + same business keys => byte-identical keys,
+# so the "same seed => reproducible outputs" claim in 04-source-data-spec.md holds.
+def dkey(*cols):
+    """Deterministic non-negative surrogate key from business key column(s)."""
+    return F.pmod(F.xxhash64(F.lit(f"seed:{SEED}"), *cols), F.lit(2**63 - 1))
+
 print("helpers ready")
 
 # COMMAND ----------
@@ -245,15 +364,18 @@ anchor = (cust
     .join(F.broadcast(fake_df), "_idx", "left")
     .withColumn("_t", r("tier"))
     .withColumn("size_tier",
-        F.when(F.col("_t") < 0.03, "Strategic")       # 3%
-         .when(F.col("_t") < 0.15, "Enterprise")      # 12%
-         .when(F.col("_t") < 0.50, "Mid-Market")      # 35%
-         .otherwise("SMB"))                            # 50%
+        F.when(F.col("_t") < F.lit(TIER_DISTRIBUTION["Strategic"]), "Strategic")
+         .when(F.col("_t") < F.lit(TIER_DISTRIBUTION["Enterprise"]), "Enterprise")
+         .when(F.col("_t") < F.lit(TIER_DISTRIBUTION["Mid-Market"]), "Mid-Market")
+         .otherwise("SMB"))
     .withColumn("annual_revenue_usd",
-        F.round(F.when(F.col("size_tier") == "Strategic", lognormal(18.4, 0.5, F.col("customer_id")))
-                 .when(F.col("size_tier") == "Enterprise", lognormal(17.2, 0.5, F.col("customer_id")))
-                 .when(F.col("size_tier") == "Mid-Market", lognormal(15.8, 0.5, F.col("customer_id")))
-                 .otherwise(lognormal(14.2, 0.6, F.col("customer_id"))), 0))
+        F.round(F.when(F.col("size_tier") == "Strategic",
+                       lognormal(*TIER_REVENUE_PARAMS["Strategic"], F.col("customer_id")))
+                 .when(F.col("size_tier") == "Enterprise",
+                       lognormal(*TIER_REVENUE_PARAMS["Enterprise"], F.col("customer_id")))
+                 .when(F.col("size_tier") == "Mid-Market",
+                       lognormal(*TIER_REVENUE_PARAMS["Mid-Market"], F.col("customer_id")))
+                 .otherwise(lognormal(*TIER_REVENUE_PARAMS["SMB"], F.col("customer_id"))), 0))
     .withColumn("employees",
         F.greatest(F.lit(5), F.round(F.col("annual_revenue_usd") / F.lit(280000)).cast("int")))
     .drop("_t", "_idx"))
@@ -281,8 +403,8 @@ anchor.groupBy("size_tier").count().show()
 make_schema(SCHEMA_SFDC, "Salesforce source system: CRM (Account, Contact, Contract, Order, Opportunity), CPQ (SBQQ__ managed package) and PRM. Raw pre-MDM extract; Account maps 1:1 to tmf_customer.customer via TMF_Customer_Id__c.")
 
 # ---- Account -----------------------------------------------------------------
-tier_seg = {"Strategic":"Strategic Enterprise","Enterprise":"Enterprise","Mid-Market":"Commercial","SMB":"Small Business"}
-seg_expr = F.create_map(*sum([[F.lit(k), F.lit(v)] for k,v in tier_seg.items()], []))
+# Segment mapping comes from config.yaml `tier_segment_map:` (single source of truth).
+seg_expr = F.create_map(*sum([[F.lit(k), F.lit(v)] for k, v in TIER_SEGMENT_MAP.items()], []))
 
 account = (anchor
     .withColumn("Id", sf_id("001", F.col("customer_id")))
@@ -327,7 +449,7 @@ acct_lkp = spark.table(f"{CATALOG}.{SCHEMA_SFDC}.account").select(
 # ---- Contact (natural fan-out per account) ----------------------------------
 contact = (acct_lkp
     .withColumn("n", F.explode(F.sequence(F.lit(1), F.lit(CONTACTS_PER_ACCOUNT))))
-    .withColumn("seq", F.monotonically_increasing_id())
+    .withColumn("seq", dkey(F.col("AccountId"), F.col("n")))
     .withColumn("Id", sf_id("003", F.col("seq")))
     .withColumn("Title",
         F.element_at(F.array(F.lit("VP Network"),F.lit("Procurement Lead"),F.lit("Finance Director"),
@@ -340,18 +462,16 @@ write_table(contact, SCHEMA_SFDC, "contact",
     {"Id":"Salesforce Contact Id (keyPrefix 003).","AccountId":"FK to salesforce_source.account.Id."})
 
 # ---- Product2 + Pricebook (catalog of fiber offerings) ----------------------
-products = [("FIBER-DIA-1G","1 Gbps Dedicated Internet Access","Dedicated Internet",1200.0),
-            ("FIBER-DIA-10G","10 Gbps Dedicated Internet Access","Dedicated Internet",4800.0),
-            ("WAVE-10G","10G Wavelength (point-to-point)","Wavelength",5200.0),
-            ("WAVE-100G","100G Wavelength (point-to-point)","Wavelength",18500.0),
-            ("ELINE-1G","E-Line EVPL 1G","Ethernet",900.0),
-            ("ELAN-MPLS","MPLS IP-VPN site","IP-VPN",650.0),
-            ("SDWAN-EDGE","Managed SD-WAN edge","Managed",450.0),
-            ("COLO-RACK","Colocation rack + cross-connect","Colocation",1500.0)]
-prod_df = spark.createDataFrame(products, ["ProductCode","Name","Family","list_mrr"]) \
-    .withColumn("seq", F.monotonically_increasing_id()) \
+# Product catalogue comes from config.yaml `products:` (single source of truth).
+# `prod_idx` is a deterministic 0-based index (stable ordering by ProductCode) used
+# for the modulo product-assignment joins below; `seq` is a deterministic surrogate
+# key for the Salesforce id (replaces monotonically_increasing_id()).
+prod_df = spark.createDataFrame(PRODUCTS, ["ProductCode","Name","Family","list_mrr"]) \
+    .withColumn("prod_idx", (F.row_number().over(Window.orderBy("ProductCode")) - F.lit(1))) \
+    .withColumn("seq", dkey(F.col("ProductCode"))) \
     .withColumn("Id", sf_id("01t", F.col("seq"))) \
     .withColumn("IsActive", F.lit(True))
+N_PRODUCTS = len(PRODUCTS)
 write_table(prod_df.select("Id","Name","ProductCode","Family","IsActive","list_mrr"),
     SCHEMA_SFDC, "product2",
     "Salesforce Product2 object (standard). Lakelink Fiber service catalogue (access, wavelength, Ethernet, IP-VPN, managed).",
@@ -363,9 +483,10 @@ contract = (acct_lkp
     .withColumn("cnt", F.floor(F.lit(CONTRACTS_PER_ACCOUNT) + rand_of(F.col("AccountId"))("c") ))
     .withColumn("cnt", F.greatest(F.lit(1), F.col("cnt").cast("int")))
     .withColumn("k", F.explode(F.sequence(F.lit(1), F.col("cnt"))))
-    .withColumn("cseq", F.monotonically_increasing_id())
+    .withColumn("cseq", dkey(F.col("AccountId"), F.col("k")))
     .withColumn("Id", sf_id("800", F.col("cseq")))
-    .withColumn("ContractNumber", F.concat(F.lit("CN-"), F.lpad(F.col("cseq").cast("string"),8,"0")))
+    .withColumn("ContractNumber", F.concat(F.lit("CN-"),
+                F.lpad((F.col("cseq") % F.lit(100000000)).cast("string"), 8, "0")))
     .withColumn("_start_off", (F.abs(F.hash(F.col("cseq"))) % 2555))   # within ~7yrs
     .withColumn("StartDate", F.date_add(F.lit("2018-01-01"), F.col("_start_off")))
     .withColumn("ContractTerm", F.element_at(F.array(F.lit(12),F.lit(24),F.lit(36),F.lit(36),F.lit(60)),
@@ -396,11 +517,11 @@ contract_lkp = spark.table(f"{CATALOG}.{SCHEMA_SFDC}.contract").select(
 
 cli = (contract_lkp
     .withColumn("k", F.explode(F.sequence(F.lit(1), F.lit(LINES_PER_CONTRACT))))
-    .withColumn("lseq", F.monotonically_increasing_id())
+    .withColumn("lseq", dkey(F.col("Contract__c"), F.col("k")))
     .withColumn("rn", (F.abs(F.hash(F.col("lseq"))) % circuits.count() + 1))
     .join(circuits, on="rn", how="left")
-    .join(prod_df.select(F.col("Id").alias("Product2Id"),"ProductCode","list_mrr","seq"),
-          (F.abs(F.hash(F.col("lseq"),F.lit(3))) % 8) == F.col("seq"), "left")
+    .join(prod_df.select(F.col("Id").alias("Product2Id"),"ProductCode","list_mrr","prod_idx"),
+          (F.abs(F.hash(F.col("lseq"),F.lit(3))) % N_PRODUCTS) == F.col("prod_idx"), "left")
     .withColumn("Id", sf_id("a0L", F.col("lseq")))
     .withColumn("Quantity", F.lit(1))
     # contracted price = list * negotiated factor (natural discounting, tier-driven)
@@ -437,9 +558,10 @@ write_table(cli_out, SCHEMA_SFDC, "contract_line_item",
 opp = (acct_lkp
     .withColumn("k", F.explode(F.sequence(F.lit(1), F.lit(int(OPPS_PER_ACCOUNT*10)))))
     .filter(rand_of(F.concat(F.col("AccountId"),F.col("k").cast("string")))("o") < (OPPS_PER_ACCOUNT/ (OPPS_PER_ACCOUNT*10)))
-    .withColumn("oseq", F.monotonically_increasing_id())
+    .withColumn("oseq", dkey(F.col("AccountId"), F.col("k")))
     .withColumn("Id", sf_id("006", F.col("oseq")))
-    .withColumn("Name", F.concat(F.lit("Fiber expansion "), F.col("oseq").cast("string")))
+    .withColumn("Name", F.concat(F.lit("Fiber expansion "),
+                (F.col("oseq") % F.lit(1000000)).cast("string")))
     .withColumn("_m", (F.abs(F.hash(F.col("oseq"),F.lit(11))) % 100))
     # Q4 seasonality: bias close dates into Oct-Dec
     .withColumn("_month", F.when(F.col("_m")<45, F.element_at(F.array(F.lit(10),F.lit(11),F.lit(12)),(F.col("_m")%3+1)))
@@ -461,7 +583,7 @@ write_table(opp, SCHEMA_SFDC, "opportunity",
 opp_lkp = spark.table(f"{CATALOG}.{SCHEMA_SFDC}.opportunity").select(
     F.col("Id").alias("SBQQ__Opportunity2__c"),"AccountId","CurrencyIsoCode")
 quote = (opp_lkp
-    .withColumn("qseq", F.monotonically_increasing_id())
+    .withColumn("qseq", dkey(F.col("SBQQ__Opportunity2__c")))
     .withColumn("Id", sf_id("a0Q", F.col("qseq")))
     .withColumnRenamed("AccountId","SBQQ__Account__c")
     .withColumn("SBQQ__Status__c", F.element_at(F.array(F.lit("Approved"),F.lit("Draft"),
@@ -482,10 +604,10 @@ quote_lkp = spark.table(f"{CATALOG}.{SCHEMA_SFDC}.sbqq__quote__c").select(
     F.col("Id").alias("SBQQ__Quote__c"))
 qline = (quote_lkp
     .withColumn("k", F.explode(F.sequence(F.lit(1), F.lit(3))))
-    .withColumn("qlseq", F.monotonically_increasing_id())
+    .withColumn("qlseq", dkey(F.col("SBQQ__Quote__c"), F.col("k")))
     .withColumn("Id", sf_id("a0R", F.col("qlseq")))
-    .join(prod_df.select(F.col("Id").alias("SBQQ__Product__c"),"list_mrr","seq"),
-          (F.abs(F.hash(F.col("qlseq"))) % 8) == F.col("seq"), "left")
+    .join(prod_df.select(F.col("Id").alias("SBQQ__Product__c"),"list_mrr","prod_idx"),
+          (F.abs(F.hash(F.col("qlseq"))) % N_PRODUCTS) == F.col("prod_idx"), "left")
     .withColumn("SBQQ__Quantity__c", F.lit(1))
     .withColumn("SBQQ__ListPrice__c", F.col("list_mrr"))
     .withColumn("SBQQ__Discount__c", F.round(rand_of(F.col("qlseq"))("qd")*40,1))
@@ -501,7 +623,7 @@ write_table(qline.select("Id","SBQQ__Quote__c","SBQQ__Product__c","SBQQ__Quantit
 # ---- Discount approval audit trail (drives 'unauthorised discount' check) ----
 approval = (quote.select("Id","SBQQ__Status__c")
     .withColumnRenamed("Id","Quote__c")
-    .withColumn("aseq", F.monotonically_increasing_id())
+    .withColumn("aseq", dkey(F.col("Quote__c")))
     .withColumn("Id", sf_id("a0A", F.col("aseq")))
     .withColumn("Approved_Discount_Pct__c", F.round(rand_of(F.col("aseq"))("a")*30,1))
     .withColumn("Status", F.when(F.col("SBQQ__Status__c")=="Approved","Approved")
@@ -589,7 +711,8 @@ write_table(trx.select("CUSTOMER_TRX_ID","TRX_NUMBER","TRX_DATE","BILL_TO_CUSTOM
 # ---- RA_CUSTOMER_TRX_LINES_ALL : invoice lines -------------------------------
 trx_lines = (trx.select("CUSTOMER_TRX_ID", F.col("total_amount"), F.col("tax_amount"))
     .withColumn("k", F.explode(F.sequence(F.lit(1), F.lit(3))))
-    .withColumn("CUSTOMER_TRX_LINE_ID", F.monotonically_increasing_id()+F.lit(PK_START_OFFSET))
+    .withColumn("CUSTOMER_TRX_LINE_ID",
+                (dkey(F.col("CUSTOMER_TRX_ID"), F.col("k")) % F.lit(1000000000000)) + F.lit(PK_START_OFFSET))
     .withColumn("LINE_NUMBER", F.col("k"))
     .withColumn("LINE_TYPE", F.element_at(F.array(F.lit("LINE"),F.lit("LINE"),F.lit("TAX")), F.col("k")))
     .withColumn("QUANTITY_INVOICED", F.lit(1))
@@ -647,7 +770,8 @@ coa = spark.createDataFrame(
     [("4000","Recurring Service Revenue"),("4010","Usage Revenue"),("4020","Installation Revenue"),
      ("1200","Accounts Receivable"),("2400","Deferred Revenue"),("5000","Network Cost of Sales"),
      ("6100","Partner Settlement Expense")], ["ACCOUNT","ACCOUNT_DESC"]) \
-    .withColumn("CODE_COMBINATION_ID", F.monotonically_increasing_id()+F.lit(PK_START_OFFSET)) \
+    .withColumn("CODE_COMBINATION_ID",
+                (dkey(F.col("ACCOUNT")) % F.lit(1000000000000)) + F.lit(PK_START_OFFSET)) \
     .withColumn("SEGMENT1_COMPANY", F.lit("01")) \
     .withColumn("SEGMENT2_COST_CENTER", F.lit("400")) \
     .withColumn("SEGMENT3_ACCOUNT", F.col("ACCOUNT"))
@@ -674,24 +798,62 @@ write_table(je_head.select("JE_HEADER_ID","JE_BATCH_NAME","PERIOD_NAME","CURRENC
      "STATUS":"P=posted.","JE_SOURCE":"Feeder subledger.","CUSTOMER_TRX_ID":"Source AR invoice."})
 
 # JE lines: DR AR / CR Revenue (+ deferred split) — natural double-entry
-rev_cc = coa.filter(F.col("ACCOUNT")=="4000").select("CODE_COMBINATION_ID").first()[0]
+rev_cc_row = (coa.filter(F.col("ACCOUNT") == FORECAST_GL_ACCOUNT)
+    .select("CODE_COMBINATION_ID").first())
+if rev_cc_row is None:
+    raise ValueError(
+        f"forecast_anomaly.gl_account_code={FORECAST_GL_ACCOUNT!r} is not present in GL_CODE_COMBINATIONS"
+    )
+rev_cc = rev_cc_row[0]
 ar_cc  = coa.filter(F.col("ACCOUNT")=="1200").select("CODE_COMBINATION_ID").first()[0]
-je_lines = (je_head.select("JE_HEADER_ID","total_amount")
+
+# --- FORECAST ANOMALY: deterministic GL revenue step-change injection --------
+# 04-source-data-spec.md documents month-specific magnitude jumps injected into
+# the revenue GL account (default 4000) so gold_revenue_forecast_anomalies /
+# ai_forecast has a signal to detect. Build a per-month multiplier column keyed on
+# the JE_DATE month ('yyyy-MM'), driven entirely by config.yaml `forecast_anomaly:`.
+# When the months list is empty the multiplier is a constant 1.0 (no injection),
+# so a clean run (or omitting the config block) produces the un-stepped series.
+_step_mult = F.lit(1.0)
+if FORECAST_ENABLED:
+    for _m, _pct in zip(FORECAST_MONTHS, FORECAST_MAGNITUDE_PCT):
+        _step_mult = F.when(
+            F.col("_je_month") == F.lit(_m),
+            F.lit(1.0 + _pct / 100.0),
+        ).otherwise(_step_mult)
+
+je_lines = (je_head.select("JE_HEADER_ID", "TRX_DATE", "total_amount")
     .withColumn("k", F.explode(F.array(F.lit("DR"),F.lit("CR"))))
     .withColumn("JE_LINE_NUM", F.when(F.col("k")=="DR",1).otherwise(2))
     .withColumn("CODE_COMBINATION_ID", F.when(F.col("k")=="DR", F.lit(ar_cc)).otherwise(F.lit(rev_cc)))
-    .withColumn("ENTERED_DR", F.when(F.col("k")=="DR", F.col("total_amount")).otherwise(F.lit(0.0)))
-    .withColumn("ENTERED_CR", F.when(F.col("k")=="CR", F.col("total_amount")).otherwise(F.lit(0.0))))
-write_table(je_lines.select("JE_HEADER_ID","JE_LINE_NUM","CODE_COMBINATION_ID","ENTERED_DR","ENTERED_CR"),
+    .withColumn("JE_DATE", F.to_date("TRX_DATE"))
+    .withColumn("_je_month", F.date_format("JE_DATE", "yyyy-MM"))
+    # Apply the same month multiplier to both sides of the journal so the GL
+    # remains balanced while the configured revenue-account CR series jumps.
+    .withColumn("_rev_mult", _step_mult)
+    .withColumn("ENTERED_DR",
+                F.when(F.col("k")=="DR", F.round(F.col("total_amount") * F.col("_rev_mult"), 2))
+                 .otherwise(F.lit(0.0)))
+    .withColumn("ENTERED_CR",
+                F.when(F.col("k")=="CR", F.round(F.col("total_amount") * F.col("_rev_mult"), 2))
+                 .otherwise(F.lit(0.0)))
+    .withColumn("GL_REVENUE_STEP_FLAG",
+                (F.col("k") == "CR") & (F.col("CODE_COMBINATION_ID") == F.lit(rev_cc)) &
+                (F.col("_rev_mult") != F.lit(1.0))))
+write_table(je_lines.select("JE_HEADER_ID","JE_LINE_NUM","CODE_COMBINATION_ID","JE_DATE",
+        "ENTERED_DR","ENTERED_CR","GL_REVENUE_STEP_FLAG"),
     SCHEMA_ERP, "gl_je_lines",
-    "Oracle GL_JE_LINES: journal lines (balanced double-entry — DR Receivables / CR Revenue) for each posted invoice.",
+    f"Oracle GL_JE_LINES: balanced journal lines (DR Receivables / CR Revenue) for each posted invoice. Revenue (CR) on configured account {FORECAST_GL_ACCOUNT} carries a deterministic, config-driven month-specific step change for the ai_forecast scene.",
     {"JE_HEADER_ID":"FK to gl_je_headers.","CODE_COMBINATION_ID":"FK to gl_code_combinations.",
-     "ENTERED_DR":"Debit amount.","ENTERED_CR":"Credit amount."})
+     "JE_DATE":"Journal entry date (month drives the revenue forecast series).",
+     "ENTERED_DR":"Debit amount.","ENTERED_CR":"Credit amount (revenue includes any injected step change).",
+     "GL_REVENUE_STEP_FLAG":"DEMO ONLY: true where a forecast-anomaly step change was applied to this revenue line."})
 
 # ---- ASC-606 revenue recognition schedule ------------------------------------
 revrec = (trx.select("CUSTOMER_TRX_ID","TRX_DATE","total_amount")
     .withColumn("k", F.explode(F.sequence(F.lit(0), F.lit(11))))          # 12-month ratable
-    .withColumn("REV_REC_ID", F.monotonically_increasing_id()+F.lit(PK_START_OFFSET))
+    .withColumn("REV_REC_ID",
+                (dkey(F.col("CUSTOMER_TRX_ID"), F.col("k")) % F.lit(1000000000000)) + F.lit(PK_START_OFFSET))
     .withColumn("PERFORMANCE_OBLIGATION", F.lit("Recurring fiber service (over time)"))
     .withColumn("RECOGNITION_DATE", F.add_months(F.col("TRX_DATE"), F.col("k")))
     .withColumn("PERIOD_NAME", F.date_format("RECOGNITION_DATE","MMM-yy"))
@@ -727,9 +889,8 @@ write_table(budget.select("BUDGET_ID","PERIOD_NAME","ACCOUNT","BUDGET_AMOUNT"),
 
 make_schema(SCHEMA_FX, "Refinitiv / LSEG market-data source: daily FX conversion rates used for multi-currency partner settlement and GL translation (Oracle GL_DAILY_RATES shape).")
 
-pairs = [("EUR","USD",1.08),("GBP","USD",1.27),("USD","USD",1.0),("CAD","USD",0.74),
-         ("AUD","USD",0.66),("JPY","USD",0.0067),("SGD","USD",0.74),("AED","USD",0.27)]
-pair_df = spark.createDataFrame(pairs, ["FROM_CURRENCY","TO_CURRENCY","base_rate"])
+# FX currency pairs come from config.yaml `fx_pairs:` (single source of truth).
+pair_df = spark.createDataFrame(FX_PAIRS, ["FROM_CURRENCY","TO_CURRENCY","base_rate"])
 fx = (pair_df.crossJoin(spark.range(0, FX_DAYS).withColumnRenamed("id","d"))
     .withColumn("CONVERSION_DATE", F.date_add(F.lit("2018-01-01"), F.col("d").cast("int")))
     # deterministic random-walk-ish daily drift (±1.5%)
@@ -796,28 +957,9 @@ write_table(crosswalk.select("SOURCE_SYSTEM","SOURCE_PARTY_ID","SOURCE_PARTY_COD
 # COMMAND ----------
 
 # DBTITLE 1,Cell 20
-# Bootstrap minimal prerequisites so this cell can run independently.
-from pyspark.sql import functions as F
-
-if "CATALOG" not in globals():
-    CATALOG = "cdm_tmforum"
-if "SCHEMA_SFDC" not in globals():
-    SCHEMA_SFDC = "salesforce_source"
-if "SCHEMA_CLM" not in globals():
-    SCHEMA_CLM = "ironclad_clm_source"
-if "BRAND" not in globals():
-    BRAND = {
-        "company": "Lakelink Fiber",
-        "legal_name": "Lakelink Fiber Communications, Inc.",
-        "tagline": "Enterprise Fiber & Wavelength Services",
-        "primary": "#0B3D5C",
-        "accent": "#FF6A3D",
-        "ink": "#1c1c1c",
-        "muted": "#6b7280",
-        "domain": "lakelinkfiber.com",
-        "address": "410 Optical Way, Suite 900, Denver, CO 80202",
-        "support": "1-800-LAKELINK",
-    }
+# This cell intentionally relies on the module-scope config load above. Keeping
+# it config-dependent prevents a second, divergent set of catalog/schema/brand
+# constants from silently taking over during an orchestrated notebook run.
 if "DATABRICKS_LOGO_URL" not in globals():
     DATABRICKS_LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/6/63/Databricks_Logo.png"
 if "make_schema" not in globals():

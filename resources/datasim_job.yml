@@ -1,0 +1,54 @@
+# Databricks Job that ORCHESTRATES source-system data simulation.
+#
+# This is what makes `databricks bundle run simulate_source_systems` real
+# (referenced by demo-artifacts/04-source-data-spec.md §4/§6). It runs the
+# data-sim/simulate_source_systems.py NOTEBOOK as a serverless notebook_task —
+# no classic cluster, matching the serverless-first stance in
+# demo-artifacts/06-deployment-contract.md.
+#
+# It is a NEW file under resources/ so the root bundle's `include: resources/*.yml`
+# glob auto-picks it up; databricks.yml and reconciliation_pipeline.yml are NOT
+# touched. The job writes only the simulated *_source schemas (and mdm_source);
+# it READS the read-only tmf_* golden data and never writes to it.
+#
+# Public repo: no workspace hostnames, CLI profile names, or real resource ids
+# here. The catalog comes in via ${var.catalog}; the host resolves from the CLI
+# profile at deploy/run time (`--profile <name>`).
+
+resources:
+  jobs:
+    simulate_source_systems:
+      name: simulate_source_systems
+
+      # Job-level parameters so the run is reproducible and self-describing.
+      # `catalog` flows to the notebook so the same catalog the bundle deploys
+      # into is the one written; seed/scale/leakage still come from config.yaml
+      # (single source of truth) unless a future task overrides them.
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+
+      tasks:
+        - task_key: simulate_source_systems
+
+          # Run the checked-in notebook. Path is relative to this resource file;
+          # the notebook carries the `# Databricks notebook source` header so it
+          # deploys and runs as a workspace notebook.
+          notebook_task:
+            notebook_path: ../data-sim/simulate_source_systems.py
+            base_parameters:
+              # Catalog overrides the config default for the selected target;
+              # schema is supplied as reconciliation-layer run context. Source
+              # schema names remain driven by data-sim/config.yaml.
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+
+          # Serverless notebook compute — no classic cluster anywhere in the demo
+          # (demo-artifacts/06-deployment-contract.md §5). Leaving job/task
+          # compute unset routes the notebook_task to serverless.
+
+      # Keep source regeneration a single deliberate run: no schedule, one retry,
+      # and no concurrent overlapping runs mutating the same *_source tables.
+      max_concurrent_runs: 1
