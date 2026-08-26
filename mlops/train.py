@@ -8,8 +8,9 @@ import time
 import mlflow
 import mlflow.pyfunc
 from databricks.feature_engineering import FeatureEngineeringClient, FeatureLookup
-from mlflow.models import infer_signature
+from mlflow.models import ModelSignature
 from mlflow.tracking import MlflowClient
+from mlflow.types.schema import ColSpec, Schema
 from pyspark.sql import SparkSession
 from sklearn.ensemble import IsolationForest
 
@@ -84,7 +85,12 @@ def main() -> None:
     with mlflow.start_run(run_name="ra_isolation_forest_training") as run:
         model.fit(training_pandas)
         predictions = -model.score_samples(training_pandas)
-        signature = infer_signature(training_pandas, predictions)
+        signature = ModelSignature(
+            inputs=Schema([ColSpec("double", column) for column in FEATURE_COLUMNS]),
+            outputs=Schema([ColSpec("double")]),
+        )
+        if signature.inputs is None or signature.outputs is None:
+            raise RuntimeError("Model signature must include both inputs and outputs")
 
         mlflow.log_params(
             {
