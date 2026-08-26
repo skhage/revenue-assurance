@@ -8,16 +8,16 @@
 --
 -- Inline expectations cover row-level rules. This MV makes their latest
 -- pass/fail counts queryable alongside the set-level checks that expectations
--- cannot express: DQ-1 source row-count ranges, DQ-5 scorecard PK uniqueness,
--- and DQ-6 forecast month uniqueness/status validity.
+-- cannot express: DQ-1 source row-count ranges and DQ-5 scorecard PK
+-- uniqueness.
 --
--- `gold_revenue_forecast_anomalies` is created separately by
--- reconciliation/warehouse/gold_revenue_forecast_anomalies.sql on a serverless
--- SQL warehouse because `ai_forecast` is not executed in this pipeline DAG.
+-- DQ-6 lives with the warehouse forecast SQL because `ai_forecast` is not
+-- executed in this pipeline DAG. Keeping that audit there avoids a first-run
+-- dependency from the pipeline onto a warehouse-created object.
 -- =============================================================================
 
 CREATE OR REFRESH MATERIALIZED VIEW dq_audit
-COMMENT 'Unified DQ audit: latest pipeline expectation metrics plus DQ-1 source volume, DQ-5 scorecard uniqueness, and DQ-6 forecast checks.'
+COMMENT 'Unified pipeline DQ audit: latest expectation metrics plus DQ-1 source volume and DQ-5 scorecard uniqueness checks.'
 AS
 WITH latest_expectation_update AS (
   SELECT
@@ -72,7 +72,7 @@ source_counts AS (
   UNION ALL
   SELECT 'salesforce_source.sbqq__quote__c', COUNT(*), 1000, 10000 FROM salesforce_source.sbqq__quote__c
   UNION ALL
-  SELECT 'salesforce_source.sbqq__quote_line__c', COUNT(*), 5000, 50000 FROM salesforce_source.sbqq__quote_line__c
+  SELECT 'salesforce_source.sbqq__quoteline__c', COUNT(*), 5000, 50000 FROM salesforce_source.sbqq__quoteline__c
   UNION ALL
   SELECT 'oracle_erp_source.ra_customer_trx_all', COUNT(*), 10000, CAST(NULL AS BIGINT) FROM oracle_erp_source.ra_customer_trx_all
   UNION ALL
@@ -140,48 +140,9 @@ scorecard_uniqueness_check AS (
     CASE WHEN observed_records = unique_records THEN 'GREEN' ELSE 'RED' END AS status,
     'row_count = count(distinct customer_id)' AS expected_condition
   FROM scorecard_counts
-),
-forecast_counts AS (
-  SELECT
-    COUNT(*) AS observed_records,
-    COUNT(DISTINCT revenue_month) AS unique_months,
-    SUM(CASE WHEN anomaly_status IN ('ABOVE_EXPECTED', 'BELOW_EXPECTED', 'NORMAL') THEN 1 ELSE 0 END) AS valid_status_records
-  FROM gold_revenue_forecast_anomalies
-),
-forecast_month_uniqueness_check AS (
-  SELECT
-    'DQ-6' AS check_type,
-    'gold_revenue_forecast_anomalies' AS dataset,
-    'dq6_revenue_month_unique' AS expectation_name,
-    CAST(NULL AS STRING) AS update_id,
-    CAST(NULL AS TIMESTAMP) AS observed_at,
-    observed_records,
-    unique_months AS passed_records,
-    observed_records - unique_months AS failed_records,
-    CASE WHEN observed_records = unique_months THEN 'GREEN' ELSE 'RED' END AS status,
-    'row_count = count(distinct revenue_month)' AS expected_condition
-  FROM forecast_counts
-),
-forecast_status_check AS (
-  SELECT
-    'DQ-6' AS check_type,
-    'gold_revenue_forecast_anomalies' AS dataset,
-    'dq6_anomaly_status_in_known_set' AS expectation_name,
-    CAST(NULL AS STRING) AS update_id,
-    CAST(NULL AS TIMESTAMP) AS observed_at,
-    observed_records,
-    valid_status_records AS passed_records,
-    observed_records - valid_status_records AS failed_records,
-    CASE WHEN observed_records = valid_status_records THEN 'GREEN' ELSE 'RED' END AS status,
-    'anomaly_status IN (ABOVE_EXPECTED, BELOW_EXPECTED, NORMAL)' AS expected_condition
-  FROM forecast_counts
 )
 SELECT * FROM inline_expectation_checks
 UNION ALL
 SELECT * FROM source_volume_checks
 UNION ALL
-SELECT * FROM scorecard_uniqueness_check
-UNION ALL
-SELECT * FROM forecast_month_uniqueness_check
-UNION ALL
-SELECT * FROM forecast_status_check;
+SELECT * FROM scorecard_uniqueness_check;

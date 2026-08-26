@@ -19,12 +19,9 @@
 --     to `gold_anomaly_scores`; that tile will error until the ML workstream
 --     lands the object. That is a pre-existing gap, not one introduced here, and
 --     no placeholder is invented for it.
---   * `gold_revenue_forecast_anomalies` — moved to
---     reconciliation/warehouse/gold_revenue_forecast_anomalies.sql. `ai_forecast`
---     is documented as requiring a Pro or Serverless SQL *warehouse* ("Applies
---     to: Databricks SQL") and is not documented as supported on pipeline
---     compute. Rather than risk the whole pipeline update failing on an
---     unverified dependency, it stays warehouse-executed. See that file's header.
+--   * Revenue forecasting stays warehouse-executed because `ai_forecast` is not
+--     part of this pipeline DAG. The warehouse SQL also owns its DQ-6 checks, so
+--     this pipeline has no first-run dependency on that separately built object.
 -- =============================================================================
 
 

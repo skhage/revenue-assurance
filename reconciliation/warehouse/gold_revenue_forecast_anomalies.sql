@@ -71,3 +71,44 @@ LEFT JOIN forecasted f
   ON mr.revenue_month = f.revenue_month
 LEFT JOIN budgets b
   ON b.PERIOD_NAME = DATE_FORMAT(mr.revenue_month, 'MMM-yy');
+
+
+-- -----------------------------------------------------------------------------
+-- DQ-6 Warehouse Audit
+-- Warn when anomaly_status leaves the known set or revenue_month is not unique.
+-- This audit stays beside the warehouse-created forecast MV so the Lakeflow
+-- pipeline has no dependency on an object that may not exist on its first run.
+-- -----------------------------------------------------------------------------
+CREATE OR REFRESH MATERIALIZED VIEW cdm_tmforum.revenue_assurance.gold_revenue_forecast_anomalies_dq_audit
+COMMENT 'DQ-6 warn-level checks for forecast anomaly status validity and one row per revenue month.'
+AS
+WITH forecast_counts AS (
+  SELECT
+    COUNT(*) AS observed_records,
+    COUNT(DISTINCT revenue_month) AS unique_months,
+    SUM(CASE WHEN anomaly_status IN ('ABOVE_EXPECTED', 'BELOW_EXPECTED', 'NORMAL') THEN 1 ELSE 0 END) AS valid_status_records
+  FROM cdm_tmforum.revenue_assurance.gold_revenue_forecast_anomalies
+)
+SELECT
+  'DQ-6' AS check_id,
+  'cdm_tmforum.revenue_assurance.gold_revenue_forecast_anomalies' AS dataset,
+  'dq6_revenue_month_unique' AS expectation_name,
+  'WARN' AS action,
+  observed_records,
+  unique_months AS passed_records,
+  observed_records - unique_months AS failed_records,
+  CASE WHEN observed_records = unique_months THEN 'GREEN' ELSE 'WARN' END AS status,
+  'row_count = count(distinct revenue_month)' AS expected_condition
+FROM forecast_counts
+UNION ALL
+SELECT
+  'DQ-6' AS check_id,
+  'cdm_tmforum.revenue_assurance.gold_revenue_forecast_anomalies' AS dataset,
+  'dq6_anomaly_status_in_known_set' AS expectation_name,
+  'WARN' AS action,
+  observed_records,
+  valid_status_records AS passed_records,
+  observed_records - valid_status_records AS failed_records,
+  CASE WHEN observed_records = valid_status_records THEN 'GREEN' ELSE 'WARN' END AS status,
+  'anomaly_status IN (ABOVE_EXPECTED, BELOW_EXPECTED, NORMAL)' AS expected_condition
+FROM forecast_counts;

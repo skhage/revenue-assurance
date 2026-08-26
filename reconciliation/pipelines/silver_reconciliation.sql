@@ -25,8 +25,9 @@
 --   on each update and does not support incremental refresh — an accepted
 --   trade-off here, since DQ-as-code is a core demo beat (ADR-004 rationale).
 --   Expectation expressions cannot contain aggregates or subqueries, so the
---   set-level checks (DQ-1, DQ-5 uniqueness, DQ-9 parse-rate) live in
---   dq_audit.sql as separate audit MVs.
+--   set-level DQ-1 source-volume and DQ-5 uniqueness checks live in
+--   dq_audit.sql. DQ-9 is enforced by row-level expectations in the document
+--   intelligence pipeline file.
 -- =============================================================================
 
 
