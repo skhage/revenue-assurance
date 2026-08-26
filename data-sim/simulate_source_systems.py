@@ -678,13 +678,13 @@ write_table(approval.select("Id","Quote__c","Status","Approved_Discount_Pct__c",
      "Status":"Approval status.","ApprovalDate":"Date approved (null if not approved)."})
 
 # ---- PRM: partner accounts + program agreements ------------------------------
-partner = (spark.range(0, 60)
-    .withColumn("Id", sf_id("001", F.col("id")+F.lit(500000)))
-    .withColumn("Name", F.concat(F.lit("Partner Carrier "), F.col("id").cast("string")))
+partner = (spark.range(0, 60).withColumnRenamed("id", "partner_idx")
+    .withColumn("Id", sf_id("001", F.col("partner_idx")+F.lit(500000)))
+    .withColumn("Name", F.concat(F.lit("Partner Carrier "), F.col("partner_idx").cast("string")))
     .withColumn("IsPartner", F.lit(True))
     .withColumn("Partner_Type__c", F.element_at(F.array(F.lit("Wholesale Carrier"),F.lit("Reseller"),
-                    F.lit("Agent"),F.lit("Interconnect")),(F.col("id")%4+1).cast("int")))
-    .withColumn("Rev_Share_Pct__c", F.round(15 + rand_of(F.col("id"))("p")*25,1)))
+                    F.lit("Agent"),F.lit("Interconnect")),(F.col("partner_idx")%4+1).cast("int")))
+    .withColumn("Rev_Share_Pct__c", F.round(15 + rand_of(F.col("partner_idx"))("p")*25,1)))
 write_table(partner.select("Id","Name","IsPartner","Partner_Type__c","Rev_Share_Pct__c"),
     SCHEMA_SFDC, "partner_account",
     "Salesforce PRM partner Account (IsPartner=true). Wholesale/reseller/interconnect partners; Rev_Share_Pct__c reconciled against tmf partner settlement.",
