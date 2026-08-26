@@ -300,10 +300,12 @@ def ensure_delta_target(fqn):
         drop_kind = "MATERIALIZED VIEW"
     elif table_type == "VIEW":
         drop_kind = "VIEW"
-    elif data_source_format == "DELTA":
-        return
-    else:
+    elif data_source_format and data_source_format != "DELTA":
         drop_kind = "TABLE"
+    else:
+        print(f"  ↻ Preserving existing {table_type or 'TABLE'} {fqn} "
+              f"(format={data_source_format or 'UNKNOWN'})")
+        return
 
     spark.sql(f"DROP {drop_kind} IF EXISTS {quoted_fqn}")
     print(f"  ↻ Dropped existing non-Delta {table_type or 'TABLE'} {fqn}")
