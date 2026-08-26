@@ -53,6 +53,10 @@ targets:
   # Shared/demo target. Resources deploy without the per-user prefix.
   prod:
     mode: production
+    # Shared-folder management is intentional for this collaborative demo.
+    permissions:
+      - group_name: users
+        level: CAN_MANAGE
     # Keep shared production resources in one canonical, deployer-independent path.
     workspace:
       root_path: /Workspace/Shared/revenue-assurance/${bundle.name}/${bundle.target}
