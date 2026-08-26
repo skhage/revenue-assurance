@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import time
 
 import mlflow
@@ -16,9 +15,11 @@ from pyspark.sql import SparkSession
 try:
     from features import FEATURE_COLUMNS, FEATURE_TABLE_NAME
     from modeling import IsolationForestScoreModel
+    import modeling as _modeling_mod
 except ModuleNotFoundError:
     from mlops.features import FEATURE_COLUMNS, FEATURE_TABLE_NAME
     from mlops.modeling import IsolationForestScoreModel
+    import mlops.modeling as _modeling_mod
 
 
 def parse_args() -> argparse.Namespace:
@@ -109,7 +110,7 @@ def main() -> None:
             registered_model_name=model_name,
             signature=signature,
             input_example=training_pandas.head(5),
-            code_paths=[os.path.join(os.path.dirname(os.path.abspath(__file__)), "modeling.py")],
+            code_paths=[_modeling_mod.__file__],
         )
 
         registry_client = MlflowClient(registry_uri="databricks-uc")
