@@ -1,0 +1,58 @@
+# Lakeflow Declarative Pipeline for the RA reconciliation layer (ADR-004).
+#
+# The resource key `ra_medallion_pipeline` and the pipeline `name` both match
+# what demo-artifacts/09-runbook.md already tells the presenter to look for in
+# the Pipelines UI ("Pipelines → ra_medallion_pipeline → latest update").
+#
+# Everything this pipeline publishes lands in ${var.catalog}.${var.schema}.
+# It READS from the read-only tmf_* schemas and the simulated *_source schemas;
+# it never writes to them.
+
+resources:
+  pipelines:
+    ra_medallion_pipeline:
+      name: ra_medallion_pipeline
+
+      # Serverless-first per demo-artifacts/06-deployment-contract.md §5 — no
+      # classic clusters anywhere in this demo.
+      serverless: true
+      channel: ${var.pipeline_channel}
+      photon: true
+      continuous: false
+
+      # Unity Catalog publishing. `schema` (not the legacy `target`) sets the
+      # default publishing location, which puts the pipeline in default
+      # publishing mode — so in-pipeline datasets reference each other by bare
+      # name and the deprecated LIVE schema is not used.
+      catalog: ${var.catalog}
+      schema: ${var.schema}
+
+      # Pipeline configuration values, referenced from SQL as ${ra.catalog} etc.
+      # This is what removes the hardcoded `cdm_tmforum` from the transforms:
+      # every cross-schema read is written as ${ra.catalog}.<schema>.<table>.
+      configuration:
+        ra.catalog: ${var.catalog}
+        ra.schema: ${var.schema}
+        # Volume root holding the simulated Ironclad CLM PDFs. Parameterized so
+        # the doc-intelligence checks are not pinned to one catalog either.
+        ra.clm_volume_root: /Volumes/${var.catalog}/ironclad_clm_source
+
+      libraries:
+        # Order here does not determine execution order — Lakeflow builds the
+        # dataflow graph from the dataset definitions themselves.
+        - glob:
+            include: ../reconciliation/pipelines/silver_reconciliation.sql
+        - glob:
+            include: ../reconciliation/pipelines/silver_doc_intelligence.sql
+        - glob:
+            include: ../reconciliation/pipelines/gold_aggregation.sql
+        - glob:
+            include: ../reconciliation/pipelines/dq_audit.sql
+
+      # Publish the pipeline event log as a UC table so DQ expectation results
+      # are queryable (the runbook's "all expectations green" check) and can
+      # back a dashboard tile later.
+      event_log:
+        catalog: ${var.catalog}
+        schema: ${var.schema}
+        name: pipeline_event_log
