@@ -36,6 +36,11 @@ variables:
     description: Lakeflow Declarative Pipelines release channel (CURRENT or PREVIEW).
     default: CURRENT
 
+  run_as_service_principal:
+    description: >-
+      Application ID of the service principal that owns shared production runs.
+    default: REPLACE_WITH_RUN_AS_SERVICE_PRINCIPAL_APPLICATION_ID
+
 targets:
   # Deploys to the deploying user's own workspace prefix; pipeline runs in
   # development mode so an update does not tear down and rebuild everything.
@@ -46,8 +51,9 @@ targets:
   # Shared/demo target. Resources deploy without the per-user prefix.
   prod:
     mode: production
+    # Override at deploy time with:
+    # --var run_as_service_principal=<service-principal-application-id>
+    run_as:
+      service_principal_name: ${var.run_as_service_principal}
     variables:
-      # Pipelines in production mode must have an explicit owner rather than
-      # inheriting the deploying user; set run_as when a service principal is
-      # available. Left unset here so validation stays profile-independent.
       pipeline_channel: CURRENT
