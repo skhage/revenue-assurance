@@ -41,6 +41,19 @@ scale:
 leakage_rate: 0.06                  # ~6% of contract lines carry a seeded exception
 
 # ---------------------------------------------------------------------------
+# Forecast anomaly injection (ai_forecast / gold_revenue_forecast_anomalies)
+# Deterministic month-specific step changes in GL revenue (account 4000) so the
+# forecast scene has a signal to detect. `months` and `magnitude_pct` are aligned
+# position-by-position (2025-06 → +15%, 2025-11 → +30%). Set months: [] to disable
+# (clean revenue series). See simulate_source_systems.py GL_JE_LINES cell.
+# ---------------------------------------------------------------------------
+forecast_anomaly:
+  enabled: true                      # false keeps the GL series at its unmodified baseline
+  gl_account_code: "4000"           # revenue account the step change lands on
+  months: ["2025-06", "2025-11"]    # yyyy-MM buckets receiving a step change
+  magnitude_pct: [15, 30]           # +% revenue jump per month (aligned to months)
+
+# ---------------------------------------------------------------------------
 # Product catalog (Salesforce Product2 / Pricebook source of truth)
 # ProductCode, Name, Family, list_mrr (monthly recurring revenue USD)
 # ---------------------------------------------------------------------------

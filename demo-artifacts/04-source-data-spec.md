@@ -7,10 +7,11 @@
 > - ❌ **WRONG (superseded):** Anomalies injected into `ra_silver.fact_usage`/`fact_billing`/`dim_contract`; jobs `inject_anomalies`/`reconciliation_job`/`build_gold_layer`; teardown of `ra_silver`/`ra_gold`. **FIXED (as built):** there is no `ra_silver`/`ra_gold` split and no `dim_*`/`fact_*` tables. Anomalies are injected into the **`*_source` systems** (and the `oracle_erp_source.gl_je_lines` account `4000` GL revenue series that feeds the forecast) by `data-sim/simulate_source_systems.py` (+ `data-sim/config.yaml`); the RA layer is a single `cdm_tmforum.revenue_assurance` schema of silver-check + gold materialized views (see artifact 01-03).
 > - ✅ **KEPT:** Core concepts of determinism (seed-driven), controlled failure injection, and reset/regenerate capability — now applied to source simulation + anomaly augmentation only.
 > - **Source system & anomaly injection correction (build-verified):** Clarified real Salesforce schema names (Account, Contract, ContractLineItem, SBQQ objects with `discount_approval__c`); added Oracle EBS/Fusion tables (GL_BUDGETS, REVENUE_RECOGNITION_SCHEDULE, AR_PAYMENT_SCHEDULES_ALL with DAYS_OVERDUE, GL_JE_HEADERS); expanded Ironclad CLM to include both contract and invoice PDFs for document-intelligence checks. Anomalies are injected deterministically into `*_source` schemas only; the pipeline then feeds silver checks in `cdm_tmforum.revenue_assurance`, which compose into `gold_leakage_summary` (~48K / ~$601M register). All operations preserve read-only `tmf_*` base data.
+> - **Orchestration & determinism correction (ws3-datasim):** (1) Added a DAB **job** `resources/datasim_job.yml` that runs `simulate_source_systems.py` as a serverless notebook_task, making `databricks bundle run simulate_source_systems` real. (2) `config.yaml` is now the **single source of truth** — the notebook loads it at module scope (`import yaml`) and derives catalog/schemas/seed/scale/leakage/products/FX/forecast knobs from it, with no hardcoded duplicates. (3) Seed collapsed to the **one authoritative value `42`** (previously the doc cited `424242` while code+config used `42`); this spec now reads `42` throughout. (4) Non-deterministic `monotonically_increasing_id()` surrogate keys were replaced with **deterministic hash keys** (`xxhash64` of business keys salted with the seed), so "same seed ⇒ reproducible" holds. (5) The documented GL **revenue step-change** is now actually implemented in `gl_je_lines` (account 4000, config-driven months/magnitudes) instead of just copying invoice totals.
 
 **Demo:** Revenue Assurance Lakehouse for Lakelink Fiber (Lumen pitch audience)  
 **Data strategy:** Operate on pre-populated `cdm_tmforum.tmf_*` (TM Forum SID, read-only) + simulate upstream source systems in `*_source` schemas + inject ML-compelling anomalies into sources.  
-**Workspace:** demo-workspace (`demo` CLI profile)  
+**Workspace:** selected at runtime; no workspace hostname or credential identifier is committed
 **Purpose:** Specify how raw upstream systems are simulated (Salesforce, Oracle ERP, FX feeds, CLM docs, MDM) keyed to golden customers, and how statistical anomalies are seeded into those sources so the ML/AI forecast scenes are realistic and compelling.
 
 ---
@@ -262,25 +263,29 @@ These anomalies are **seeded deterministically** (same seed ⇒ same anomalies) 
 - Selects deterministic subsets using `hash(key, seed) % 100 < rate` and mutates selected rows into the anomaly values above.
 - Because the silver checks in `cdm_tmforum.revenue_assurance` read the `*_source` systems directly, injected anomalies flow straight through to `gold_leakage_summary` and `gold_revenue_forecast_anomalies` — no separate `_anomalies_*` tables and no mutation of read-only `tmf_*`.
 
-**Configuration** (illustrative shape; the real file is `data-sim/config.yaml`):
+**Configuration** — the real file is `data-sim/config.yaml` and the generator now
+*actually loads it* at module scope (`import yaml; CFG = yaml.safe_load(...)`); there
+are no hardcoded catalog/schema/seed/scale/leakage duplicates left in the notebook. The
+DAB job (`resources/datasim_job.yml`) passes the bundle `catalog` and reconciliation
+`schema` as notebook parameters; the source-system schema names, seed, scale, leakage
+rate, product catalogue, FX pairs and forecast step-change all derive from `config.yaml`.
+Representative excerpt:
 
 ```yaml
-seed: 424242
-simulation:
-  catalog: cdm_tmforum
-  workspace_profile: demo
-injection_rates:
-  contract_price_gap: 0.03
-  unauthorized_discount: 0.02
-  expired_quote_active: 0.01
-  fx_deviation: 0.02
-  ar_aging_spike: 0.03
-  rev_rec_timing: 0.02
-  doc_divergence: 0.01
+catalog: cdm_tmforum
+schemas:
+  salesforce:   salesforce_source
+  oracle_erp:   oracle_erp_source
+  ironclad_clm: ironclad_clm_source
+  refinitiv_fx: refinitiv_fx_source
+  mdm:          mdm_source
+seed: 42                               # the ONE authoritative seed (code + config agree)
+leakage_rate: 0.06                     # ~6% of contract lines carry a seeded exception
 forecast_anomaly:
-  gl_account_code: "4000"  # revenue account
-  months: [2025-06, 2025-11]   # inject step changes for the ai_forecast scene
-  magnitude_pct: [15, 30]
+  enabled: true                         # false disables GL step-change injection
+  gl_account_code: "4000"              # revenue account the step change lands on
+  months: ["2025-06", "2025-11"]       # inject step changes for the ai_forecast scene
+  magnitude_pct: [15, 30]              # aligned to months (2025-06 → +15%, 2025-11 → +30%)
 ```
 
 ---
@@ -344,14 +349,12 @@ databricks bundle run ra_reconciliation --profile <name>
 
 ### Golden/deterministic outputs
 
-At the end of a full build with `seed=424242`, the generator prints a **manifest**:
+At the end of a full build with `seed=42`, the generator prints a **manifest**:
 
 ```
 === Data Simulation Complete ===
-Seed: 424242
+Seed: 42
 Timestamp: 2026-08-25T10:30:00Z
-Workspace: demo-workspace
-Profile: demo
 Catalog: cdm_tmforum
 
 Source system snapshots created/updated:
@@ -404,14 +407,14 @@ Baseline context (native RA layer, not the register):
 
 Forecast (gold_revenue_forecast_anomalies):
   Injected step-change months [2025-06, 2025-11] flagged ABOVE_EXPECTED / BELOW_EXPECTED by ai_forecast
-  Magnitude: ±15–30% variance on revenue (account 4000)
+  Magnitude: +15–30% variance on revenue (account 4000)
 
 ML training set (gold_anomaly_scores):
   Normal records: 89%
   Injected anomaly records (labeled): 11%
 ```
 
-This manifest is the **source of truth** for the Test Plan's golden outputs. The forecast should exhibit variance where revenue step-changes were injected (2025-06, 2025-11); the silver checks should surface the injected `*_source` anomalies in `gold_leakage_summary`. All outputs are deterministic on `seed=424242`.
+This manifest is the **source of truth** for the Test Plan's golden outputs. The forecast should exhibit variance where revenue step-changes were injected (2025-06, 2025-11); the silver checks should surface the injected `*_source` anomalies in `gold_leakage_summary`. All outputs are deterministic on `seed=42`.
 
 ---
 
@@ -427,7 +430,7 @@ If the demo includes a **live Lakeflow Connect / Auto Loader** ingestion beat:
 
 ## 7. Reproducibility checklist
 
-- ✅ Seed-driven (`seed=424242` ⇒ byte-identical outputs across runs)
+- ✅ Seed-driven (`seed=42` ⇒ byte-identical outputs across runs; deterministic hash-based surrogate keys, not `monotonically_increasing_id()`)
 - ✅ Deterministic anomaly selection (same seed + key hash ⇒ same anomalies in `*_source`)
 - ✅ Idempotent generation (`CREATE OR REPLACE`, no incremental state; manifested in DAB targets)
 - ✅ Manifest logging (source of truth for test plan golden figures; printed to workspace run output)
