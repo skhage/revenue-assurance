@@ -101,7 +101,9 @@ def main() -> None:
 
     feature_client = FeatureEngineeringClient(model_registry_uri="databricks-uc")
     if spark.catalog.tableExists(feature_table):
-        feature_client.write_table(name=feature_table, df=feature_frame, mode="overwrite")
+        feature_table_sql = f"`{args.catalog}`.`{args.schema}`.`{FEATURE_TABLE_NAME}`"
+        spark.sql(f"DELETE FROM {feature_table_sql}")
+        feature_client.write_table(name=feature_table, df=feature_frame, mode="merge")
     else:
         feature_client.create_table(
             name=feature_table,

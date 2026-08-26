@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import argparse
 
-from databricks.feature_engineering import FeatureEngineeringClient
+import mlflow
+import mlflow.pyfunc
 from pyspark.sql import SparkSession, Window, functions as functions
 
 try:
@@ -28,19 +29,22 @@ def main() -> None:
     model_name = f"{args.catalog}.{args.schema}.ra_anomaly_isolation_forest"
     model_uri = f"models:/{model_name}@champion"
 
-    feature_client = FeatureEngineeringClient(model_registry_uri="databricks-uc")
+    mlflow.set_registry_uri("databricks-uc")
+    model = mlflow.pyfunc.load_model(model_uri)
+    if model.metadata.signature is None or model.metadata.signature.outputs is None:
+        raise RuntimeError("Champion model signature must include outputs")
+
     feature_frame = spark.table(feature_table).fillna(0.0, subset=FEATURE_COLUMNS)
-    key_frame = feature_frame.select("exception_id")
-    predictions = feature_client.score_batch(
-        model_uri=model_uri,
-        df=key_frame,
-        result_type="double",
-    ).select(
-        "exception_id",
-        functions.col("prediction").cast("double").alias("isolation_forest_score"),
+    predict = mlflow.pyfunc.spark_udf(spark, model_uri, result_type="double")
+    scored = feature_frame.withColumn(
+        "isolation_forest_score",
+        predict(
+            functions.struct(
+                *[functions.col(column) for column in FEATURE_COLUMNS]
+            )
+        ).cast("double"),
     )
 
-    scored = predictions.join(feature_frame, "exception_id", "inner")
     score_stats = scored.agg(
         functions.avg("isolation_forest_score").alias("score_mean"),
         functions.stddev_pop("isolation_forest_score").alias("score_stddev"),

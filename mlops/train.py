@@ -3,22 +3,24 @@
 from __future__ import annotations
 
 import argparse
-import os
 import time
 
 import mlflow
-import mlflow.sklearn
-from databricks.feature_engineering import FeatureEngineeringClient, FeatureLookup
-from mlflow.models import infer_signature
+import mlflow.pyfunc
+from mlflow.models import ModelSignature
 from mlflow.tracking import MlflowClient
+from mlflow.types.schema import ColSpec, Schema
 from pyspark.sql import SparkSession
+from sklearn.ensemble import IsolationForest
 
 try:
     from features import FEATURE_COLUMNS, FEATURE_TABLE_NAME
-    from modeling import IsolationForestScoreModel
+    from modeling import IsolationForestPyfuncModel
+    import modeling as _modeling_mod
 except ModuleNotFoundError:
     from mlops.features import FEATURE_COLUMNS, FEATURE_TABLE_NAME
-    from mlops.modeling import IsolationForestScoreModel
+    from mlops.modeling import IsolationForestPyfuncModel
+    import mlops.modeling as _modeling_mod
 
 
 def parse_args() -> argparse.Namespace:
@@ -51,26 +53,13 @@ def main() -> None:
 
     mlflow.set_registry_uri("databricks-uc")
     mlflow.set_experiment(args.experiment_name)
-    feature_client = FeatureEngineeringClient(model_registry_uri="databricks-uc")
 
-    key_frame = spark.table(feature_table).select("exception_id")
-    training_set = feature_client.create_training_set(
-        df=key_frame,
-        feature_lookups=[
-            FeatureLookup(
-                table_name=feature_table,
-                lookup_key="exception_id",
-                feature_names=FEATURE_COLUMNS,
-            )
-        ],
-        exclude_columns=["exception_id"],
-    )
-    training_frame = training_set.load_df().select(*FEATURE_COLUMNS).fillna(0.0)
+    training_frame = spark.table(feature_table).select(*FEATURE_COLUMNS).fillna(0.0)
     training_pandas = training_frame.toPandas()
     if len(training_pandas) < 20:
         raise RuntimeError("At least 20 exception rows are required to train IsolationForest")
 
-    model = IsolationForestScoreModel(
+    model = IsolationForest(
         n_estimators=300,
         contamination=args.contamination,
         max_samples="auto",
@@ -80,8 +69,13 @@ def main() -> None:
 
     with mlflow.start_run(run_name="ra_isolation_forest_training") as run:
         model.fit(training_pandas)
-        predictions = model.predict(training_pandas)
-        signature = infer_signature(training_pandas, predictions)
+        predictions = -model.score_samples(training_pandas)
+        signature = ModelSignature(
+            inputs=Schema([ColSpec("double", column) for column in FEATURE_COLUMNS]),
+            outputs=Schema([ColSpec("double")]),
+        )
+        if signature.inputs is None or signature.outputs is None:
+            raise RuntimeError("Model signature must include both inputs and outputs")
 
         mlflow.log_params(
             {
@@ -100,15 +94,13 @@ def main() -> None:
         )
         mlflow.log_dict({"feature_columns": FEATURE_COLUMNS}, "feature_columns.json")
 
-        feature_client.log_model(
-            model=model,
+        mlflow.pyfunc.log_model(
             artifact_path="model",
-            flavor=mlflow.sklearn,
-            training_set=training_set,
-            registered_model_name=model_name,
+            python_model=IsolationForestPyfuncModel(model),
             signature=signature,
             input_example=training_pandas.head(5),
-            code_paths=[os.path.join(os.path.dirname(os.path.abspath(__file__)), "modeling.py")],
+            code_paths=[_modeling_mod.__file__],
+            registered_model_name=model_name,
         )
 
         registry_client = MlflowClient(registry_uri="databricks-uc")

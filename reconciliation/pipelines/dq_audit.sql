@@ -19,14 +19,20 @@
 CREATE OR REFRESH MATERIALIZED VIEW dq_audit
 COMMENT 'Unified pipeline DQ audit: latest expectation metrics plus DQ-1 source volume and DQ-5 scorecard uniqueness checks.'
 AS
-WITH latest_expectation_update AS (
+WITH per_update AS (
   SELECT
-    origin.update_id AS update_id
+    origin.update_id AS update_id,
+    MAX(timestamp) AS last_ts
   FROM pipeline_event_log
   WHERE event_type = 'flow_progress'
     AND details:flow_progress.data_quality.expectations IS NOT NULL
   GROUP BY origin.update_id
-  QUALIFY ROW_NUMBER() OVER (ORDER BY MAX(timestamp) DESC) = 1
+),
+latest_expectation_update AS (
+  SELECT
+    update_id
+  FROM per_update
+  QUALIFY ROW_NUMBER() OVER (ORDER BY last_ts DESC) = 1
 ),
 exploded_expectations AS (
   SELECT
