@@ -1,0 +1,53 @@
+# Databricks Asset Bundle — Revenue Assurance reconciliation layer.
+#
+# This root file is deliberately MINIMAL and STABLE: it declares the bundle,
+# the shared variables, and the targets. Every deployable resource lives in its
+# own file under resources/ and is picked up by the include glob below, so
+# downstream workstreams (ML anomaly scoring, dashboard, Genie) only ever ADD a
+# file under resources/ — they never need to edit this one.
+#
+# The RA Exceptions Console app keeps its own separate bundle at
+# ra-exceptions-console/databricks.yml and is intentionally NOT included here.
+#
+# Public repo: never add workspace hostnames, CLI profile names, or real
+# resource ids to this file. The host resolves from the CLI profile
+# (`--profile <name>`); ids come in as variables.
+
+bundle:
+  name: revenue_assurance
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: >-
+      Unity Catalog catalog that holds both the read-only TM Forum SID golden
+      data (tmf_*), the simulated upstream systems (*_source), and the RA layer.
+    default: cdm_tmforum
+
+  schema:
+    description: >-
+      Schema the pipeline publishes the silver + gold RA datasets into. This is
+      the only schema this bundle writes to; tmf_* stays read-only.
+    default: revenue_assurance
+
+  pipeline_channel:
+    description: Lakeflow Declarative Pipelines release channel (CURRENT or PREVIEW).
+    default: CURRENT
+
+targets:
+  # Deploys to the deploying user's own workspace prefix; pipeline runs in
+  # development mode so an update does not tear down and rebuild everything.
+  dev:
+    mode: development
+    default: true
+
+  # Shared/demo target. Resources deploy without the per-user prefix.
+  prod:
+    mode: production
+    variables:
+      # Pipelines in production mode must have an explicit owner rather than
+      # inheriting the deploying user; set run_as when a service principal is
+      # available. Left unset here so validation stays profile-independent.
+      pipeline_channel: CURRENT
