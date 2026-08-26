@@ -7,7 +7,6 @@ import time
 
 import mlflow
 import mlflow.pyfunc
-from databricks.feature_engineering import FeatureEngineeringClient, FeatureLookup
 from mlflow.models import ModelSignature
 from mlflow.tracking import MlflowClient
 from mlflow.types.schema import ColSpec, Schema
@@ -54,22 +53,8 @@ def main() -> None:
 
     mlflow.set_registry_uri("databricks-uc")
     mlflow.set_experiment(args.experiment_name)
-    feature_client = FeatureEngineeringClient(model_registry_uri="databricks-uc")
 
-    key_frame = spark.table(feature_table).select("exception_id")
-    training_set = feature_client.create_training_set(
-        df=key_frame,
-        feature_lookups=[
-            FeatureLookup(
-                table_name=feature_table,
-                lookup_key="exception_id",
-                feature_names=FEATURE_COLUMNS,
-            )
-        ],
-        label=None,
-        exclude_columns=["exception_id"],
-    )
-    training_frame = training_set.load_df().select(*FEATURE_COLUMNS).fillna(0.0)
+    training_frame = spark.table(feature_table).select(*FEATURE_COLUMNS).fillna(0.0)
     training_pandas = training_frame.toPandas()
     if len(training_pandas) < 20:
         raise RuntimeError("At least 20 exception rows are required to train IsolationForest")
@@ -109,15 +94,13 @@ def main() -> None:
         )
         mlflow.log_dict({"feature_columns": FEATURE_COLUMNS}, "feature_columns.json")
 
-        feature_client.log_model(
-            model=IsolationForestPyfuncModel(model),
+        mlflow.pyfunc.log_model(
             artifact_path="model",
-            flavor=mlflow.pyfunc,
-            training_set=training_set,
-            registered_model_name=model_name,
+            python_model=IsolationForestPyfuncModel(model),
             signature=signature,
             input_example=training_pandas.head(5),
             code_paths=[_modeling_mod.__file__],
+            registered_model_name=model_name,
         )
 
         registry_client = MlflowClient(registry_uri="databricks-uc")
