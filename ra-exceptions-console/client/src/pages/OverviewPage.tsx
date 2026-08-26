@@ -15,8 +15,10 @@ import {
 import { sql } from '@databricks/appkit-ui/js';
 import { useEffect, useState } from 'react';
 import { KpiTile } from '../components/KpiTile';
+import { analyticsApi } from '../lib/analytics';
 import { usdCompact, num, numCompact, checkLabel } from '../lib/format';
 import { casesApi, STATUSES, type Status } from '../lib/cases';
+import type { KpiSummary } from '../lib/types';
 
 const SOURCE = 'cdm_tmforum.revenue_assurance';
 
@@ -24,14 +26,19 @@ function CaseProgress() {
   const [stats, setStats] = useState<Record<Status, number> | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
-    casesApi.stats().then(setStats).catch(() => setFailed(true));
+    casesApi
+      .stats()
+      .then(setStats)
+      .catch(() => setFailed(true));
   }, []);
   const worked = stats ? Object.values(stats).reduce((a, b) => a + b, 0) : 0;
   return (
     <Card className="shadow-sm">
       <CardHeader className="pb-2">
         <CardTitle className="text-sm">Case progress</CardTitle>
-        <CardDescription>{worked} exception{worked === 1 ? '' : 's'} worked so far · live from Lakebase</CardDescription>
+        <CardDescription>
+          {worked} exception{worked === 1 ? '' : 's'} worked so far · live from Lakebase
+        </CardDescription>
       </CardHeader>
       <CardContent>
         {failed ? (
@@ -54,8 +61,23 @@ function CaseProgress() {
 }
 
 export function OverviewPage() {
-  const kpi = useAnalyticsQuery('kpi_summary', {});
-  const k = kpi.data?.[0];
+  const [kpi, setKpi] = useState<KpiSummary | null>(null);
+  const [kpiLoading, setKpiLoading] = useState(true);
+  const [kpiError, setKpiError] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    analyticsApi
+      .kpis(controller.signal)
+      .then(setKpi)
+      .catch((err) => {
+        if (err instanceof Error && err.name !== 'AbortError') setKpiError(true);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setKpiLoading(false);
+      });
+    return () => controller.abort();
+  }, []);
 
   const breakdown = useAnalyticsQuery('rootcause_breakdown', { severity: sql.string('ALL') });
   const chartData = (breakdown.data ?? []).map((r) => ({
@@ -70,31 +92,31 @@ export function OverviewPage() {
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <KpiTile
           label="Leakage at risk"
-          value={usdCompact(k?.total_at_risk)}
+          value={usdCompact(kpi?.total_at_risk)}
           sublabel="Across all reconciliation checks"
-          loading={kpi.loading}
-          error={!!kpi.error}
+          loading={kpiLoading}
+          error={kpiError}
         />
         <KpiTile
           label="Open exceptions"
-          value={numCompact(k?.open_exceptions)}
+          value={numCompact(kpi?.open_exceptions)}
           sublabel={`${SOURCE}`}
-          loading={kpi.loading}
-          error={!!kpi.error}
+          loading={kpiLoading}
+          error={kpiError}
         />
         <KpiTile
           label="High-severity"
-          value={numCompact(k?.high_severity)}
+          value={numCompact(kpi?.high_severity)}
           sublabel="Prioritized for triage"
-          loading={kpi.loading}
-          error={!!kpi.error}
+          loading={kpiLoading}
+          error={kpiError}
         />
         <KpiTile
           label="Accounts affected"
-          value={numCompact(k?.accounts_affected)}
+          value={numCompact(kpi?.accounts_affected)}
           sublabel="Distinct customers"
-          loading={kpi.loading}
-          error={!!kpi.error}
+          loading={kpiLoading}
+          error={kpiError}
         />
       </div>
 
@@ -104,9 +126,7 @@ export function OverviewPage() {
       <Card className="shadow-sm">
         <CardHeader className="pb-2">
           <CardTitle>Leakage by reconciliation check</CardTitle>
-          <CardDescription>
-            Where detected revenue leakage concentrates · {SOURCE}.gold_leakage_summary
-          </CardDescription>
+          <CardDescription>Where detected revenue leakage concentrates · {SOURCE}.gold_leakage_summary</CardDescription>
         </CardHeader>
         <CardContent>
           {breakdown.loading && <Skeleton className="h-72 w-full" />}

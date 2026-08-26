@@ -19,8 +19,9 @@ import {
 import { sql } from '@databricks/appkit-ui/js';
 import { useEffect, useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
-import { SeverityBadge } from '../components/badges';
+import { SeverityBadge, StatusChip } from '../components/badges';
 import { ExceptionDrawer } from '../components/ExceptionDrawer';
+import { analyticsApi } from '../lib/analytics';
 import { usd, numCompact, checkLabel, accountLabel } from '../lib/format';
 import type { ExceptionRow } from '../lib/types';
 
@@ -32,6 +33,10 @@ export function QueuePage() {
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [offset, setOffset] = useState(0);
+  const [rows, setRows] = useState<ExceptionRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const [selected, setSelected] = useState<ExceptionRow | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -39,6 +44,8 @@ export function QueuePage() {
   // Debounce the free-text search.
   useEffect(() => {
     const t = setTimeout(() => {
+      setLoading(true);
+      setError(null);
       setSearch(searchInput.trim());
       setOffset(0);
     }, 300);
@@ -49,26 +56,45 @@ export function QueuePage() {
 
   // Filter setters that also reset paging (avoids a setState-in-effect).
   const pickCheck = (v: string) => {
+    setLoading(true);
+    setError(null);
     setCheckType((prev) => (prev === v ? 'ALL' : v));
     setOffset(0);
   };
   const pickSeverity = (v: string) => {
+    setLoading(true);
+    setError(null);
     setSeverity(v);
     setOffset(0);
   };
 
-  const params = useMemo(
+  const filters = useMemo(
     () => ({
-      check_type: sql.string(checkType),
-      severity: sql.string(severity),
-      search: sql.string(search),
-      row_limit: sql.int(PAGE_SIZE),
-      row_offset: sql.int(offset),
+      check_type: checkType,
+      severity,
+      search,
+      row_limit: PAGE_SIZE,
+      row_offset: offset,
     }),
-    [checkType, severity, search, offset],
+    [checkType, severity, search, offset]
   );
-  const { data, loading, error } = useAnalyticsQuery('exceptions_list', params);
-  const rows = data ?? [];
+
+  useEffect(() => {
+    const controller = new AbortController();
+    analyticsApi
+      .exceptions(filters, controller.signal)
+      .then((nextRows) => {
+        setRows(nextRows);
+        setError(null);
+      })
+      .catch((err) => {
+        if (err instanceof Error && err.name !== 'AbortError') setError(err);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [filters, refreshKey]);
 
   function openRow(row: ExceptionRow) {
     setSelected(row);
@@ -135,7 +161,8 @@ export function QueuePage() {
       <Card className="overflow-hidden shadow-sm">
         {error ? (
           <div className="p-6 text-sm text-destructive">
-            Couldn’t load exceptions from <span className="font-mono">cdm_tmforum.revenue_assurance</span>. Retry the query.
+            Couldn’t load exceptions from <span className="font-mono">cdm_tmforum.revenue_assurance</span>. Retry the
+            query.
           </div>
         ) : loading ? (
           <div className="flex flex-col gap-2 p-4">
@@ -158,6 +185,8 @@ export function QueuePage() {
                 <TableHead>Account</TableHead>
                 <TableHead>Root cause</TableHead>
                 <TableHead>Severity</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Assignee</TableHead>
                 <TableHead className="text-right">$ at risk</TableHead>
               </TableRow>
             </TableHeader>
@@ -174,6 +203,12 @@ export function QueuePage() {
                   <TableCell className="text-muted-foreground">{checkLabel(row.check_type)}</TableCell>
                   <TableCell>
                     <SeverityBadge severity={row.severity} />
+                  </TableCell>
+                  <TableCell>
+                    <StatusChip status={row.status} />
+                  </TableCell>
+                  <TableCell className="max-w-40 truncate text-muted-foreground">
+                    {row.assignee?.split('@')[0] ?? 'Unassigned'}
                   </TableCell>
                   <TableCell className="text-right font-mono font-semibold tabular-nums text-destructive">
                     {usd(row.amount_at_risk)}
@@ -193,7 +228,11 @@ export function QueuePage() {
             variant="outline"
             size="sm"
             disabled={offset === 0 || loading}
-            onClick={() => setOffset((o) => Math.max(0, o - PAGE_SIZE))}
+            onClick={() => {
+              setLoading(true);
+              setError(null);
+              setOffset((o) => Math.max(0, o - PAGE_SIZE));
+            }}
           >
             Previous
           </Button>
@@ -201,14 +240,27 @@ export function QueuePage() {
             variant="outline"
             size="sm"
             disabled={loading || rows.length < PAGE_SIZE}
-            onClick={() => setOffset((o) => o + PAGE_SIZE)}
+            onClick={() => {
+              setLoading(true);
+              setError(null);
+              setOffset((o) => o + PAGE_SIZE);
+            }}
           >
             Next
           </Button>
         </div>
       </div>
 
-      <ExceptionDrawer exception={selected} open={drawerOpen} onOpenChange={setDrawerOpen} />
+      <ExceptionDrawer
+        exception={selected}
+        open={drawerOpen}
+        onOpenChange={setDrawerOpen}
+        onCaseChange={() => {
+          setLoading(true);
+          setError(null);
+          setRefreshKey((key) => key + 1);
+        }}
+      />
     </div>
   );
 }

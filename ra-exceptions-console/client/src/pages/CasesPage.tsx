@@ -29,6 +29,8 @@ function toExceptionRow(c: CaseRow): ExceptionRow {
     source_table: '',
     customer_id: 0,
     known_leakage_flag: false,
+    status: c.status,
+    assignee: c.assignee,
   };
 }
 
@@ -128,12 +130,7 @@ export function CasesPage() {
         )}
       </Card>
 
-      <ExceptionDrawer
-        exception={selected}
-        open={drawerOpen}
-        onOpenChange={setDrawerOpen}
-        onCaseChange={refresh}
-      />
+      <ExceptionDrawer exception={selected} open={drawerOpen} onOpenChange={setDrawerOpen} onCaseChange={refresh} />
     </div>
   );
 }
