@@ -1,0 +1,71 @@
+# Managed anomaly-detection lifecycle for the Revenue Assurance demo.
+# The job writes only to ${var.catalog}.${var.schema}; tmf_* is read-only input.
+
+resources:
+  jobs:
+    ra_anomaly_ml_pipeline:
+      name: ra_anomaly_ml_pipeline
+      description: >-
+        Builds exception features, trains and promotes a Unity Catalog
+        IsolationForest model, then publishes dashboard-ready anomaly scores.
+
+      schedule:
+        quartz_cron_expression: "0 30 5 * * ?"
+        timezone_id: UTC
+        pause_status: UNPAUSED
+
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+        - name: experiment_name
+          default: /Shared/revenue-assurance/anomaly-detection
+
+      environments:
+        - environment_key: ml_runtime
+          spec:
+            client: "1"
+            dependencies:
+              - mlflow>=2.22.0,<4
+              - databricks-feature-engineering>=0.16.0
+              - scikit-learn>=1.4.0
+              - pandas>=2.0.0
+              - numpy>=1.26.0
+
+      tasks:
+        - task_key: feature_build
+          environment_key: ml_runtime
+          spark_python_task:
+            python_file: ../mlops/feature_build.py
+            parameters:
+              - --catalog
+              - "{{job.parameters.catalog}}"
+              - --schema
+              - "{{job.parameters.schema}}"
+
+        - task_key: train
+          depends_on:
+            - task_key: feature_build
+          environment_key: ml_runtime
+          spark_python_task:
+            python_file: ../mlops/train.py
+            parameters:
+              - --catalog
+              - "{{job.parameters.catalog}}"
+              - --schema
+              - "{{job.parameters.schema}}"
+              - --experiment-name
+              - "{{job.parameters.experiment_name}}"
+
+        - task_key: score
+          depends_on:
+            - task_key: train
+          environment_key: ml_runtime
+          spark_python_task:
+            python_file: ../mlops/score.py
+            parameters:
+              - --catalog
+              - "{{job.parameters.catalog}}"
+              - --schema
+              - "{{job.parameters.schema}}"
