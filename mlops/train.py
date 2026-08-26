@@ -63,6 +63,7 @@ def main() -> None:
                 feature_names=FEATURE_COLUMNS,
             )
         ],
+        label=None,
         exclude_columns=["exception_id"],
     )
     training_frame = training_set.load_df().select(*FEATURE_COLUMNS).fillna(0.0)
