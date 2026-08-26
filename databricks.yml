@@ -38,7 +38,9 @@ variables:
 
   run_as_service_principal:
     description: >-
-      Application ID of the service principal that owns shared production runs.
+      Application ID (not display name) of the service principal that owns
+      shared production runs. The placeholder validates but must be overridden;
+      a real production deploy rejects the bogus application ID.
     default: REPLACE_WITH_RUN_AS_SERVICE_PRINCIPAL_APPLICATION_ID
 
 targets:
@@ -51,6 +53,9 @@ targets:
   # Shared/demo target. Resources deploy without the per-user prefix.
   prod:
     mode: production
+    # Keep shared production resources in one canonical, deployer-independent path.
+    workspace:
+      root_path: /Workspace/Shared/revenue-assurance/${bundle.name}/${bundle.target}
     # Override at deploy time with:
     # --var run_as_service_principal=<service-principal-application-id>
     run_as:
