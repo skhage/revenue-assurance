@@ -273,10 +273,48 @@ spark.conf.set("spark.sql.session.timeZone", "UTC")
 def make_schema(schema, comment):
     spark.sql(f"CREATE SCHEMA IF NOT EXISTS {CATALOG}.{schema} COMMENT '{comment}'")
 
+# --- helper: replace non-Delta relations before managed Delta writes ---------
+def ensure_delta_target(fqn):
+    """Drop an existing non-Delta relation so saveAsTable can create Delta."""
+    catalog, schema, table = fqn.split(".", 2)
+
+    def quote_identifier(identifier):
+        return f"`{identifier.replace('`', '``')}`"
+
+    def quote_literal(value):
+        return value.replace("'", "''")
+
+    quoted_fqn = ".".join(quote_identifier(part) for part in (catalog, schema, table))
+    relations = spark.sql(f"""
+        SELECT table_type, data_source_format
+        FROM {quote_identifier(catalog)}.information_schema.tables
+        WHERE table_schema = '{quote_literal(schema)}'
+          AND table_name = '{quote_literal(table)}'
+    """).collect()
+    if not relations:
+        return
+
+    table_type = (relations[0]["table_type"] or "").upper().replace(" ", "_")
+    data_source_format = (relations[0]["data_source_format"] or "").upper()
+    if table_type == "MATERIALIZED_VIEW":
+        drop_kind = "MATERIALIZED VIEW"
+    elif table_type == "VIEW":
+        drop_kind = "VIEW"
+    elif data_source_format and data_source_format != "DELTA":
+        drop_kind = "TABLE"
+    else:
+        print(f"  ↻ Preserving existing {table_type or 'TABLE'} {fqn} "
+              f"(format={data_source_format or 'UNKNOWN'})")
+        return
+
+    spark.sql(f"DROP {drop_kind} IF EXISTS {quoted_fqn}")
+    print(f"  ↻ Dropped existing non-Delta {table_type or 'TABLE'} {fqn}")
+
 # --- helper: write a Delta table then apply table + column comments ----------
 def write_table(df, schema, table, table_comment, col_comments, mode="overwrite"):
     """Persist df as a managed Delta table and attach UC documentation."""
     fqn = f"{CATALOG}.{schema}.{table}"
+    ensure_delta_target(fqn)
     (df.write.format("delta").mode(mode)
         .option("overwriteSchema", "true").saveAsTable(fqn))
     spark.sql(f"COMMENT ON TABLE {fqn} IS '{table_comment.replace(chr(39), chr(8217))}'")
@@ -382,6 +420,7 @@ anchor = (cust
 
 # Persist the anchor so all children read a stable, FK-valid parent (no .cache on serverless)
 make_schema(SCHEMA_MDM, "MDM hub: source-to-golden crosswalk and survivorship lineage feeding the tmf_* SSOT.")
+ensure_delta_target(f"{CATALOG}.{SCHEMA_MDM}._anchor_accounts")
 (anchor.write.format("delta").mode("overwrite").option("overwriteSchema","true")
     .saveAsTable(f"{CATALOG}.{SCHEMA_MDM}._anchor_accounts"))
 anchor = spark.table(f"{CATALOG}.{SCHEMA_MDM}._anchor_accounts")
@@ -639,13 +678,13 @@ write_table(approval.select("Id","Quote__c","Status","Approved_Discount_Pct__c",
      "Status":"Approval status.","ApprovalDate":"Date approved (null if not approved)."})
 
 # ---- PRM: partner accounts + program agreements ------------------------------
-partner = (spark.range(0, 60)
-    .withColumn("Id", sf_id("001", F.col("id")+F.lit(500000)))
-    .withColumn("Name", F.concat(F.lit("Partner Carrier "), F.col("id").cast("string")))
+partner = (spark.range(0, 60).withColumnRenamed("id", "partner_idx")
+    .withColumn("Id", sf_id("001", F.col("partner_idx")+F.lit(500000)))
+    .withColumn("Name", F.concat(F.lit("Partner Carrier "), F.col("partner_idx").cast("string")))
     .withColumn("IsPartner", F.lit(True))
     .withColumn("Partner_Type__c", F.element_at(F.array(F.lit("Wholesale Carrier"),F.lit("Reseller"),
-                    F.lit("Agent"),F.lit("Interconnect")),(F.col("id")%4+1)))
-    .withColumn("Rev_Share_Pct__c", F.round(15 + rand_of(F.col("id"))("p")*25,1)))
+                    F.lit("Agent"),F.lit("Interconnect")),(F.col("partner_idx")%4+1).cast("int")))
+    .withColumn("Rev_Share_Pct__c", F.round(15 + rand_of(F.col("partner_idx"))("p")*25,1)))
 write_table(partner.select("Id","Name","IsPartner","Partner_Type__c","Rev_Share_Pct__c"),
     SCHEMA_SFDC, "partner_account",
     "Salesforce PRM partner Account (IsPartner=true). Wholesale/reseller/interconnect partners; Rev_Share_Pct__c reconciled against tmf partner settlement.",
@@ -968,6 +1007,7 @@ if "make_schema" not in globals():
 if "write_table" not in globals():
     def write_table(df, schema, table, table_comment, col_comments, mode="overwrite"):
         fqn = f"{CATALOG}.{schema}.{table}"
+        ensure_delta_target(fqn)
         (df.write.format("delta").mode(mode)
             .option("overwriteSchema", "true").saveAsTable(fqn))
         spark.sql(f"COMMENT ON TABLE {fqn} IS '{table_comment.replace(chr(39), chr(8217))}'")

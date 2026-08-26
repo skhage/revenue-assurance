@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import IsolationForest
 
-from mlops.modeling import IsolationForestScoreModel, add_composite_scores
+from mlops.modeling import (
+    IsolationForestPyfuncModel,
+    IsolationForestScoreModel,
+    add_composite_scores,
+)
 
 
 def test_scoring_orientation() -> None:
@@ -20,6 +25,14 @@ def test_scoring_orientation() -> None:
         random_state=42,
     ).fit(features)
     scores = model.predict(features)
+    pyfunc_model = IsolationForestPyfuncModel(
+        IsolationForest(
+            n_estimators=100,
+            contamination=0.02,
+            random_state=42,
+        ).fit(features)
+    )
+    np.testing.assert_allclose(pyfunc_model.predict(None, features), scores)
     frame = add_composite_scores(
         pd.DataFrame(
             {
