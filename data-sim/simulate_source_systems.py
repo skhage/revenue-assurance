@@ -683,7 +683,7 @@ partner = (spark.range(0, 60)
     .withColumn("Name", F.concat(F.lit("Partner Carrier "), F.col("id").cast("string")))
     .withColumn("IsPartner", F.lit(True))
     .withColumn("Partner_Type__c", F.element_at(F.array(F.lit("Wholesale Carrier"),F.lit("Reseller"),
-                    F.lit("Agent"),F.lit("Interconnect")),(F.col("id")%4+1)))
+                    F.lit("Agent"),F.lit("Interconnect")),(F.col("id")%4+1).cast("int")))
     .withColumn("Rev_Share_Pct__c", F.round(15 + rand_of(F.col("id"))("p")*25,1)))
 write_table(partner.select("Id","Name","IsPartner","Partner_Type__c","Rev_Share_Pct__c"),
     SCHEMA_SFDC, "partner_account",
