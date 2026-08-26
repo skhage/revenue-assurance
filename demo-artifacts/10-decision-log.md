@@ -3,7 +3,7 @@
 **Demo:** Revenue Assurance Lakehouse for Lakelink Fiber (pitched to Lumen Technologies) · **Catalog:** `cdm_tmforum` · **App:** RA Exceptions Console · **Repo:** `revenue-assurance` · **Cloud:** FEVM (serverless, `demo` profile)
 
 > **Scrutiny summary**
-> - ✅ **2026-08-25:** Refinement recorded: ADR-013 clarified to single `cdm_tmforum.revenue_assurance` schema (not split ra_silver/ra_gold); 7 silver check MVs (contract-price, discount-auth, FX, AR-aging, rev-rec, doc-intel×2) feeding gold_leakage_summary; no materialized service_instance bridge; case state moved to Lakebase Postgres; app framework is Databricks AppKit (React/TS) instead of implied FastAPI; reconciliation SQL files under reconciliation/transformations/; see 2026-08-25 entry below.
+> - ✅ **2026-08-25:** Refinement recorded: ADR-013 clarified to single `cdm_tmforum.revenue_assurance` schema (not split ra_silver/ra_gold); 7 silver check MVs (contract-price, discount-auth, FX, AR-aging, rev-rec, doc-intel×2) feeding gold_leakage_summary; no materialized service_instance bridge; case state moved to Lakebase Postgres; app framework is Databricks AppKit (React/TS) instead of implied FastAPI; reconciliation SQL files under reconciliation/pipelines/ (+ reconciliation/warehouse/); see 2026-08-25 entry below.
 > - ❌ **Was:** 12 ADRs assuming synthetic bronze-layer generation (~2K customers, ~25K circuits) and a `lumen_ra` catalog
 > - ✅ **Now:** Added **ADR-000** (reuse `cdm_tmforum` vs. generate), removed synthetic-data generation ADR, reframed 10 core ADRs around data reuse. **ADR-008** now states real scale (~10K customers, ~100K circuits).
 > - ❌ **Was:** ADR-007 framed Azure as "flagship reference" per Rogers, asserting it as architectural fact
@@ -396,10 +396,42 @@ All 7 feed into `gold_leakage_summary`. The old "active-unbilled / usage-varianc
 
 **Why:** The refined set aligns with real RA use cases across contracts, billing, AR, and invoice validation. Document intelligence (via `ai_extract` on ironclad PDFs and AR invoice scans) adds a compelling AI/BI narrative. The unified register (`gold_leakage_summary`) makes it easy to prioritize and drill into any exception.
 
-**Reconciliation SQL location:** `reconciliation/transformations/silver_reconciliation.sql` (contracts, discounts, FX, AR), `silver_doc_intelligence.sql` (PDF extraction + matching), `gold_aggregation.sql` (union into gold_leakage_summary + scorecard + forecast).
+**Reconciliation SQL location:** `reconciliation/pipelines/silver_reconciliation.sql` (contracts, discounts, FX, AR), `silver_doc_intelligence.sql` (PDF extraction + matching), `gold_aggregation.sql` (union into gold_leakage_summary + scorecard); `reconciliation/warehouse/gold_revenue_forecast_anomalies.sql` (ai_forecast).
 
 **Validation gate:** `databricks apps validate` (typegen, lint, typecheck, build); verify app readiness with `databricks apps get <app_name>` / `databricks apps logs <app_name>`. Runbook gotcha: repo-root `.gitignore` has a `lib/` rule that may exclude AppKit's `client/src/lib/` from bundle sync — fix with `sync.include: [client/src/lib/**]` in the app's `databricks.yml`.
 
 **Teardown:** `databricks bundle destroy` removes `revenue_assurance` schema, *_source schemas, app, and jobs, but **not** `tmf_*` (read-only source data) or Lakebase project (separate lifecycle). Lakebase project teardown is manual or via a separate destroy script.
 
 **Rationale.** These four refinements reflect implementation reality: a single schema is easier to govern and explain; Lakebase Postgres is operationally cleaner for case state; AppKit is idiomatic to Databricks; and the 7-check set is more realistic and demo-compelling than the original 6. Together, they strengthen the end-to-end story from detection (7 checks) → unified register (gold_leakage_summary) → app workflow (case assignment & recovery in Lakebase) → governance (UC lineage + masking) → KPIs (gold scorecard & forecast on the dashboard).
+
+---
+
+## 2026-08-26 — ADR-014: Governed semantic layer (UC Business Semantics)
+
+**Status:** Accepted (design). See artifacts [`11-metric-views.md`](11-metric-views.md),
+[`12-domains-and-tags.md`](12-domains-and-tags.md), [`13-glossary.md`](13-glossary.md).
+
+**Decision.** Adopt **Unity Catalog Business Semantics** as the demo's governance/semantic layer,
+motivated by the core narrative that Sales, Marketing, Ops, and Finance use the **same terms for
+different things** and RA reconciles across them. Three building blocks:
+
+- **(a) Metric Views** — per-domain governed KPIs with `synonyms`/`display_name` so colloquial
+  terms route to the right measure (needs DBR 17.3+/YAML v1.1). **Design-only** for now — the
+  ~10 applicable views are specified conceptually against real `revenue_assurance` columns, not
+  yet authored as YAML.
+- **(b) Domains & Subdomains** — a `domain` **governed tag** (values Revenue Assurance, Finance,
+  Sales, Operations, Marketing, Shared, + `Parent/Child` subdomains) with a resource→domain matrix.
+  RA-layer silver checks are **dual-tagged** (source domain + `RevenueAssurance/Detection`) to show
+  RA as cross-cutting. Domains/Pages are authored in the Discover UI; governed tags via CLI/API.
+- **(c) Pages** — the authoritative business glossary (contested terms first) that Genie cites.
+
+**Why.** Metric views turn "revenue" from an argument into a named, owned, reusable definition;
+domains supply the ownership context that disambiguates; pages give one cited source of truth.
+Together they make the cross-functional-ambiguity thesis demonstrable inside governance rather than
+in slideware.
+
+**Constraint recorded.** **Recovery rate** (recovered ÷ detected leakage) cannot be a metric view
+yet: case state lives in **Lakebase Postgres** (`ra.cases.status`) and metric views read only
+UC/Delta. It requires a **Lakebase→Delta sync** (job) first. Likewise **ARPU** in the golden data
+is a *tier* (`customer.arpu_tier`), not a computed dollar — a deliberate disambiguation example, not
+a gap to "fix."

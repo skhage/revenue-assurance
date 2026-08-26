@@ -73,10 +73,16 @@ Per `demo-artifacts/05-repository-blueprint.md` and `06-deployment-contract.md`,
 - **RA Exceptions Console:** a Databricks **AppKit** app (React/TypeScript, deployed via
   `databricks apps deploy --profile <name>`). Reads analytics via SQL warehouse plugin, writes
   case state to Lakebase Postgres (`ra` schema, tables `ra.cases` / `ra.case_notes`).
-- **Reconciliation SQL:** `reconciliation/transformations/{silver_reconciliation.sql,
-  silver_doc_intelligence.sql, gold_aggregation.sql}`.
+- **Reconciliation SQL:** `reconciliation/pipelines/{silver_reconciliation.sql,
+  silver_doc_intelligence.sql, gold_aggregation.sql, dq_audit.sql}` (+ `reconciliation/warehouse/`
+  for the `ai_forecast` gold view).
 - **Data simulation:** `data-sim/simulate_source_systems.py` + `config.yaml` in workspace.
 - **Serving surfaces:** AI/BI dashboard (JSON), Genie space, and the AppKit app (all reading
   `revenue_assurance.gold_*`/`silver_*`).
+- **Semantic / governance layer (design):** artifacts 11–13 spec the **UC Business Semantics**
+  layer — **Metric Views** (per-domain KPIs + `synonyms`), **Domains** (a `domain` governed tag +
+  the resource→domain matrix), and **Pages** (the business glossary). The demo's premise is that
+  Sales/Marketing/Ops/Finance use the same terms differently and RA reconciles across them; these
+  are design docs, not yet-deployed workspace objects.
 
 For non-code changes, follow `10-decision-log.md` for decision rationale.

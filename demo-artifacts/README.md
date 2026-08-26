@@ -22,6 +22,9 @@ Companion analysis: [`../data-source-assessment.md`](../data-source-assessment.m
 | 08 | Test Plan & Acceptance Criteria | `08-test-plan.md` |
 | 09 | Demo Operations Runbook | `09-runbook.md` |
 | 10 | Decision Log | `10-decision-log.md` |
+| 11 | Metric Views & Semantic Layer | `11-metric-views.md` |
+| 12 | Domains & Governed Tags | `12-domains-and-tags.md` |
+| 13 | Glossary (UC Pages) | `13-glossary.md` |
 
 ---
 
@@ -150,6 +153,15 @@ Lakeflow Connect (managed ingestion), **Lakeflow Declarative Pipelines** (former
 Delta Lake, Unity Catalog (governance/lineage/masking), Databricks Workflows/Jobs
 (serverless), Databricks SQL + **AI/BI dashboards & Genie**, MLflow, the `ai_forecast` SQL
 function, and **Databricks Apps**. Flag anything that has been renamed or is not GA.
+
+### 9. Semantic / governance layer (artifacts 11–13)
+The demo's thesis is that Sales/Marketing/Ops/Finance use the **same words for different things**,
+and RA reconciles across them. This is governed with **Unity Catalog Business Semantics**:
+**Metric Views** (per-domain KPIs + `synonyms`), **Domains & Subdomains** (each backed by a
+`domain` **governed tag**; assets tagged in), and **Pages** (the business glossary Genie cites).
+See [`11-metric-views.md`](11-metric-views.md), [`12-domains-and-tags.md`](12-domains-and-tags.md),
+and [`13-glossary.md`](13-glossary.md). Recovery-rate as a governed metric needs a Lakebase→Delta
+sync first (case state lives in Lakebase, which metric views can't read).
 
 ---
 
