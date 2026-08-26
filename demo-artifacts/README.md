@@ -65,10 +65,23 @@ artifacts and are the single source of truth for the rewrite.
 | **Native RA layer** | `tmf_enterprise.revenue_assurance_violation` (10K, **12 seeded violation types**, `estimated_revenue_impact_amount`/`recovery_amount`), `revenue_assurance_control` (1K), `ra_trouble_ticket` (10K, case entity w/ `service_id`, ServiceNow #), `revenue_assurance_assessment` | 1K–10K |
 | Pre-built KPIs | `_metrics.*` — 71 metric views incl. `enterprise_revenue_assurance_violation/control/assessment` | 71 views |
 
-- **`tmf_*` schemas are READ-ONLY** (per the catalog's own comment). Build the RA layer in
-  **new schemas** in `cdm_tmforum` — recommended `ra_silver` (conformed + `service_instance`
-  bridge) and `ra_gold` (reconciliation exceptions, KPIs, forecast, cases) — reading from
-  `tmf_*` and the `*_source` schemas. **Do not** use the invented `lumen_ra` catalog.
+- **`tmf_*` schemas are READ-ONLY** (per the catalog's own comment). The RA layer is built as a
+  **single new schema `cdm_tmforum.revenue_assurance`** (owned by the demo user), reading from
+  `tmf_*` and the `*_source` schemas. It holds **silver** materialized views (one per
+  reconciliation check) and **gold** materialized views (serving surfaces):
+  - **silver:** `silver_contract_price_reconciliation`, `silver_discount_authorization_check`,
+    `silver_fx_rate_validation`, `silver_ar_aging_analysis`, `silver_revenue_recognition_check`,
+    `silver_doc_intelligence_contracts`, `silver_doc_intelligence_invoices`.
+  - **gold:** `gold_leakage_summary` (unified exception register — the queue/KPI source),
+    `gold_reconciliation_scorecard` (per-customer health score + risk tier),
+    `gold_anomaly_scores` (ML), `gold_revenue_forecast_anomalies` (`ai_forecast`).
+- ❌ Earlier drafts proposed a two-schema `ra_silver`/`ra_gold` split with invented
+  `reconciliation_exceptions` / `exception_case` / `leakage_kpis` / `revenue_forecast` tables and a
+  materialized `service_instance` identity bridge (and, older still, a `lumen_ra` catalog). The real
+  build uses the **single `revenue_assurance` schema** and the table names above; checks join the
+  `*_source` systems to `tmf_*` directly rather than through a materialized bridge.
+  **Case-management state is not a Delta table** — it lives in **Lakebase Postgres** (schema `ra`:
+  `ra.cases`, `ra.case_notes`), owned by the RA Exceptions Console app (see §4 and artifact 07).
 
 ### 3. Source systems are simulated separately (already specced)
 A generator notebook (`simulate_source_systems`) lands raw upstream systems, keyed to the
@@ -78,19 +91,30 @@ real golden customers, in these schemas — use these real provider names, not i
 `refinitiv_fx_source` (`GL_DAILY_RATES`), `ironclad_clm_source` (contract PDFs),
 `mdm_source` (`customer_crosswalk`).
 
-### 4. The 6 reconciliation checks map to real data + native violations
-Each deterministic check has supporting columns **and** a pre-seeded `revenue_assurance_violation`
-type. `gold.reconciliation_exceptions` ≈ `tmf_enterprise.revenue_assurance_violation`;
-`gold.exception_case` ≈ `tmf_enterprise.ra_trouble_ticket`.
+### 4. The reconciliation checks map to real source data → `gold_leakage_summary`
+Each check is a **silver materialized view** over the simulated `*_source` systems (joined to the
+`tmf_*` golden data). Their flagged rows are unioned into **`gold_leakage_summary`** — the unified
+exception register that backs the queue and KPIs (~48K rows, ~$601M at risk; columns `check_type`,
+`severity`, `amount_at_risk`, `account_name`, `reference_id`, `source_table`, `detection_method`,
+`known_leakage_flag`). Per-customer health rolls up into `gold_reconciliation_scorecard`.
 
-| Check | Real evidence | Native violation_type |
+| Silver check (materialized view) | Real evidence | `check_type` in `gold_leakage_summary` |
 |---|---|---|
-| Active-circuit-unbilled | `logical_resource.lifecycle_status='active'` w/ no `bill` via bridge | `provisioning_discrepancy` / `billing_leakage` |
-| Contract-price mismatch | `commitment.amount` vs `actual_amount`/`variance_amount`; source: `salesforce_source.contract_line_item.UnitPrice` | `tariff_mismatch` / `rating_error` |
-| Expired/unauthorised discount | `discount_prod_offer_price_alteration`; source: CPQ `SBQQ__` + `discount_approval__c` | `revenue_recognition_error` / `policy_violation` |
-| Usage–billing variance | `resource_usage`/`service_usage` vs `bill.usage_charges_amount`; `mediation_status` | `usage_reconciliation_gap` / `mediation_failure` |
-| Billing-start-date lag | `order_item.billing_start_date` > `actual_completion_date` (~50% of rows) | `provisioning_discrepancy` |
-| Partner-settlement mismatch | `rev_share_reconciliation.variance_amount`, status `in_dispute`/`open` | `partner_settlement_discrepancy` |
+| `silver_contract_price_reconciliation` | `salesforce_source.contract_line_item.UnitPrice` vs `tmf_customer.bill` | `contract_price_mismatch` |
+| `silver_discount_authorization_check` | `salesforce_source.sbqq__quoteline__c` vs `sbqq__quote__c.discount_approval__c` | `unauthorized_discount`, `expired_quote_active` |
+| `silver_fx_rate_validation` | `oracle_erp_source.ra_customer_trx_all` vs Refinitiv mid-market rates (>1% dev) | (FX deviation; not unioned into the register) |
+| `silver_ar_aging_analysis` | `oracle_erp_source.ar_payment_schedules_all` (DSO, 90+ days overdue) | `ar_collection_risk` |
+| `silver_revenue_recognition_check` | ASC-606 `oracle_erp_source.revenue_recognition_schedule` vs `gl_je_lines` | `rev_rec_timing_mismatch` |
+| `silver_doc_intelligence_contracts` | `ai_parse_document` + `ai_extract` on `ironclad_clm_source` contract PDFs vs system | `doc_contract_mismatch` |
+| `silver_doc_intelligence_invoices` | `ai_parse_document` + `ai_extract` on invoice PDFs vs system | `doc_invoice_mismatch` |
+
+- ❌ Earlier drafts listed a *different* six checks (active-circuit-unbilled, usage–billing variance,
+  billing-start-lag, partner-settlement) and equated `gold.reconciliation_exceptions` ≈
+  `revenue_assurance_violation` / `gold.exception_case` ≈ `ra_trouble_ticket`. The built model uses
+  the **seven silver checks above → `gold_leakage_summary`**, leaning on document-intelligence (AI)
+  plus AR-aging, FX, and rev-rec timing rather than the network-provisioning checks. The native
+  `tmf_enterprise.revenue_assurance_violation` / `ra_trouble_ticket` tables remain available as
+  context, but the app's **case state lives in Lakebase** (schema `ra`), not a Delta `exception_case`.
 
 ### 5. Numbers — use real, not invented
 - ❌ Original: "~2,000 customers, ~25,000 circuits, ~2.25M usage rows, ~910 exceptions,
@@ -99,14 +123,20 @@ type. `gold.reconciliation_exceptions` ≈ `tmf_enterprise.revenue_assurance_vio
   ~100K product orders, **~10,000 RA violations** across 12 types totalling **~$540M
   estimated impact** (tunable by filtering type/date). Keep Lumen's **business case**
   ($250M–$312M / 2–2.5%) as the *pitch* framing, distinct from the demo dataset's seeded figure.
+- The **derived** `revenue_assurance.gold_leakage_summary` register (what the app and dashboard
+  actually query) totals **~48K exceptions / ~$601M at risk** across 7 `check_type`s — AR-collection
+  risk dominates, followed by rev-rec timing and unauthorized discounts.
 
 ### 6. Cloud / deployment
 - Deploy to the actual **`demo-workspace`** workspace via the `demo` profile. ❌ Do **not**
   assert "Azure-first" as fact — the original docs assumed Azure "mirroring Rogers." Keep the
   Rogers Communications lakehouse story as *narrative reference only*; state cloud as
   "the demo FEVM workspace (confirm cloud at deploy time)."
-- IaC via **Databricks Asset Bundles** in the `revenue-assurance` repo is still correct;
-  teardown drops only the **new** `ra_*`/`*_source` schemas + app + jobs, never `tmf_*`.
+- IaC via **Databricks Asset Bundles** in the `revenue-assurance` repo is still correct; the
+  **RA Exceptions Console** app is built on **AppKit** (React/TypeScript) — reads via a SQL warehouse
+  over `revenue_assurance.gold_*`, writes case state to **Lakebase**. Teardown drops only the **new**
+  `revenue_assurance`/`*_source` schemas, the Lakebase project (`ra` schema), the app, and jobs —
+  never `tmf_*`.
 
 ### 7. Data realism caveat (affects ML/forecast scenes)
 The `cdm_tmforum` data is statistically **flat/uniform** (round counts, ~50/50 splits) —

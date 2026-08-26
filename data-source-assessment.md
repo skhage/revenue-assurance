@@ -36,8 +36,8 @@ Specification is now largely redundant.
 
 > **Ownership note:** most `tmf_*` schemas are owned by owner@example.com. The
 > `ccd_intelligence` schema comment states *"Source tmf_* schemas are read-only."* Build
-> our layer in a **separate `lumen_ra` catalog** that reads from `cdm_tmforum.tmf_*`; do
-> not write back.
+> our layer in **`cdm_tmforum.revenue_assurance`** schema that reads from `cdm_tmforum.tmf_*`;
+> do not write back to `tmf_*`.
 
 ---
 
@@ -58,27 +58,28 @@ existing data — not simulation) · 💉 **Simulate/Inject** (net-new data requ
 | **AR aging / collections** | `tmf_customer.payment`, `dunning_case`, `dunning_write_off`, `billing_account_balance`, `billing_dispute` | 1K–100K | ✅ Use |
 | **Partner / interconnect settlement** | `tmf_businesspartner.rev_share_reconciliation` (`operator_billed_amount` vs `partner_reported_amount`, `variance_amount`, `status`), `party_settlement`, `rev_share_recon_discrepancy` | 1K–10K | ✅ Use |
 | **Customer / account hierarchy (MDM)** | `tmf_customer.customer`, `customer_billing_account`; `tmf_enterprise.billing_account` | 10K | ✅ Use |
-| **Canonical `service_instance` bridge** ("the hard problem") | Native FK chain: `logical_resource → resource_facing_service → customer_facing_service → customer / product / billing_account / service / bill` | — | 🔧 Build (materialize the join — keys exist, no simulation) |
-| **`reconciliation_exceptions` (leakage)** | `tmf_enterprise.revenue_assurance_violation` — 12 seeded `violation_type`s, `estimated`/`actual_revenue_impact_amount`, `recovery_amount`, `write_off_amount`, `remediation_status` | 10K | ✅ Use + 🔧 build live detection |
-| **`exception_case` (case management)** | `tmf_enterprise.ra_trouble_ticket` (`service_id`, `estimated_revenue_impact_amount`, `actual_revenue_recovery_amount`, `investigation_status`, `related_service_now_incident_number`) | 10K | ✅ Use |
-| **`leakage_kpis`** | `_metrics.*` — incl. `enterprise_revenue_assurance_violation` / `_control` / `_assessment`, `customer_customer_billing_revenue`, `businesspartner_rev_share_reconciliation` | 71 views | ✅ Use |
+| **Identity-resolution joins** ("the hard problem") | Native FK chain: `logical_resource → resource_facing_service → customer_facing_service → customer / product / billing_account / service / bill` | — | 🔧 Build (use direct joins in silver/gold checks — keys exist, no simulation) |
+| **`gold_leakage_summary` (unified exception register)** | Derives from 7 silver checks + `tmf_enterprise.revenue_assurance_violation` (12 seeded `violation_type`s, ~10K rows, ~$540M impact). Aggregates to ~48K exceptions / ~$601M at risk across check types. | ~48K | ✅ Use + 🔧 build live detection |
+| **Case management** | `tmf_enterprise.ra_trouble_ticket` (read via gold views). Case state now stored in **Lakebase Postgres** (`ra` schema, tables `ra.cases` / `ra.case_notes`), not Delta. | — | ✅ Use + 🔧 build Lakebase tables |
+| **`gold_reconciliation_scorecard` + `gold_anomaly_scores`** | Aggregate KPIs: per-customer composite_health_score + risk_tier (GREEN/AMBER/RED), ML anomaly detection. Supplement with `_metrics.*` (~71 views). | — | 🔧 Build over gold/silver |
 | **RA control framework** | `tmf_enterprise.revenue_assurance_control` (detective / preventive / corrective) | 1K | ✅ Use |
 
 ---
 
-## The 6 reconciliation checks — all supported
+## The 7 silver reconciliation checks (materialized views in `revenue_assurance`)
 
-Each check has **both** supporting transactional data **and** a matching pre-seeded
-outcome in `revenue_assurance_violation`.
+Each check is a materialized view deriving from real data and mapping to pre-seeded
+exceptions in `tmf_enterprise.revenue_assurance_violation`.
 
-| Check | Evidence in data | Pre-seeded violation type |
-|---|---|---|
-| 1. Active-circuit-unbilled | `logical_resource.lifecycle_status='active'` (~11K) joined through RFS→CFS→`bill` | `provisioning_discrepancy` / `billing_leakage` |
-| 2. Contract-price mismatch | `commitment.amount` vs `actual_amount`/`variance_amount`; `offering_price.price_amount` | `tariff_mismatch` / `rating_error` |
-| 3. Expired/unauthorized discount | `discount_prod_offer_price_alteration` validity + `offering_price.approval_status`; `applied_customer_billing_discount` | `revenue_recognition_error` / `policy_violation` |
-| 4. Usage–billing variance | `resource_usage` / `service_usage` vs `bill.usage_charges_amount`; `mediation_status` | `usage_reconciliation_gap` / `mediation_failure` |
-| 5. Billing-start-date lag | `order_item`: ~50% have `billing_start_date > actual_completion_date` | `provisioning_discrepancy` |
-| 6. Partner-settlement mismatch | `rev_share_reconciliation.variance_amount` with `in_dispute`/`open` status | `partner_settlement_discrepancy` |
+| Silver View | check_type | Evidence in data | Native violation types |
+|---|---|---|---|
+| `silver_contract_price_reconciliation` | `contract_price_mismatch` | `commitment.actual_amount <> commitment.amount`; `offering_price.price_amount` vs `commitment` | `tariff_mismatch` / `rating_error` |
+| `silver_discount_authorization_check` | `unauthorized_discount` + `expired_quote_active` | `discount_prod_offer_price_alteration` validity + `offering_price.approval_status`; `applied_customer_billing_discount` | `revenue_recognition_error` / `policy_violation` |
+| `silver_fx_rate_validation` | `FX>1% deviation` | `refinitiv_fx_source` GL rates vs applied GL daily rates; >1% variance | `rating_error` |
+| `silver_ar_aging_analysis` | `ar_collection_risk` | `bill.bill_date` vs current; DSO bucketing from `tmf_customer.payment` age | Collection-risk violations |
+| `silver_revenue_recognition_check` | `rev_rec_timing_mismatch` | `oracle_erp_source.GL_JE_LINES` period vs `tmf_customer.bill.invoice_date` | `revenue_recognition_error` |
+| `silver_doc_intelligence_contracts` | `doc_contract_mismatch` | `ai_parse_document` + `ai_extract` on `ironclad_clm_source` contract PDFs vs catalog | `policy_violation` |
+| `silver_doc_intelligence_invoices` | `doc_invoice_mismatch` | `ai_parse_document` + `ai_extract` on `ironclad_clm_source` invoice PDFs vs recorded billing | `billing_leakage` / `revenue_recognition_error` |
 
 ### Seeded leakage taxonomy (`revenue_assurance_violation`, 10K rows)
 
@@ -122,8 +123,8 @@ story, and tunable by filtering violation types / date range.
 2. **Referential integrity.** Join keys are present across the bridge chain; spot-check
    that `logical_resource → RFS → CFS → bill` resolves end-to-end before committing the
    build plan.
-3. **Read-only source.** Build gold/silver in a separate `lumen_ra` catalog; treat
-   `cdm_tmforum.tmf_*` as read-only inputs.
+3. **Read-only source.** Build silver/gold materialized views in `cdm_tmforum.revenue_assurance`;
+   treat `cdm_tmforum.tmf_*` as read-only inputs.
 4. **Artifact impact.** The **Synthetic-Data Specification** is now largely redundant
    (reduces to anomaly injection + optional ingestion source). The **Domain Model & Data
    Contract** should be repointed at real `cdm_tmforum` tables instead of

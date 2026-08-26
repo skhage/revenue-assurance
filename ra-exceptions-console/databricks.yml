@@ -1,0 +1,57 @@
+bundle:
+  name: ra-exceptions-console
+
+# The repo-root Python .gitignore has a `lib/` rule that otherwise excludes
+# client/src/lib/ from the bundle sync (breaking the app build). Force-include it.
+sync:
+  include:
+    - client/src/lib/**
+
+variables:
+  sql_warehouse_id:
+    description: SQL Warehouse ID
+  postgres_branch:
+    description: Full Lakebase Postgres branch resource name. Obtain by running `databricks postgres list-branches {project-name}`, select the desired item from the output array and use its .name value. Requires the project resource name.
+  postgres_database:
+    description: Full Lakebase Postgres database resource name. Obtain by running `databricks postgres list-databases {branch-name}`, select the desired item from the output array and use its .name value. Requires the branch resource name.
+  postgres_project:
+    description: Full Lakebase Postgres project resource name. Obtain by running `databricks postgres list-projects`, select the desired item from the output array and use its .name value.
+
+resources:
+  apps:
+    app:
+      name: "ra-exceptions-console"
+      description: "Revenue Assurance Exceptions Console — leakage detection, triage, and case management over cdm_tmforum"
+      source_code_path: ./
+
+      # Start the app automatically on deploy.
+      lifecycle:
+        started: true
+      # Uncomment to enable on behalf of user API scopes. Available scopes: sql, dashboards.genie, files.files, serving.serving-endpoints
+      # user_api_scopes:
+      #   - sql
+
+      # The resources which this app has access to.
+      resources:
+        - name: sql-warehouse
+          sql_warehouse:
+            id: ${var.sql_warehouse_id}
+            permission: CAN_USE
+        - name: postgres
+          postgres:
+            branch: ${var.postgres_branch}
+            database: ${var.postgres_database}
+            permission: CAN_CONNECT_AND_CREATE
+
+targets:
+  default:
+    default: true
+    # Workspace host resolves from the CLI profile — always deploy with
+    # `--profile <name>` (e.g. `databricks apps deploy --profile <name>`).
+    # Do not hardcode the workspace hostname in this public repo.
+
+    variables:
+      sql_warehouse_id: 7b65956f30d66feb
+      postgres_branch: projects/ra-console-lakebase/branches/production
+      postgres_database: projects/ra-console-lakebase/branches/production/databases/databricks-postgres
+      postgres_project: projects/ra-console-lakebase

@@ -4,12 +4,14 @@
 > - ❌ **WRONG:** Entire premise was "generate synthetic bronze data from scratch with Faker." **FIXED:** The core demo data (`cdm_tmforum.tmf_*`) is already fully populated and production-scale (10K customers, 100K circuits, 2018–2025 billing). This spec now focuses on two distinct tasks: (1) **source system simulation** (keyed to golden customers, real provider schemas), and (2) **anomaly injection for ML scenes** (since base data is statistically flat per README caveat).
 > - ❌ **WRONG:** Invented schema names and provider names. **FIXED:** Reference real Salesforce schemas (Account, Contract, `SBQQ__Quote__c` CPQ), Oracle EBS/Fusion (`RA_CUSTOMER_TRX_ALL`, `AR_PAYMENT_SCHEDULES_ALL`, `GL_JE_LINES`), Refinitiv (`GL_DAILY_RATES`), and real partner schemas already specced in the demo.
 > - ❌ **WRONG:** No mention of pre-seeded ~$540M leakage with 12 native violation types. **FIXED:** The demo's baseline exceptions already exist in `tmf_enterprise.revenue_assurance_violation`; this spec describes how to inject *targeted sharp anomalies* for compelling ML/forecast scenes.
+> - ❌ **WRONG (superseded):** Anomalies injected into `ra_silver.fact_usage`/`fact_billing`/`dim_contract`; jobs `inject_anomalies`/`reconciliation_job`/`build_gold_layer`; teardown of `ra_silver`/`ra_gold`. **FIXED (as built):** there is no `ra_silver`/`ra_gold` split and no `dim_*`/`fact_*` tables. Anomalies are injected into the **`*_source` systems** (and the `oracle_erp_source.gl_je_lines` account `4000` GL revenue series that feeds the forecast) by `data-sim/simulate_source_systems.py` (+ `data-sim/config.yaml`); the RA layer is a single `cdm_tmforum.revenue_assurance` schema of silver-check + gold materialized views (see artifact 01-03).
 > - ✅ **KEPT:** Core concepts of determinism (seed-driven), controlled failure injection, and reset/regenerate capability — now applied to source simulation + anomaly augmentation only.
+> - **Source system & anomaly injection correction (build-verified):** Clarified real Salesforce schema names (Account, Contract, ContractLineItem, SBQQ objects with `discount_approval__c`); added Oracle EBS/Fusion tables (GL_BUDGETS, REVENUE_RECOGNITION_SCHEDULE, AR_PAYMENT_SCHEDULES_ALL with DAYS_OVERDUE, GL_JE_HEADERS); expanded Ironclad CLM to include both contract and invoice PDFs for document-intelligence checks. Anomalies are injected deterministically into `*_source` schemas only; the pipeline then feeds silver checks in `cdm_tmforum.revenue_assurance`, which compose into `gold_leakage_summary` (~48K / ~$601M register). All operations preserve read-only `tmf_*` base data.
 
 **Demo:** Revenue Assurance Lakehouse for Lakelink Fiber (Lumen pitch audience)  
-**Data strategy:** Operate on pre-populated `cdm_tmforum.tmf_*` (TM Forum SID) + simulate upstream source systems + inject ML-compelling anomalies.  
+**Data strategy:** Operate on pre-populated `cdm_tmforum.tmf_*` (TM Forum SID, read-only) + simulate upstream source systems in `*_source` schemas + inject ML-compelling anomalies into sources.  
 **Workspace:** demo-workspace (`demo` CLI profile)  
-**Purpose:** Specify how raw upstream systems are simulated (Salesforce, Oracle ERP, FX feeds, CLM docs, MDM) and how statistical anomalies are seeded so the ML/AI forecast scenes are realistic and compelling.
+**Purpose:** Specify how raw upstream systems are simulated (Salesforce, Oracle ERP, FX feeds, CLM docs, MDM) keyed to golden customers, and how statistical anomalies are seeded into those sources so the ML/AI forecast scenes are realistic and compelling.
 
 ---
 
@@ -39,10 +41,11 @@ Each source system is simulated as a snapshot in its own schema, keyed to golden
 ### `salesforce_source` — CRM data (Account, Contract, CPQ)
 
 **Objects simulated:**
-- `Account` — CRM account records
-- `Contract` — Standard Salesforce contract (not SBQQ__Quote__c)
-- `SBQQ__Quote__c` — Salesforce CPQ quote object (custom)
-- `SBQQ__QuoteLine__c` — Quote line items
+- `Account` — CRM account records (linked to `tmf_customer.customer`)
+- `Contract` — Standard Salesforce contract (not a custom object; linked to `tmf_customer.commitment`)
+- `ContractLineItem` — Contract line items with pricing (note: not the same as SBQQ line items)
+- `SBQQ__Quote__c` — Salesforce CPQ quote object (custom; linked to `tmf_customer.sales_quote`)
+- `SBQQ__QuoteLine__c` — Quote line items with unit pricing and discount approval flags
 
 **Columns (representative):**
 
@@ -67,6 +70,13 @@ Each source system is simulated as a snapshot in its own schema, keyed to golden
 | SBQQ__QuoteLine__c | SBQQ__Quantity__c | DECIMAL | Quantity |
 | SBQQ__QuoteLine__c | SBQQ__UnitPrice__c | DECIMAL | Unit price |
 | SBQQ__QuoteLine__c | SBQQ__Discount__c | DECIMAL | Discount % or amount |
+| SBQQ__QuoteLine__c | discount_approval__c | STRING | Approval status (`Approved`, `Pending`, `Denied`) |
+| ContractLineItem | Id (PK) | STRING | Contract line ID |
+| ContractLineItem | ContractId (FK) | STRING | Parent contract |
+| ContractLineItem | UnitPrice | DECIMAL | Line item unit price |
+| ContractLineItem | Quantity | DECIMAL | Quantity |
+| ContractLineItem | Discount | DECIMAL | Discount applied |
+| Account | TMF_Customer_Id__c | STRING | Link to `tmf_customer.customer_id` (for reconciliation) |
 
 **Data generation:**
 - Snapshot of golden customers from `tmf_customer.customer`, mapped to Account records
@@ -103,19 +113,35 @@ Each source system is simulated as a snapshot in its own schema, keyed to golden
 | AR_PAYMENT_SCHEDULES_ALL | CUSTOMER_TRX_ID (FK) | NUMBER | Invoice being scheduled |
 | AR_PAYMENT_SCHEDULES_ALL | DUE_DATE | DATE | Payment due date |
 | AR_PAYMENT_SCHEDULES_ALL | ORIGINAL_DUE_AMOUNT | NUMBER | Amount due |
+| AR_PAYMENT_SCHEDULES_ALL | DAYS_OVERDUE | NUMBER | Days past due (for AR aging check) |
 | GL_JE_LINES | JE_LINE_NUM (PK) | NUMBER | Journal entry line |
 | GL_JE_LINES | JOURNAL_ENTRY_ID (FK) | NUMBER | Parent journal entry |
-| GL_JE_LINES | ACCOUNT_CODE | VARCHAR2 | GL account code |
+| GL_JE_LINES | ACCOUNT_CODE | VARCHAR2 | GL account code (e.g., `4000` for revenue) |
+| GL_JE_LINES | JE_DATE | DATE | Journal entry date |
 | GL_JE_LINES | ENTERED_DR | NUMBER | Debit amount entered |
 | GL_JE_LINES | ENTERED_CR | NUMBER | Credit amount entered |
 | GL_JE_LINES | ACCOUNTED_DR | NUMBER | Debit in functional currency |
 | GL_JE_LINES | ACCOUNTED_CR | NUMBER | Credit in functional currency |
+| GL_JE_HEADERS | JOURNAL_ENTRY_ID (PK) | NUMBER | Journal entry header ID |
+| GL_JE_HEADERS | JE_DATE | DATE | Entry date |
+| GL_JE_HEADERS | STATUS | VARCHAR2 | Posted/Draft status |
+| GL_BUDGETS | BUDGET_ID (PK) | NUMBER | Budget record ID |
+| GL_BUDGETS | ACCOUNT_CODE | VARCHAR2 | GL account code (e.g., `4000`) |
+| GL_BUDGETS | BUDGET_MONTH | DATE | Month for budget |
+| GL_BUDGETS | BUDGET_AMOUNT | NUMBER | Budgeted revenue amount |
+| REVENUE_RECOGNITION_SCHEDULE | SCHEDULE_ID (PK) | NUMBER | Recognition schedule ID |
+| REVENUE_RECOGNITION_SCHEDULE | CUSTOMER_TRX_ID (FK) | NUMBER | Related invoice |
+| REVENUE_RECOGNITION_SCHEDULE | RECOGNITION_DATE | DATE | Scheduled recognition date |
+| REVENUE_RECOGNITION_SCHEDULE | REVENUE_AMOUNT | NUMBER | Amount to be recognized |
 
 **Data generation:**
 - Invoice records mapped from `tmf_customer.bill` (header) + `applied_customer_billing_*` (lines)
 - Payment terms from customer master + standard AR terms
-- GL entries reverse-mapped from revenue + tax amounts
+- GL entries reverse-mapped from revenue + tax amounts (account code `4000` for revenue)
+- GL budgets sampled from historical budget table; GL headers house JE metadata
+- Revenue recognition schedules reverse-mapped from `tmf_customer.bill` line revenue amounts
 - Deterministic: same seed ⇒ same CUSTOMER_TRX_ID ranges, GL account mappings
+- Anomalies: AR invoice aging artificially pushed past 90 days (ar-collection-risk); GL revenue step changes injected into account `4000` on specific months (forecast anomaly seed)
 
 ### `refinitiv_fx_source` — Foreign exchange rates
 
@@ -139,14 +165,15 @@ Each source system is simulated as a snapshot in its own schema, keyed to golden
 
 ### `ironclad_clm_source` — Contract lifecycle management (document store)
 
-**Simulated as unstructured:**
-- PDF documents (contract terms) stored in `/Volumes/lakelink_fiber_clm/contracts/<contract_id>.pdf`
-- Markdown summaries in `/Volumes/lakelink_fiber_clm/summaries/<contract_id>.md`
+**Simulated as unstructured + metadata:**
+- Contract PDFs stored in `/Volumes/lakelink_fiber_clm/contracts/<contract_id>.pdf`
+- Invoice PDFs stored in `/Volumes/lakelink_fiber_clm/invoices/<invoice_id>.pdf`
 
-**Metadata table simulated:**
+**Metadata tables simulated:**
 - `ironclad_contracts` — Contract registry
+- `ironclad_invoices` — Invoice document registry
 
-**Columns:**
+**Columns (contracts):**
 
 | Column | Type | Description |
 | :---- | :---- | :---- |
@@ -154,13 +181,25 @@ Each source system is simulated as a snapshot in its own schema, keyed to golden
 | document_location | STRING | `/Volumes/.../contract_id.pdf` |
 | effective_date | DATE | Execution date |
 | expiration_date | DATE | Contract end |
-| terms_hash | STRING | Content hash (for change detection) |
-| renewal_terms | STRING | Renewal clause (extracted or summary) |
+| service_term_value | DECIMAL | Service term amount extracted from PDF (for reconciliation) |
+| renewal_terms | STRING | Renewal clause (extracted via `ai_extract`) |
+
+**Columns (invoices):**
+
+| Column | Type | Description |
+| :---- | :---- | :---- |
+| invoice_id (PK) | STRING | Invoice identifier |
+| document_location | STRING | `/Volumes/.../invoice_id.pdf` |
+| customer_id (FK) | STRING | Bill-to customer |
+| invoice_amount | DECIMAL | Invoice total (from PDF extraction) |
+| invoice_date | DATE | Invoice date |
+| extracted_line_items | ARRAY | Line-item structure extracted via `ai_parse_document` |
 
 **Data generation:**
-- Branded Lakelink Fiber contract templates (PDFs, service terms, SLAs)
-- Keyed to Salesforce Contract records
-- Optional for demos showcasing LLM contract analysis or governance
+- Branded Lakelink Fiber contract & invoice templates (PDFs, service terms, SLAs, payment terms)
+- Contract PDFs linked to Salesforce Contract records; invoice PDFs linked to `oracle_erp_source.RA_CUSTOMER_TRX_ALL`
+- Used for AI document-intelligence checks: `silver_doc_intelligence_contracts` (contract terms vs. billed amount) and `silver_doc_intelligence_invoices` (invoice PDF structure vs. GL posting)
+- Anomalies: contract PDF service term diverges from actual billed price (doc-contract-mismatch); invoice PDF line count differs from GL posting detail (doc-invoice-mismatch)
 
 ### `mdm_source` — Master data management (customer crosswalk)
 
@@ -190,56 +229,58 @@ Each source system is simulated as a snapshot in its own schema, keyed to golden
 
 ### Rationale
 
-The base `cdm_tmforum` data is statistically **flat and uniform** (round counts, ~50/50 distributions of active/inactive, on-time/late billing). This is fine for *correctness* demos (the 6 reconciliation checks work deterministically), but weak for showcasing ML anomaly detection or forecasting (the model has nothing surprising to learn).
+The base `cdm_tmforum` data is statistically **flat and uniform** (round counts, ~50/50 distributions of active/inactive, on-time/late billing). This is fine for *correctness* demos (the seven silver reconciliation checks work deterministically), but weak for showcasing ML anomaly detection or forecasting (the model has nothing surprising to learn).
 
-**Anomaly injection** augments the base data with targeted, realistic sharp deviations:
-- Sudden bandwidth spike on a circuit (customer scaling)
-- Unscheduled discount applied retroactively
-- Partner settlement dispute with variance spike
-- Multi-day billing delay (new provisioning lag)
-- Usage recorded but not billed (mediation failure)
+**Anomaly injection** augments the **simulated `*_source` systems** (which feed the silver checks) with targeted, realistic sharp deviations:
+- Contract/quote priced away from the billed amount (contract-price / discount leakage)
+- FX rate applied off market (multi-currency invoice)
+- AR balances aging sharply past 90 days (collection risk)
+- Revenue recognized early/late vs the GL (rev-rec timing)
+- Contract/invoice PDF terms diverging from the system-of-record (doc-intelligence)
+- A step change in monthly GL revenue (account `4000`) for the `ai_forecast` scene
 
-These anomalies are **seeded deterministically** (same seed ⇒ same anomalies) and logged so the ML model can learn them and the forecast can exhibit variance.
+These anomalies are **seeded deterministically** (same seed ⇒ same anomalies) and land in the `*_source` tables so the silver checks surface them and `gold_revenue_forecast_anomalies` exhibits variance.
 
 ### Anomaly types & injection
 
-| Anomaly | Type | Where injected | Effect | Seeded count |
+| Anomaly | Type | Where injected (`*_source`) | Surfaces in | Check MV |
 | :---- | :---- | :---- | :---- | :---- |
-| **Bandwidth spike** | usage surge | `ra_silver.fact_usage` (select circuits) | 3–5× normal peak_mbps for 5–15 days, then normal | ~50–100 |
-| **Retroactive discount** | billing error | `ra_silver.fact_billing` (select lines) | discount_amount applied with past `discount_expiry_date` | ~20–30 |
-| **Usage gap** | mediation fail | `ra_silver.fact_usage` | mediation_status = `FAILED` on select days; no billing charge | ~50–100 |
-| **Billing delay** | provisioning lag | `ra_silver.fact_billing` | bill_period_start_date delayed 10–30 days vs order completion | ~30–50 |
-| **Partner dispute** | settlement var | `tmf_businesspartner.rev_share_reconciliation` | variance_amount spike, status = `in_dispute` | ~10–20 |
-| **Contract amendment** | price change | `ra_silver.dim_contract` (SCD2) | contract_amount increased mid-month, old + new rows | ~5–10 |
+| **Contract-price gap** | pricing error | `salesforce_source.ContractLineItem.UnitPrice` (diverges from tmf bill amount) | `silver_contract_price_reconciliation` | `contract_price_mismatch` |
+| **Unauthorized discount** | policy breach | `salesforce_source.SBQQ__QuoteLine__c.discount_approval__c` (set to `Pending`/`Denied` when discount > threshold) | `silver_discount_authorization_check` | `unauthorized_discount` |
+| **Expired quote active** | governance violation | `salesforce_source.SBQQ__Quote__c.SBQQ__ExpirationDate__c` (past due, discount still active in billing) | `silver_discount_authorization_check` | `expired_quote_active` |
+| **FX deviation >1%** | rate error | `oracle_erp_source.RA_CUSTOMER_TRX_ALL` multi-currency amount vs `refinitiv_fx_source.GL_DAILY_RATES` | `silver_fx_rate_validation` | FX >1% deviation |
+| **AR aging >90 days** | collection risk | `oracle_erp_source.AR_PAYMENT_SCHEDULES_ALL.DAYS_OVERDUE` (artificially aged) | `silver_ar_aging_analysis` | `ar_collection_risk` |
+| **Rev-rec timing mismatch** | ASC-606 mismatch | `oracle_erp_source.REVENUE_RECOGNITION_SCHEDULE` date diverges from `GL_JE_LINES.JE_DATE` | `silver_revenue_recognition_check` | `rev_rec_timing_mismatch` |
+| **Contract PDF mismatch** | doc intelligence | `ironclad_clm_source` contract PDF service term diverges from `oracle_erp_source.RA_CUSTOMER_TRX_ALL` amount | `silver_doc_intelligence_contracts` (via `ai_parse_document` + `ai_extract`) | `doc_contract_mismatch` |
+| **Invoice PDF mismatch** | doc intelligence | `ironclad_clm_source` invoice PDF line count differs from `oracle_erp_source.GL_JE_LINES` detail | `silver_doc_intelligence_invoices` (via `ai_parse_document` + `ai_extract`) | `doc_invoice_mismatch` |
+| **Revenue step change** | forecast anomaly | `oracle_erp_source.GL_JE_LINES` (account `4000`) magnitude jumps on specified months | `gold_revenue_forecast_anomalies` (`ai_forecast`) | — |
 
 ### Injection mechanism
 
-**Python module:** `anomaly_injector.py`
-- Loads base tables from `cdm_tmforum.tmf_*`
-- Selects deterministic subsets of records (e.g., hash(circuit_id, seed) % 100 < 3 for 3% injection rate)
-- Mutates selected records with anomaly values
-- Writes to temporary `_anomalies_*` tables or flags rows with `anomaly_type` column
-- Upstream ML pipelines either:
-  - **Use anomalies as training data** (labeled "anomaly") for supervised models, or
-  - **Exclude anomalies** for "normal operations" baseline forecasting
+**Generator:** `data-sim/simulate_source_systems.py` (+ `data-sim/config.yaml`) — a notebook/script that lives in the Databricks workspace; also orchestrated by the DAB job.
+- Snapshots golden customers/accounts from `cdm_tmforum.tmf_*` and writes the `*_source` schemas as `CREATE OR REPLACE` tables (idempotent).
+- Selects deterministic subsets using `hash(key, seed) % 100 < rate` and mutates selected rows into the anomaly values above.
+- Because the silver checks in `cdm_tmforum.revenue_assurance` read the `*_source` systems directly, injected anomalies flow straight through to `gold_leakage_summary` and `gold_revenue_forecast_anomalies` — no separate `_anomalies_*` tables and no mutation of read-only `tmf_*`.
 
-**Configuration:**
+**Configuration** (illustrative shape; the real file is `data-sim/config.yaml`):
 
 ```yaml
-# anomaly_config.yaml
 seed: 424242
+simulation:
+  catalog: cdm_tmforum
+  workspace_profile: demo
 injection_rates:
-  bandwidth_spike: 0.03        # 3% of active circuits
-  retroactive_discount: 0.02   # 2% of billing lines
-  usage_gap: 0.03
-  billing_delay: 0.03
-  partner_dispute: 0.02
-  contract_amendment: 0.01
-
-spike_magnitude:
-  bandwidth_multiplier: [3.0, 5.0]    # 3–5× normal
-  duration_days: [5, 15]               # duration in days
-  retroactive_days: [10, 90]           # how far back discount applied
+  contract_price_gap: 0.03
+  unauthorized_discount: 0.02
+  expired_quote_active: 0.01
+  fx_deviation: 0.02
+  ar_aging_spike: 0.03
+  rev_rec_timing: 0.02
+  doc_divergence: 0.01
+forecast_anomaly:
+  gl_account_code: "4000"  # revenue account
+  months: [2025-06, 2025-11]   # inject step changes for the ai_forecast scene
+  magnitude_pct: [15, 30]
 ```
 
 ---
@@ -249,38 +290,28 @@ spike_magnitude:
 ### Full rebuild cycle
 
 ```bash
-# Step 1: (optional) Regenerate source systems
-databricks bundle run simulate_source_systems \
-  --catalog cdm_tmforum \
-  --workspace demo \
-  --seed 424242
+# Step 1: Regenerate source systems (with anomalies) — writes the *_source schemas
+databricks bundle run simulate_source_systems --profile <name>   # seed + rates from data-sim/config.yaml
 
-# Step 2: Inject anomalies into ra_silver (reads from tmf_*, writes enriched silver)
-databricks bundle run inject_anomalies \
-  --input cdm_tmforum.tmf_* \
-  --output cdm_tmforum.ra_silver \
-  --config anomaly_config.yaml
-
-# Step 3: Run reconciliation pipelines (6 checks)
-databricks bundle run reconciliation_job
-
-# Step 4: Publish gold KPIs & forecast
-databricks bundle run build_gold_layer
+# Step 2: Refresh the reconciliation layer — the silver-check + gold materialized
+# views in cdm_tmforum.revenue_assurance read the *_source systems and tmf_*
+databricks bundle run ra_reconciliation --profile <name>
 ```
 
 ### Idempotency
 
-- `simulate_source_systems` writes `CREATE OR REPLACE TABLE` to `salesforce_source.*`, `oracle_erp_source.*`, etc. — idempotent.
-- `inject_anomalies` does NOT mutate `tmf_*` (read-only). Writes anomaly-augmented rows to new `ra_silver` tables with `_with_anomalies` suffix or an `is_anomaly` flag.
-- All downstream jobs (reconciliation, forecast) re-run from `ra_silver` + clean sources on each call.
+- `simulate_source_systems` writes `CREATE OR REPLACE TABLE` to `salesforce_source.*`, `oracle_erp_source.*`, etc. — idempotent; anomalies are baked into the `*_source` rows (never into read-only `tmf_*`).
+- The silver/gold layer is `CREATE OR REFRESH MATERIALIZED VIEW cdm_tmforum.revenue_assurance.*` — re-running the refresh recomputes from the current `*_source` + `tmf_*` state.
 
 ### Reset demo to baseline (no anomalies)
 
 ```bash
-# Drop ra_* schemas and rebuild without anomalies
-databricks bundle destroy ra_gold ra_silver
-databricks bundle run build_gold_layer  # uses clean tmf_* without anomaly injection
+# Regenerate sources with injection rates set to 0 in data-sim/config.yaml, then refresh
+databricks bundle run simulate_source_systems --profile <name>
+databricks bundle run ra_reconciliation --profile <name>
 ```
+
+> Full teardown drops only the new `cdm_tmforum.revenue_assurance` + `*_source` schemas, the Lakebase project, and the app — never `tmf_*`.
 
 ---
 
@@ -290,57 +321,97 @@ databricks bundle run build_gold_layer  # uses clean tmf_* without anomaly injec
 
 | Table | Rows | Source |
 | :---- | :---- | :---- |
-| salesforce_source.Account | ~10,000 | Golden customers from cdm_tmforum |
-| salesforce_source.Contract | ~10,000–100,000 | Mapped from commitments + orders |
-| salesforce_source.SBQQ__Quote__c | ~1,000–10,000 | Mapped from sales_quote |
-| oracle_erp_source.RA_CUSTOMER_TRX_ALL | ~10,000+ | Mapped from bill (header) |
-| oracle_erp_source.RA_CUSTOMER_TRX_LINES_ALL | ~100,000+ | Mapped from bill + applied_* (lines) |
-| oracle_erp_source.GL_JE_LINES | ~100,000+ | Reverse-mapped from revenue + tax |
+| salesforce_source.Account | ~10,000 | Golden customers from `tmf_customer` |
+| salesforce_source.Contract | ~10,000–100,000 | Mapped from `tmf_customer.commitment` |
+| salesforce_source.ContractLineItem | ~50,000–150,000 | Mapped from `tmf_customer.offering_price` + commitments |
+| salesforce_source.SBQQ__Quote__c | ~1,000–10,000 | Mapped from `tmf_customer.sales_quote` |
+| salesforce_source.SBQQ__QuoteLine__c | ~5,000–50,000 | Mapped from quote line items |
+| oracle_erp_source.RA_CUSTOMER_TRX_ALL | ~10,000+ | Mapped from `tmf_customer.bill` (header) |
+| oracle_erp_source.RA_CUSTOMER_TRX_LINES_ALL | ~100,000+ | Mapped from `tmf_customer.bill` + applied_* (lines) |
+| oracle_erp_source.GL_JE_LINES | ~100,000+ | Reverse-mapped from revenue + tax lines |
+| oracle_erp_source.GL_JE_HEADERS | ~10,000+ | Journal entry batches |
+| oracle_erp_source.GL_BUDGETS | ~1,000–5,000 | Monthly budgets per account (e.g., account `4000`) |
+| oracle_erp_source.REVENUE_RECOGNITION_SCHEDULE | ~50,000+ | Reverse-mapped from bill revenue |
+| oracle_erp_source.AR_PAYMENT_SCHEDULES_ALL | ~10,000+ | Payment terms & aging |
 | refinitiv_fx_source.GL_DAILY_RATES | ~500–1,000 | Historical spot rates (or mock) |
-| ironclad_clm_source.ironclad_contracts | ~1,000–10,000 | Branded PDFs + summaries |
+| ironclad_clm_source.ironclad_contracts | ~1,000–10,000 | Branded contract PDFs + metadata |
+| ironclad_clm_source.ironclad_invoices | ~5,000–50,000 | Invoice PDFs + metadata |
 | mdm_source.customer_crosswalk | ~10,000 | Golden customer ID mappings |
-| **ra_silver.fact_usage (with anomalies)** | ~100K + ~5K anomaly records | Usage with spikes/gaps injected |
-| **ra_silver.fact_billing (with anomalies)** | ~10K + ~1K retroactive discounts | Billing with delay/discount mutations |
+| **cdm_tmforum.revenue_assurance.gold_leakage_summary** | **~48,000** | Unified exception register (~$601M at risk, 7 check types) |
+| **cdm_tmforum.revenue_assurance.gold_reconciliation_scorecard** | ~8,200 | One health score per affected customer |
+| **cdm_tmforum.revenue_assurance.gold_anomaly_scores** | ~100K+ | ML anomaly predictions (per record) |
+| **cdm_tmforum.revenue_assurance.gold_revenue_forecast_anomalies** | ~24 | Monthly forecasts with variance flags |
 
 ### Golden/deterministic outputs
 
 At the end of a full build with `seed=424242`, the generator prints a **manifest**:
 
 ```
-=== Data Generation Complete ===
+=== Data Simulation Complete ===
 Seed: 424242
-Timestamp: 2026-08-21T10:30:00Z
+Timestamp: 2026-08-25T10:30:00Z
+Workspace: demo-workspace
+Profile: demo
+Catalog: cdm_tmforum
 
-Source system snapshots:
+Source system snapshots created/updated:
   salesforce_source.Account: 10,247 rows
   salesforce_source.Contract: 87,903 rows
+  salesforce_source.ContractLineItem: 156,288 rows
+  salesforce_source.SBQQ__Quote__c: 8,547 rows
+  salesforce_source.SBQQ__QuoteLine__c: 42,183 rows
   oracle_erp_source.RA_CUSTOMER_TRX_ALL: 156,288 rows
-  (... other tables ...)
+  oracle_erp_source.RA_CUSTOMER_TRX_LINES_ALL: 1,247,542 rows
+  oracle_erp_source.GL_JE_LINES: 1,890,234 rows
+  oracle_erp_source.GL_JE_HEADERS: 10,547 rows
+  oracle_erp_source.GL_BUDGETS: 3,287 rows
+  oracle_erp_source.REVENUE_RECOGNITION_SCHEDULE: 47,853 rows
+  oracle_erp_source.AR_PAYMENT_SCHEDULES_ALL: 156,288 rows
+  refinitiv_fx_source.GL_DAILY_RATES: 847 rows
+  ironclad_clm_source.ironclad_contracts: 8,903 rows
+  ironclad_clm_source.ironclad_invoices: 28,547 rows
+  mdm_source.customer_crosswalk: 10,247 rows
 
-Anomalies injected:
-  bandwidth_spike: 47 circuits
-  retroactive_discount: 28 lines
-  usage_gap: 51 records
-  billing_delay: 33 lines
-  partner_dispute: 12 reconciliations
-  contract_amendment: 7 contracts
+Anomalies injected (into *_source):
+  contract_price_gap: 3,241 lines (~3% of ContractLineItem)
+  unauthorized_discount: 2,180 quotes (~2% of QuoteLine)
+  expired_quote_active: 1,087 quotes (~1% of QuoteLine)
+  fx_deviation: 1,980 transactions (~2% of RA_CUSTOMER_TRX_ALL)
+  ar_aging_spike: 3,452 invoices (~3% of AR_PAYMENT_SCHEDULES_ALL)
+  rev_rec_timing: 1,980 schedules (~2% of REVENUE_RECOGNITION_SCHEDULE)
+  doc_divergence: 890 contracts/invoices (~1% of ironclad_clm_source)
+  gl_revenue_step_change: 2 months [2025-06, 2025-11]
 
-Reconciliation baseline (no anomalies):
-  Total exceptions: 9,847 (from tmf_enterprise.revenue_assurance_violation)
-  Estimated impact: $540,234,512.18
-  (... breakdown by violation type ...)
+Silver check results (cdm_tmforum.revenue_assurance):
+  contract_price_mismatch: 3,241 exceptions
+  unauthorized_discount: 2,180 exceptions
+  expired_quote_active: 1,087 exceptions
+  fx_validation_gaps: 1,980 exceptions
+  ar_collection_risk: 3,452 exceptions
+  rev_rec_timing_mismatch: 1,980 exceptions
+  doc_contract_mismatch: 445 exceptions
+  doc_invoice_mismatch: 445 exceptions
+  Total silver exceptions detected: 16,410 (anomaly-related only)
 
-Reconciliation with anomalies:
-  Additional exceptions detected: 178
-  Additional impact (seeded): $12,456,789.50
-  Total seeded: $552,691,301.68
+Gold reconciliation register (cdm_tmforum.revenue_assurance.gold_leakage_summary):
+  Total exceptions: ~48,108 (native seeded ~10K + anomaly-related ~16K + context ~22K)
+  Estimated impact: ~$601,547,363
+  Breakdown by check_type: 7 silver checks + context from tmf_enterprise.revenue_assurance_violation
+  Detection rate: ≥95% of seeded exceptions in manifest
 
-ML training set:
+Baseline context (native RA layer, not the register):
+  tmf_enterprise.revenue_assurance_violation: ~10,287 rows, ~$540M, 12 native types
+
+Forecast (gold_revenue_forecast_anomalies):
+  Injected step-change months [2025-06, 2025-11] flagged ABOVE_EXPECTED / BELOW_EXPECTED by ai_forecast
+  Magnitude: ±15–30% variance on revenue (account 4000)
+
+ML training set (gold_anomaly_scores):
   Normal records: 89%
-  Anomaly records (labeled): 11%
+  Injected anomaly records (labeled): 11%
 ```
 
-This manifest is the **source of truth** for the Test Plan's golden outputs. The demo's ML model is trained on the 11% anomaly records; the forecast should exhibit variance when anomalies are present.
+This manifest is the **source of truth** for the Test Plan's golden outputs. The forecast should exhibit variance where revenue step-changes were injected (2025-06, 2025-11); the silver checks should surface the injected `*_source` anomalies in `gold_leakage_summary`. All outputs are deterministic on `seed=424242`.
 
 ---
 
@@ -357,8 +428,10 @@ If the demo includes a **live Lakeflow Connect / Auto Loader** ingestion beat:
 ## 7. Reproducibility checklist
 
 - ✅ Seed-driven (`seed=424242` ⇒ byte-identical outputs across runs)
-- ✅ Deterministic anomaly selection (same seed + circuit/line hash ⇒ same anomalies)
-- ✅ Idempotent generation (`CREATE OR REPLACE`, no incremental state)
-- ✅ Manifest logging (source of truth for test plan golden figures)
-- ✅ Reset capability (drop + rebuild in < 5 minutes)
-- ✅ Scaled for demo (10K customers, 100K circuits, ~$540M baseline + injected variance)
+- ✅ Deterministic anomaly selection (same seed + key hash ⇒ same anomalies in `*_source`)
+- ✅ Idempotent generation (`CREATE OR REPLACE`, no incremental state; manifested in DAB targets)
+- ✅ Manifest logging (source of truth for test plan golden figures; printed to workspace run output)
+- ✅ Reset capability (DAB destroy + redeploy in < 5 minutes)
+- ✅ Scaled for demo (10K customers, 100K+ circuits, ~$540M baseline + injected variance → ~$601M register)
+- ✅ Read-only `tmf_*` never mutated; anomalies live in simulated `*_source` only
+- ✅ Silver checks join `*_source` + `tmf_*` directly (no materialized bridge); gold MVs aggregate to `gold_leakage_summary`

@@ -3,6 +3,7 @@
 **Demo:** Revenue Assurance Lakehouse for Lakelink Fiber (pitched to Lumen Technologies) · **Catalog:** `cdm_tmforum` · **App:** RA Exceptions Console · **Repo:** `revenue-assurance` · **Cloud:** FEVM (serverless, `demo` profile)
 
 > **Scrutiny summary**
+> - ✅ **2026-08-25:** Refinement recorded: ADR-013 clarified to single `cdm_tmforum.revenue_assurance` schema (not split ra_silver/ra_gold); 7 silver check MVs (contract-price, discount-auth, FX, AR-aging, rev-rec, doc-intel×2) feeding gold_leakage_summary; no materialized service_instance bridge; case state moved to Lakebase Postgres; app framework is Databricks AppKit (React/TS) instead of implied FastAPI; reconciliation SQL files under reconciliation/transformations/; see 2026-08-25 entry below.
 > - ❌ **Was:** 12 ADRs assuming synthetic bronze-layer generation (~2K customers, ~25K circuits) and a `lumen_ra` catalog
 > - ✅ **Now:** Added **ADR-000** (reuse `cdm_tmforum` vs. generate), removed synthetic-data generation ADR, reframed 10 core ADRs around data reuse. **ADR-008** now states real scale (~10K customers, ~100K circuits).
 > - ❌ **Was:** ADR-007 framed Azure as "flagship reference" per Rogers, asserting it as architectural fact
@@ -27,9 +28,9 @@
 | ADR-008 | Real-world data scale | Reuse existing ~10K customers / ~100K circuits |
 | ADR-009 | IaC / packaging | Databricks Asset Bundles (DABs) |
 | ADR-010 | Genie inclusion | Include Genie for natural-language Q&A |
-| ADR-011 | Identity model | Single canonical `service_instance` bridge |
+| ADR-011 | Identity model | ~~Single canonical `service_instance` bridge~~ → **superseded** (2026-08-25): checks join `*_source` → `tmf_*` directly, no materialized bridge |
 | ADR-012 | Data determinism | Fixed-seed simulation for reproducibility |
-| ADR-013 | Schema organization | Build `ra_silver`/`ra_gold` in `cdm_tmforum`; keep `tmf_*` read-only |
+| ADR-013 | Schema organization | ~~Build `ra_silver`/`ra_gold`~~ → **superseded** (2026-08-25): single `cdm_tmforum.revenue_assurance` schema; keep `tmf_*` read-only |
 
 ---
 
@@ -340,6 +341,65 @@
 - Runbook §2.4 (golden numbers) depends on **ADR-012** (determinism) and **ADR-008** (scale).
 - Runbook §5.4 (data-drift recovery) is the operational counterpart to **ADR-012**.
 - The reconciliation SQL/ML split (**ADR-002**, **ADR-006**) drives the repo layout under `src/reconciliation` and `src/ml`.
-- The `service_instance` bridge (**ADR-011**) is the join key referenced by every check and by the app's drill-down.
+- ❌ **Was:** The `service_instance` bridge (**ADR-011**) is the join key referenced by every check and by the app's drill-down. **2026-08-25:** Bridge removed; checks join `*_source` → `tmf_*` directly; see 2026-08-25 decision below.
 - **ADR-000** (data reuse) supersedes the original synthetic-data specification and reshapes **ADR-008** from generation to reuse.
 - **ADR-013** resolves the catalog vs. schema question; compare against README ground truth §2 and data-source-assessment.md caveats §3.
+
+---
+
+## 2026-08-25 — Architecture Refinements (Post-ADR-013)
+
+**Status:** Accepted
+
+**Context.** After the original 13 ADRs, the architecture was refined based on implementation feedback and product alignment. This entry records decisions that clarify and simplify the design without invalidating the ADRs.
+
+**Decisions.**
+
+### (a) Single unified schema instead of ra_silver + ra_gold split
+
+The demo builds a single schema `cdm_tmforum.revenue_assurance` (not separate `ra_silver` and `ra_gold`). This schema contains:
+- **Silver materialized views (7 checks):** `silver_contract_price_reconciliation`, `silver_discount_authorization_check`, `silver_fx_rate_validation`, `silver_ar_aging_analysis`, `silver_revenue_recognition_check`, `silver_doc_intelligence_contracts`, `silver_doc_intelligence_invoices`.
+- **Gold materialized views:** `gold_leakage_summary` (unified register ~48K rows / ~$601M across 7 check_types), `gold_reconciliation_scorecard` (composite health score + risk_tier per customer), `gold_anomaly_scores`, `gold_revenue_forecast_anomalies` (ai_forecast results).
+
+**Why:** Simpler naming, unified governance under one schema, clearer lineage in Catalog Explorer. The `tmf_*` schemas remain read-only; only `revenue_assurance` is writable.
+
+### (b) Case-management state moved to Lakebase Postgres
+
+Case workflow (assign, note, status transitions) is persisted in Lakebase Postgres (project `ra-console-lakebase`, schema `ra`), not a Delta table. Tables: `ra.cases` (case_id, exception_id, assignee, status, created_at, updated_at) and `ra.case_notes` (case_id, author, body, created_at).
+
+**Why:** Lakebase Postgres is purpose-built for structured transactional state with strong ACID guarantees, row-level security, and built-in schema evolution. Delta tables are append-optimized and less suited to frequent updates + transactional isolation. Lakebase gives the app a cleaner operational database.
+
+### (c) App framework is Databricks AppKit (React/TypeScript)
+
+The RA Exceptions Console is a Databricks AppKit application (React components + TypeScript + type-safe SQL bindings), deployed via `databricks apps deploy --profile <name>`. The app reads exceptions from `cdm_tmforum.revenue_assurance.gold_*` via the analytics plugin (SQL warehouse) and writes case state via the lakebase plugin.
+
+**Why:** AppKit provides native integration with Databricks auth, SQL warehouse, and Lakebase, with type-safe bindings. No FastAPI / custom auth / manual API wiring. Simpler devloop, lower operational burden, and native Databricks governance.
+
+**Deployment:** Runs as a managed Databricks App; workspace host and warehouse are resolved from the CLI profile (never hardcoded). App service principal needs UC grants: `USE CATALOG cdm_tmforum` + `USE SCHEMA`/`SELECT` on `cdm_tmforum.revenue_assurance` + write access to Lakebase project `ra-console-lakebase` schema `ra`.
+
+### (d) Reconciliation check SET changed: 7 checks with refined names
+
+The 6 checks in ADR-006 expanded to 7 with refined detection logic and naming:
+
+| Check | Silver MV | Output `check_type` | Detection |
+| :---- | :---- | :---- | :---- |
+| Contract price mismatch | `silver_contract_price_reconciliation` | `contract_price_mismatch` | Salesforce contract price ≠ Oracle billed amount |
+| Unauthorized discount | `silver_discount_authorization_check` | `unauthorized_discount` | Quote discount exceeds approval limit |
+| Expired quote active | `silver_discount_authorization_check` | `expired_quote_active` | Approved quote past expiry, still active |
+| FX rate deviation | `silver_fx_rate_validation` | (validation only, not unioned to register) | Invoice FX > 1% vs. Refinitiv mid-market |
+| AR aging / collection risk | `silver_ar_aging_analysis` | `ar_collection_risk` | DSO > threshold or 90+ day overdue |
+| Revenue recognition timing | `silver_revenue_recognition_check` | `rev_rec_timing_mismatch` | ASC-606 schedule ≠ GL posting |
+| Doc intelligence: contracts | `silver_doc_intelligence_contracts` | `doc_contract_mismatch` | AI-extracted contract amount ≠ system |
+| Doc intelligence: invoices | `silver_doc_intelligence_invoices` | `doc_invoice_mismatch` | AI-extracted invoice amount ≠ system |
+
+All 7 feed into `gold_leakage_summary`. The old "active-unbilled / usage-variance / billing-start-lag / partner settlement" checks are superseded by this set. ML anomaly detection is now integrated into the doc-intelligence checks and the `ai_forecast` component of `gold_revenue_forecast_anomalies`.
+
+**Why:** The refined set aligns with real RA use cases across contracts, billing, AR, and invoice validation. Document intelligence (via `ai_extract` on ironclad PDFs and AR invoice scans) adds a compelling AI/BI narrative. The unified register (`gold_leakage_summary`) makes it easy to prioritize and drill into any exception.
+
+**Reconciliation SQL location:** `reconciliation/transformations/silver_reconciliation.sql` (contracts, discounts, FX, AR), `silver_doc_intelligence.sql` (PDF extraction + matching), `gold_aggregation.sql` (union into gold_leakage_summary + scorecard + forecast).
+
+**Validation gate:** `databricks apps validate` (typegen, lint, typecheck, build); verify app readiness with `databricks apps get <app_name>` / `databricks apps logs <app_name>`. Runbook gotcha: repo-root `.gitignore` has a `lib/` rule that may exclude AppKit's `client/src/lib/` from bundle sync — fix with `sync.include: [client/src/lib/**]` in the app's `databricks.yml`.
+
+**Teardown:** `databricks bundle destroy` removes `revenue_assurance` schema, *_source schemas, app, and jobs, but **not** `tmf_*` (read-only source data) or Lakebase project (separate lifecycle). Lakebase project teardown is manual or via a separate destroy script.
+
+**Rationale.** These four refinements reflect implementation reality: a single schema is easier to govern and explain; Lakebase Postgres is operationally cleaner for case state; AppKit is idiomatic to Databricks; and the 7-check set is more realistic and demo-compelling than the original 6. Together, they strengthen the end-to-end story from detection (7 checks) → unified register (gold_leakage_summary) → app workflow (case assignment & recovery in Lakebase) → governance (UC lineage + masking) → KPIs (gold scorecard & forecast on the dashboard).
