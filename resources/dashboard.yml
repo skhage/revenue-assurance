@@ -1,0 +1,22 @@
+# AI/BI assets for the Revenue Assurance demo. The warehouse is deliberately
+# supplied as a bundle variable so this public repository contains no workspace
+# resource identifiers. Override it at deploy time with --var sql_warehouse_id=...
+
+variables:
+  sql_warehouse_id:
+    description: SQL warehouse ID used by the AI/BI dashboard and Genie space.
+    default: REPLACE_WITH_SQL_WAREHOUSE_ID
+
+resources:
+  dashboards:
+    revenue_assurance_command_center:
+      display_name: Lakelink Fiber — Revenue Assurance Command Center
+      file_path: ../Lakelink Fiber — Revenue Assurance Command Center.lvdash.json
+      warehouse_id: ${var.sql_warehouse_id}
+
+  genie_spaces:
+    revenue_assurance_analyst:
+      title: Lakelink Fiber Revenue Assurance Analyst
+      description: Natural-language analysis of revenue leakage, reconciliation health, anomaly priority, and forecast variance.
+      file_path: ./revenue_assurance.geniespace.json
+      warehouse_id: ${var.sql_warehouse_id}

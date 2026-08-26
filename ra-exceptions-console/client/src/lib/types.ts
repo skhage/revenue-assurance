@@ -10,4 +10,13 @@ export interface ExceptionRow {
   source_table: string;
   customer_id: number;
   known_leakage_flag: boolean;
+  status: string;
+  assignee: string | null;
+}
+
+export interface KpiSummary {
+  open_exceptions: number;
+  total_at_risk: number;
+  high_severity: number;
+  accounts_affected: number;
 }

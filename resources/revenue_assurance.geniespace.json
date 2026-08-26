@@ -1,0 +1,117 @@
+{
+  "version": 2,
+  "config": {
+    "sample_questions": [
+      {
+        "id": "10000000000000000000000000000001",
+        "question": [
+          "Which reconciliation checks have the most dollars at risk?"
+        ]
+      },
+      {
+        "id": "10000000000000000000000000000002",
+        "question": [
+          "Which accounts have the lowest reconciliation health scores?"
+        ]
+      },
+      {
+        "id": "10000000000000000000000000000003",
+        "question": [
+          "Show the highest-priority anomaly scores for analyst review."
+        ]
+      },
+      {
+        "id": "10000000000000000000000000000004",
+        "question": [
+          "How do actual revenue, forecast revenue, and budget compare by month?"
+        ]
+      }
+    ]
+  },
+  "data_sources": {
+    "tables": [
+      {
+        "identifier": "cdm_tmforum.revenue_assurance.gold_anomaly_scores"
+      },
+      {
+        "identifier": "cdm_tmforum.revenue_assurance.gold_leakage_summary"
+      },
+      {
+        "identifier": "cdm_tmforum.revenue_assurance.gold_reconciliation_scorecard"
+      },
+      {
+        "identifier": "cdm_tmforum.revenue_assurance.gold_revenue_forecast_anomalies"
+      },
+      {
+        "identifier": "cdm_tmforum.revenue_assurance.silver_doc_intelligence_contracts"
+      },
+      {
+        "identifier": "cdm_tmforum.revenue_assurance.silver_doc_intelligence_invoices"
+      }
+    ]
+  },
+  "instructions": {
+    "example_question_sqls": [
+      {
+        "id": "20000000000000000000000000000001",
+        "question": [
+          "Which reconciliation checks have the most dollars at risk?"
+        ],
+        "sql": [
+          "SELECT check_type, COUNT(*) AS exception_count, SUM(amount_at_risk) AS amount_at_risk\n",
+          "FROM cdm_tmforum.revenue_assurance.gold_leakage_summary\n",
+          "GROUP BY check_type\n",
+          "ORDER BY amount_at_risk DESC"
+        ]
+      },
+      {
+        "id": "20000000000000000000000000000002",
+        "question": [
+          "Which accounts have the lowest reconciliation health scores?"
+        ],
+        "sql": [
+          "SELECT customer_id, account_name, composite_health_score, risk_tier, total_amount_at_risk, total_exceptions\n",
+          "FROM cdm_tmforum.revenue_assurance.gold_reconciliation_scorecard\n",
+          "ORDER BY composite_health_score ASC, total_amount_at_risk DESC\n",
+          "LIMIT 25"
+        ]
+      },
+      {
+        "id": "20000000000000000000000000000003",
+        "question": [
+          "Show the highest-priority anomaly scores for analyst review."
+        ],
+        "sql": [
+          "SELECT item_id, check_type, customer_id, account_name, amount_at_risk, composite_anomaly_score, anomaly_rank, review_priority\n",
+          "FROM cdm_tmforum.revenue_assurance.gold_anomaly_scores\n",
+          "ORDER BY anomaly_rank ASC, amount_at_risk DESC\n",
+          "LIMIT 25"
+        ]
+      },
+      {
+        "id": "20000000000000000000000000000004",
+        "question": [
+          "How do actual revenue, forecast revenue, and budget compare by month?"
+        ],
+        "sql": [
+          "SELECT revenue_month, actual_revenue, forecast_revenue, forecast_lower_bound, forecast_upper_bound, budget_amount, budget_variance_pct, anomaly_status\n",
+          "FROM cdm_tmforum.revenue_assurance.gold_revenue_forecast_anomalies\n",
+          "ORDER BY revenue_month"
+        ]
+      }
+    ],
+    "text_instructions": [
+      {
+        "id": "30000000000000000000000000000001",
+        "content": [
+          "Use cdm_tmforum.revenue_assurance.gold_leakage_summary as the unified exception register. amount_at_risk is the detected financial exposure, check_type is the reconciliation root cause, severity is HIGH or MEDIUM, and known_leakage_flag identifies seeded ground-truth leakage.\n",
+          "Use cdm_tmforum.revenue_assurance.gold_reconciliation_scorecard for customer-level health and component scores. Lower composite_health_score indicates higher reconciliation risk.\n",
+          "Use cdm_tmforum.revenue_assurance.gold_anomaly_scores for ML prioritization. The table is supplied by the separate ML workstream; prioritize lower anomaly_rank and HIGH review_priority when available.\n",
+          "Use cdm_tmforum.revenue_assurance.gold_revenue_forecast_anomalies for monthly actual, forecast, confidence-bound, budget, and anomaly questions.\n",
+          "Use the silver_doc_intelligence tables only for contract or invoice document-extraction evidence.\n",
+          "Do not invent case status or assignee values: operational case state lives in Lakebase Postgres ra.cases and is not available in these Unity Catalog tables. Always use proper three-level Unity Catalog names in generated SQL."
+        ]
+      }
+    ]
+  }
+}
