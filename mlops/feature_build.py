@@ -7,8 +7,11 @@ import argparse
 from databricks.feature_engineering import FeatureEngineeringClient
 from pyspark.sql import DataFrame, SparkSession
 
+try:
+    from features import FEATURE_COLUMNS, FEATURE_TABLE_NAME
+except ModuleNotFoundError:
+    from mlops.features import FEATURE_COLUMNS, FEATURE_TABLE_NAME
 
-FEATURE_TABLE_NAME = "feature_account_anomaly"
 
 
 def parse_args() -> argparse.Namespace:
@@ -89,7 +92,9 @@ def main() -> None:
     args = parse_args()
     spark = SparkSession.getActiveSession() or SparkSession.builder.getOrCreate()
     feature_table = f"{args.catalog}.{args.schema}.{FEATURE_TABLE_NAME}"
-    feature_frame = build_feature_frame(spark, args.catalog, args.schema)
+    feature_frame = build_feature_frame(spark, args.catalog, args.schema).fillna(
+        0.0, subset=FEATURE_COLUMNS
+    )
 
     if feature_frame.limit(1).count() == 0:
         raise RuntimeError("gold_leakage_summary contains no exceptions to feature-engineer")

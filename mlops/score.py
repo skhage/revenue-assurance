@@ -7,7 +7,12 @@ import argparse
 from databricks.feature_engineering import FeatureEngineeringClient
 from pyspark.sql import SparkSession, Window, functions as functions
 
-FEATURE_TABLE_NAME = "feature_account_anomaly"
+try:
+    from features import FEATURE_COLUMNS, FEATURE_TABLE_NAME
+except ModuleNotFoundError:
+    from mlops.features import FEATURE_COLUMNS, FEATURE_TABLE_NAME
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--catalog", required=True)
@@ -24,7 +29,8 @@ def main() -> None:
     model_uri = f"models:/{model_name}@champion"
 
     feature_client = FeatureEngineeringClient(model_registry_uri="databricks-uc")
-    key_frame = spark.table(feature_table).select("exception_id")
+    feature_frame = spark.table(feature_table).fillna(0.0, subset=FEATURE_COLUMNS)
+    key_frame = feature_frame.select("exception_id")
     predictions = feature_client.score_batch(
         model_uri=model_uri,
         df=key_frame,
@@ -34,7 +40,7 @@ def main() -> None:
         functions.col("prediction").cast("double").alias("isolation_forest_score"),
     )
 
-    scored = predictions.join(spark.table(feature_table), "exception_id", "inner")
+    scored = predictions.join(feature_frame, "exception_id", "inner")
     score_stats = scored.agg(
         functions.avg("isolation_forest_score").alias("score_mean"),
         functions.stddev_pop("isolation_forest_score").alias("score_stddev"),
@@ -90,6 +96,7 @@ def main() -> None:
         .otherwise("LOW"),
     ).select(
         "exception_id",
+        functions.col("exception_id").alias("item_id"),
         "check_type",
         "customer_id",
         "account_name",

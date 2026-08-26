@@ -8,7 +8,7 @@ import pandas as pd
 from mlops.modeling import IsolationForestScoreModel, add_composite_scores
 
 
-def main() -> None:
+def test_scoring_orientation() -> None:
     random = np.random.default_rng(42)
     normal = random.normal(0.0, 1.0, size=(200, 3))
     outliers = np.array([[9.0, 9.0, 9.0], [-9.0, -8.0, -10.0]])
@@ -35,4 +35,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    test_scoring_orientation()
