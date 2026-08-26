@@ -98,7 +98,7 @@ declare module "@databricks/appkit-ui/react" {
         parameters: Record<string, never>;
         result: Array<{
           /** @sqlType BIGINT */
-          open_exceptions: number;
+          total_exceptions: number;
           /** @sqlType DOUBLE */
           total_at_risk: number;
           /** @sqlType BIGINT */
