@@ -25,7 +25,10 @@ resources:
       environments:
         - environment_key: ml_runtime
           spec:
-            client: "1"
+            # Python script tasks support serverless job environments; pin the
+            # current standard environment documented at:
+            # https://docs.databricks.com/aws/en/jobs/run-serverless-jobs
+            environment_version: "5"
             dependencies:
               - mlflow>=2.22.0,<4
               - databricks-feature-engineering>=0.16.0
