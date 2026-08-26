@@ -51,7 +51,10 @@ targets:
     # Do not hardcode the workspace hostname in this public repo.
 
     variables:
-      sql_warehouse_id: 7b65956f30d66feb
+      # Public repo: never commit a real workspace SQL Warehouse ID here.
+      # Override at deploy time, e.g. `databricks apps deploy --profile <name>
+      # --var sql_warehouse_id=<id>` (or via a local, untracked target override).
+      sql_warehouse_id: REPLACE_WITH_SQL_WAREHOUSE_ID
       postgres_branch: projects/ra-console-lakebase/branches/production
       postgres_database: projects/ra-console-lakebase/branches/production/databases/databricks-postgres
       postgres_project: projects/ra-console-lakebase
