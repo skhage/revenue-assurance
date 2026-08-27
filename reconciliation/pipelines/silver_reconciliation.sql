@@ -37,15 +37,28 @@
 -- billed unit price (Oracle ERP's independent circuit-rate extract). Detects
 -- price_mismatch where the two systems disagree on what a circuit costs.
 --
--- INDEPENDENCE: `leakage_flag` on contract_line_item is ground-truth metadata
---   only (for `known_leakage_flag` downstream) — this check does NOT read it.
---   `price_mismatch_pct` and `reconciliation_status` below are derived purely
---   by comparing contracted_price to billed_unit_price, two independently
---   generated cross-system values (see data-sim/simulate_source_systems.py
---   section 4/5, where the billed side is re-derived from list_mrr + the
---   negotiated discount fraction with its OWN leakage draw, never reading
---   contract_line_item.UnitPrice or leakage_flag). A >1% relative divergence
---   is what flags the row, matching how a real price audit would work.
+-- ONE-TO-ONE JOIN: joins on billed.SOURCE_LINE_ITEM_ID = cli.Id -- the
+--   contract line's own immutable primary key, carried through unchanged
+--   into ra_billed_circuit_rates by the simulator. The PRIOR join on
+--   (SERVICE_CIRCUIT_ID, SOURCE_CONTRACT_ID) was many-to-many: two lines on
+--   the same contract can independently hash to the same circuit
+--   (Service_Circuit_Id__c is drawn by hashing the line's own key modulo the
+--   circuit count), so that composite is not a candidate key and could fan
+--   out a single contract line into multiple priced rows. DQ-2 now also
+--   enforces exactly one billed row matched per contract line (see
+--   dq2_one_to_one_join below) and dq_audit.sql independently asserts
+--   SOURCE_LINE_ITEM_ID uniqueness in ra_billed_circuit_rates itself.
+--
+-- INDEPENDENCE: this check reads NO simulator ground-truth/leakage column.
+--   contract_line_item carries no leakage marker into this pipeline at all;
+--   `price_mismatch_pct` and `reconciliation_status` below are derived
+--   purely by comparing contracted_price to billed_unit_price, two
+--   independently generated cross-system values (see
+--   data-sim/simulate_source_systems.py, where the billed side is re-derived
+--   from list_mrr + the negotiated discount fraction with its OWN leakage
+--   draw, never reading contract_line_item.UnitPrice). A >1% relative
+--   divergence is what flags the row, matching how a real price audit
+--   would work.
 --
 -- QUANTITY-AWARE EXPOSURE: `estimated_amount_at_risk` is the dollar exposure
 --   of the mismatch, so it must scale with Quantity (a line covering 4
@@ -54,7 +67,10 @@
 --   (the detection threshold) while the dollar amount compares
 --   contracted_total vs billed_total (each price * Quantity).
 --
--- DQ-2: customer_id resolvable; billed rate present; amount at risk non-negative.
+-- DQ-2: customer_id resolvable; billed rate present; amount at risk
+--   non-negative; and the join produced at most one billed match per line
+--   (the row-level signature of a 1:1 join -- a true fan-out would emit
+--   duplicate line_item_id rows, which COUNT(*) OVER(...) here catches).
 --   Action: warn (default, no ON VIOLATION) — invalid rows are still written
 --   and surface in the event log, which is the point: the demo shows the
 --   breach rather than silently hiding it.
@@ -65,9 +81,11 @@ CREATE OR REFRESH MATERIALIZED VIEW silver_contract_price_reconciliation (
   CONSTRAINT dq2_billed_rate_resolvable
     EXPECT (billed_unit_price IS NOT NULL),
   CONSTRAINT dq2_amount_at_risk_non_negative
-    EXPECT (estimated_amount_at_risk >= 0)
+    EXPECT (estimated_amount_at_risk >= 0),
+  CONSTRAINT dq2_one_to_one_join
+    EXPECT (line_item_match_count <= 1)
 )
-COMMENT 'Compares contracted circuit prices (salesforce_source.contract_line_item.UnitPrice, the negotiated source of truth) against the independently-derived billed unit price (oracle_erp_source.ra_billed_circuit_rates). Flags price_mismatch where the two systems disagree by more than 1% per unit; estimated_amount_at_risk is the Quantity-scaled dollar exposure (contracted_total vs billed_total), not just the per-unit difference.'
+COMMENT 'Compares contracted circuit prices (salesforce_source.contract_line_item.UnitPrice, the negotiated source of truth) against the independently-derived billed unit price (oracle_erp_source.ra_billed_circuit_rates), joined 1:1 on the contract line''s own immutable id (SOURCE_LINE_ITEM_ID). Flags price_mismatch where the two systems disagree by more than 1% per unit; estimated_amount_at_risk is the Quantity-scaled dollar exposure (contracted_total vs billed_total), not just the per-unit difference.'
 AS
 WITH contract_lines AS (
   SELECT
@@ -78,7 +96,6 @@ WITH contract_lines AS (
     cli.Quantity,
     cli.UnitPrice AS contracted_price,
     cli.UnitPrice * cli.Quantity AS contracted_total,
-    cli.leakage_flag AS known_leakage_flag,
     c.AccountId,
     c.TMF_Customer_Id__c AS customer_id,
     c.ContractNumber
@@ -88,18 +105,19 @@ WITH contract_lines AS (
 ),
 -- price_mismatch_pct and the quantity-aware totals computed exactly once;
 -- every downstream flag reads them back instead of re-deriving the
--- ABS(...)/NULLIF(...) expression.
+-- ABS(...)/NULLIF(...) expression. line_item_match_count proves the join
+-- stayed 1:1: a real fan-out would make this > 1 for the affected line.
 priced AS (
   SELECT
     cl.*,
     billed.BILLED_UNIT_PRICE AS billed_unit_price,
     COALESCE(billed.BILLED_TOTAL_AMOUNT, billed.BILLED_UNIT_PRICE * cl.Quantity) AS billed_total,
     ABS(cl.contracted_price - billed.BILLED_UNIT_PRICE)
-      / NULLIF(cl.contracted_price, 0) AS price_mismatch_pct
+      / NULLIF(cl.contracted_price, 0) AS price_mismatch_pct,
+    COUNT(*) OVER (PARTITION BY cl.line_item_id) AS line_item_match_count
   FROM contract_lines cl
   LEFT JOIN oracle_erp_source.ra_billed_circuit_rates billed
-    ON billed.SERVICE_CIRCUIT_ID = cl.Service_Circuit_Id__c
-    AND billed.SOURCE_CONTRACT_ID = cl.contract_id
+    ON billed.SOURCE_LINE_ITEM_ID = cl.line_item_id
 )
 SELECT
   p.line_item_id,
@@ -112,7 +130,7 @@ SELECT
   p.contracted_total,
   p.billed_unit_price,
   p.billed_total,
-  p.known_leakage_flag,
+  p.line_item_match_count,
   p.customer_id,
   a.Name AS account_name,
   xw.SOURCE_PARTY_ID AS salesforce_account_id,

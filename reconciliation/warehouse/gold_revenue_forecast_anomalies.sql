@@ -33,6 +33,40 @@
 --   month for the pure-future forecast scene. A FULL OUTER JOIN keeps both
 --   the held-out-actuals-with-forecast rows AND the pure-future forecast-only
 --   rows (previously dropped by the LEFT JOIN).
+--
+-- HORIZON ARGUMENT FORM (investigated live against the actual warehouse,
+--   not just read from docs): `horizon` must be a data-driven value (12
+--   months past whatever the latest actual month turns out to be at refresh
+--   time), not a hardcoded literal -- a literal would silently stop covering
+--   "12 months future" as actuals accumulate past it. Every non-subquery
+--   mechanism for a dynamic value was tried and FAILS in this single-
+--   statement DDL:
+--     - A correlated CTE column (`bounds.horizon_date` referenced directly
+--       inside the ai_forecast(...) call args) fails with
+--       UNRESOLVED_COLUMN -- ai_forecast is a table-valued function and
+--       cannot see outer-query columns positionally like a scalar UDF can.
+--     - `CROSS JOIN LATERAL ai_forecast(...)` referencing the joined row's
+--       column fails with MISSING_ATTRIBUTES.RESOLVED_ATTRIBUTE_MISSING_
+--       FROM_INPUT -- lateral correlation into a TVF's named arguments is
+--       not supported here.
+--     - `DECLARE VARIABLE` / `SET VAR` session variables do not persist
+--       across the single-statement execution model this file uses (each
+--       CREATE OR REFRESH MATERIALIZED VIEW is its own statement; a `SET
+--       VAR` in a prior statement is UNRESOLVED_VARIABLE in the next).
+--   The scalar subquery form `horizon => (SELECT ...)` is Databricks'
+--   OWN documented pattern for a computed horizon (ai_forecast reference:
+--   `horizon => (SELECT MAX(ds) + INTERVAL 30 DAYS FROM past)`) and is the
+--   only mechanism that both (a) stays dynamic and (b) fits in one DDL
+--   statement. It was verified deployment-valid, not just planner-valid:
+--   `CREATE OR REFRESH MATERIALIZED VIEW` and a subsequent `REFRESH
+--   MATERIALIZED VIEW` both executed successfully against the live
+--   warehouse with this exact horizon expression, and `SHOW CREATE TABLE`
+--   confirmed the subquery is preserved (not literalized) in the stored
+--   view definition -- see reconciliation/validation/
+--   check_forecast_mv_deploys.py, which re-runs this exact
+--   CREATE/REFRESH/DROP sequence against a `_test_`-prefixed copy as a
+--   repeatable gate (`python3 reconciliation/validation/
+--   check_forecast_mv_deploys.py --profile <name> --warehouse-id <id>`).
 -- -----------------------------------------------------------------------------
 CREATE OR REFRESH MATERIALIZED VIEW cdm_tmforum.revenue_assurance.gold_revenue_forecast_anomalies
 COMMENT 'AI-powered time-series anomaly detection on monthly revenue. Trains ai_forecast on all but the trailing 24 months of actuals, so the forecast''s output range overlaps those held-out months (giving them real confidence bounds to compare against) as well as extending 12 months past the last actual for the pure-future forecast scene. Flags held-out months where actual deviates outside the forecast interval. Includes budget variance from gl_budgets.'

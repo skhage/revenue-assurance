@@ -630,19 +630,32 @@ cli = (cli
          .otherwise(F.round(F.col("list_mrr") * (1 - F.col("_negotiated_disc")), 2)))
     .withColumn("_billed_total_amount", F.col("_billed_unit_price") * F.col("Quantity")))
 
+# SOURCE_LINE_ITEM_ID: the contract line's own immutable Id, carried through
+# unchanged so the SQL-side join to this table is 1:1 on a real primary key
+# instead of the (circuit, contract) composite -- which is NOT guaranteed
+# unique (two lines on the same contract can independently hash to the same
+# circuit; see LINES_PER_CONTRACT). SERVICE_CIRCUIT_ID/SOURCE_CONTRACT_ID are
+# kept for evidence drill-down/readability but are no longer the join key.
 billed_rates_out = cli.select(
+    F.col("Id").alias("SOURCE_LINE_ITEM_ID"),
     F.col("Service_Circuit_Id__c").alias("SERVICE_CIRCUIT_ID"),
     F.col("Contract__c").alias("SOURCE_CONTRACT_ID"),
     F.col("_billed_unit_price").alias("BILLED_UNIT_PRICE"),
     F.col("_billed_total_amount").alias("BILLED_TOTAL_AMOUNT"),
     F.lit("Oracle ERP").alias("SOURCE_SYSTEM"))
 
-# --- LEAKAGE GROUND TRUTH (metadata only, NOT read by the reconciliation check) -
+# --- LEAKAGE GROUND TRUTH (raw source-system QA column; NEVER reaches silver
+# or gold) --------------------------------------------------------------------
 # `leakage_flag` records whether the two INDEPENDENTLY-generated prices above
-# actually ended up diverging -- it is derived AFTER both sides exist, purely
-# as informational ground truth for `known_leakage_flag` downstream. It is
-# not an input to either side's generation and the reconciliation SQL does
-# not read it (verified by reconciliation/validation/check_source_independence.py).
+# actually ended up diverging -- derived AFTER both sides exist, purely as an
+# informational marker for validating the demo's seeded scenario coverage
+# (see the "Seeded leakage" self-check at the end of this notebook). It is
+# NOT an input to either side's price generation, and -- per the audit
+# finding that this column must not leak into production reconciliation
+# outputs -- silver_contract_price_reconciliation (reconciliation/pipelines/
+# silver_reconciliation.sql) does not SELECT it at all, so it cannot reach
+# gold_leakage_summary or gold_reconciliation_scorecard either. Verified by
+# reconciliation/validation/check_source_independence.py.
 cli = cli.withColumn(
     "leakage_flag",
     F.when(F.round(F.col("UnitPrice"), 2) != F.round(F.col("_billed_unit_price"), 2), F.lit("price_mismatch"))
@@ -652,13 +665,13 @@ cli = cli.withColumn(
 cli_out = cli.select("Id","Contract__c","AccountId","Product2Id","ProductCode","Service_Circuit_Id__c",
     "Quantity","UnitPrice","TotalPrice","Discount__c","Billing_Frequency__c","bandwidth_mbps","leakage_flag")
 write_table(cli_out, SCHEMA_SFDC, "contract_line_item",
-    "Salesforce custom object Contract_Line_Item__c. One row per contracted circuit/service; UnitPrice is the negotiated source-of-truth MRR, never mutated by leakage injection. `leakage_flag` is ground-truth metadata only (not read by the reconciliation check itself) -- derived after the fact from whether the independently-generated oracle_erp_source.ra_billed_circuit_rates actually diverged.",
+    "Salesforce custom object Contract_Line_Item__c. One row per contracted circuit/service; UnitPrice is the negotiated source-of-truth MRR, never mutated by leakage injection. `leakage_flag` is a raw-source QA/ground-truth column for validating seeded-scenario coverage -- it is NOT read by silver_contract_price_reconciliation and never reaches any silver or gold reconciliation output.",
     {"Id":"Contract line Id (keyPrefix a0L).","Contract__c":"FK to contract.Id.",
      "Service_Circuit_Id__c":"MDM crosswalk to tmf_resource.logical_resource.logical_resource_id (the circuit).",
      "Quantity":"Circuit count on this line (1-4); contract-price exposure is Quantity-aware (TotalPrice, not just UnitPrice).",
      "UnitPrice":"Negotiated monthly price (source of truth for contract-price reconciliation). Never mutated by leakage seeding.",
      "Discount__c":"Negotiated discount percent off list.",
-     "leakage_flag":"DEMO ONLY ground truth: seeded exception marker (price_mismatch) or null. Not read by the reconciliation SQL, which detects the mismatch independently from billed rates."})
+     "leakage_flag":"DEMO ONLY: raw-source ground-truth marker (price_mismatch) or null, for validating seeded-scenario coverage. Not read by any silver/gold reconciliation output -- the reconciliation SQL detects the mismatch independently from billed rates."})
 
 # ---- Opportunity (pipeline; Q4-seasonal close dates) ------------------------
 opp = (acct_lkp

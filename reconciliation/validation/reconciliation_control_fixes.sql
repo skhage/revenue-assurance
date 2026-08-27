@@ -143,23 +143,173 @@ FROM (
 
 
 -- -----------------------------------------------------------------------------
--- CHECK-4: Forecast anomaly view retains pure-future rows (beyond the last
--- actual month) with non-null forecast bounds, and correctly flags at least
--- one held-out historical month as an anomaly (the seeded GL step-change).
+-- CHECK-3b/3c: DETERMINISTIC FIXTURES proving schedule-only and GL-only
+-- invoice detection individually. CHECK-3 above is a live-data statistical
+-- check; it can't prove the full-invoice-universe logic handles a
+-- missing-side invoice correctly unless the live data happens to contain
+-- one (it currently doesn't -- see gate report). These reproduce the EXACT
+-- full-invoice-universe pattern from silver_revenue_recognition_check /
+-- gold_reconciliation_scorecard's rev_rec_by_invoice against a literal
+-- 3-row fixture (VALUES): one clean invoice, one schedule-only invoice (has
+-- a recognition-schedule row, no GL posting), one GL-only invoice (has a GL
+-- posting, no recognition-schedule row). No live table is read.
+-- -----------------------------------------------------------------------------
+WITH mock_invoices AS (
+  SELECT * FROM (VALUES
+    (1, CAST('2025-01-15' AS DATE)),   -- clean: schedule 1000, GL 1000
+    (2, CAST('2025-01-20' AS DATE)),   -- schedule-only: schedule 500, no GL
+    (3, CAST('2025-01-25' AS DATE))    -- GL-only: no schedule, GL 750
+  ) AS t(CUSTOMER_TRX_ID, TRX_DATE)
+),
+mock_recognition AS (
+  SELECT * FROM (VALUES (1, 1000.0), (2, 500.0)) AS t(CUSTOMER_TRX_ID, RECOGNIZED_AMOUNT)
+),
+mock_gl AS (
+  SELECT * FROM (VALUES (1, 1000.0), (3, 750.0)) AS t(CUSTOMER_TRX_ID, gl_posted)
+),
+invoice_level AS (
+  SELECT
+    m.CUSTOMER_TRX_ID,
+    COALESCE(r.RECOGNIZED_AMOUNT, 0) AS recognized_total,
+    COALESCE(g.gl_posted, 0) AS gl_posted
+  FROM mock_invoices m
+  LEFT JOIN mock_recognition r ON r.CUSTOMER_TRX_ID = m.CUSTOMER_TRX_ID
+  LEFT JOIN mock_gl g ON g.CUSTOMER_TRX_ID = m.CUSTOMER_TRX_ID
+)
+SELECT
+  'CHECK-3b schedule-only invoice detected with GL side zero-filled' AS check_name,
+  CASE WHEN schedule_only_recognized = 500.0 AND schedule_only_gl = 0.0
+       AND schedule_only_variance_pct = 100.0
+    THEN 'PASS' ELSE 'FAIL' END AS status,
+  schedule_only_recognized,
+  schedule_only_gl,
+  schedule_only_variance_pct
+FROM (
+  SELECT
+    recognized_total AS schedule_only_recognized,
+    gl_posted AS schedule_only_gl,
+    ROUND(ABS(recognized_total - gl_posted) / NULLIF(GREATEST(recognized_total, gl_posted), 0) * 100, 4)
+      AS schedule_only_variance_pct
+  FROM invoice_level WHERE CUSTOMER_TRX_ID = 2
+);
+
+WITH mock_invoices AS (
+  SELECT * FROM (VALUES
+    (1, CAST('2025-01-15' AS DATE)),
+    (2, CAST('2025-01-20' AS DATE)),
+    (3, CAST('2025-01-25' AS DATE))
+  ) AS t(CUSTOMER_TRX_ID, TRX_DATE)
+),
+mock_recognition AS (
+  SELECT * FROM (VALUES (1, 1000.0), (2, 500.0)) AS t(CUSTOMER_TRX_ID, RECOGNIZED_AMOUNT)
+),
+mock_gl AS (
+  SELECT * FROM (VALUES (1, 1000.0), (3, 750.0)) AS t(CUSTOMER_TRX_ID, gl_posted)
+),
+invoice_level AS (
+  SELECT
+    m.CUSTOMER_TRX_ID,
+    COALESCE(r.RECOGNIZED_AMOUNT, 0) AS recognized_total,
+    COALESCE(g.gl_posted, 0) AS gl_posted
+  FROM mock_invoices m
+  LEFT JOIN mock_recognition r ON r.CUSTOMER_TRX_ID = m.CUSTOMER_TRX_ID
+  LEFT JOIN mock_gl g ON g.CUSTOMER_TRX_ID = m.CUSTOMER_TRX_ID
+)
+SELECT
+  'CHECK-3c GL-only invoice detected with recognized side zero-filled' AS check_name,
+  CASE WHEN gl_only_recognized = 0.0 AND gl_only_gl = 750.0
+       AND gl_only_variance_pct = 100.0
+    THEN 'PASS' ELSE 'FAIL' END AS status,
+  gl_only_recognized,
+  gl_only_gl,
+  gl_only_variance_pct
+FROM (
+  SELECT
+    recognized_total AS gl_only_recognized,
+    gl_posted AS gl_only_gl,
+    ROUND(ABS(recognized_total - gl_posted) / NULLIF(GREATEST(recognized_total, gl_posted), 0) * 100, 4)
+      AS gl_only_variance_pct
+  FROM invoice_level WHERE CUSTOMER_TRX_ID = 3
+);
+
+
+-- -----------------------------------------------------------------------------
+-- CHECK-4 STRENGTHENED: Forecast anomaly view retains pure-future rows
+-- (beyond the last actual month) with non-null forecast bounds, and
+-- correctly flags at least one held-out historical month as an anomaly (the
+-- seeded GL step-change). The prior CHECK-4a/4b only proved "some future
+-- rows exist" and "some anomaly exists" in isolation -- neither proved the
+-- held-out ACTUAL months are the ones carrying forecast bounds (as opposed
+-- to some unrelated coincidence), that the grain is clean (no duplicate
+-- months from the FULL OUTER JOIN silently double-counting), or that a
+-- flagged anomaly month has BOTH sides present (an anomaly derived from a
+-- NULL-vs-something comparison would be a bug, not a real signal).
 -- -----------------------------------------------------------------------------
 SELECT
-  'CHECK-4a forecast retains future rows' AS check_name,
-  CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END AS status,
+  'CHECK-4a forecast retains future rows with real bounds' AS check_name,
+  CASE WHEN COUNT(*) > 0
+       AND SUM(CASE WHEN forecast_upper_bound IS NULL OR forecast_lower_bound IS NULL THEN 1 ELSE 0 END) = 0
+    THEN 'PASS' ELSE 'FAIL' END AS status,
   COUNT(*) AS future_rows_with_forecast
 FROM cdm_tmforum.revenue_assurance.gold_revenue_forecast_anomalies
 WHERE actual_revenue IS NULL AND forecast_revenue IS NOT NULL;
 
+-- CHECK-4b: revenue_month grain is unique -- a FULL OUTER JOIN between
+-- monthly_revenue and forecasted can silently duplicate a month if either
+-- side isn't already deduplicated by month. This is the same DQ-6 assertion
+-- gold_revenue_forecast_anomalies_dq_audit makes in production, re-asserted
+-- here directly against the gold view as an independent check.
 SELECT
-  'CHECK-4b forecast flags at least one real anomaly' AS check_name,
-  CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END AS status,
-  COUNT(*) AS anomaly_months
-FROM cdm_tmforum.revenue_assurance.gold_revenue_forecast_anomalies
-WHERE anomaly_status IN ('ABOVE_EXPECTED', 'BELOW_EXPECTED');
+  'CHECK-4b revenue_month grain is unique' AS check_name,
+  CASE WHEN total_rows = distinct_months THEN 'PASS' ELSE 'FAIL' END AS status,
+  total_rows,
+  distinct_months
+FROM (
+  SELECT COUNT(*) AS total_rows, COUNT(DISTINCT revenue_month) AS distinct_months
+  FROM cdm_tmforum.revenue_assurance.gold_revenue_forecast_anomalies
+);
+
+-- CHECK-4c: held-out actual months actually overlap forecast bounds -- not
+-- just "some future row has bounds" (4a) but specifically that months WITH
+-- a real actual_revenue also carry non-null forecast bounds, proving the
+-- FULL OUTER JOIN's held-out training window genuinely intersects the
+-- forecast's output range (the original bug this branch fixed: the two
+-- ranges never overlapped, so every historical row's bounds were NULL).
+SELECT
+  'CHECK-4c held-out actual months overlap forecast bounds' AS check_name,
+  CASE WHEN actual_months_total > 0 AND actual_months_with_bounds > 0
+    THEN 'PASS' ELSE 'FAIL' END AS status,
+  actual_months_total,
+  actual_months_with_bounds
+FROM (
+  SELECT
+    COUNT(*) AS actual_months_total,
+    SUM(CASE WHEN forecast_upper_bound IS NOT NULL AND forecast_lower_bound IS NOT NULL THEN 1 ELSE 0 END)
+      AS actual_months_with_bounds
+  FROM cdm_tmforum.revenue_assurance.gold_revenue_forecast_anomalies
+  WHERE actual_revenue IS NOT NULL
+);
+
+-- CHECK-4d: every flagged anomaly month has BOTH actual_revenue and forecast
+-- bounds present (an "aligned" row) -- proving anomaly_status is derived
+-- from a genuine actual-vs-forecast comparison, not a NULL-safety fallthrough
+-- or a coincidental comparison against an unrelated row.
+SELECT
+  'CHECK-4d anomalies arise from aligned actual/forecast rows' AS check_name,
+  CASE WHEN anomaly_months > 0 AND anomaly_months = aligned_anomaly_months
+    THEN 'PASS' ELSE 'FAIL' END AS status,
+  anomaly_months,
+  aligned_anomaly_months
+FROM (
+  SELECT
+    COUNT(*) AS anomaly_months,
+    SUM(CASE
+      WHEN actual_revenue IS NOT NULL AND forecast_upper_bound IS NOT NULL AND forecast_lower_bound IS NOT NULL
+      THEN 1 ELSE 0
+    END) AS aligned_anomaly_months
+  FROM cdm_tmforum.revenue_assurance.gold_revenue_forecast_anomalies
+  WHERE anomaly_status IN ('ABOVE_EXPECTED', 'BELOW_EXPECTED')
+);
 
 
 -- -----------------------------------------------------------------------------

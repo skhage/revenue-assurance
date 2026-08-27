@@ -63,7 +63,7 @@ SELECT
   estimated_amount_at_risk AS amount_at_risk,
   'oracle_erp_source.ra_billed_circuit_rates' AS source_table,
   detection_method,
-  CAST(known_leakage_flag IS NOT NULL AS BOOLEAN) AS known_leakage_flag,
+  FALSE AS known_leakage_flag,
   ContractNumber AS reference_id
 FROM silver_contract_price_reconciliation
 WHERE leakage_flag IS NOT NULL
@@ -250,30 +250,46 @@ collection_check AS (
   FROM silver_ar_aging_analysis
   GROUP BY customer_id
 ),
--- Revenue-recognition accuracy per customer: compares each of the customer's
--- invoices at INVOICE grain (full schedule total vs that invoice's GL
--- posting) -- the same compatible-grain fix applied to the silver check,
--- just rolled up per customer instead of per period.
+-- Revenue-recognition accuracy per customer, built from the SAME full
+-- invoice universe as silver_revenue_recognition_check (reconciliation/
+-- pipelines/silver_reconciliation.sql) -- not a re-derivation with its own
+-- (looser) join. FULL-UNIVERSE FIX: this CTE previously INNER JOINed
+-- revenue_recognition_schedule to ra_customer_trx_all, so a GL-only invoice
+-- (GL posting exists, no recognition-schedule rows) would be silently
+-- absent from this customer rollup even after the silver check itself was
+-- fixed to include it -- the scorecard and the silver check would disagree
+-- on which invoices count. Fixed by starting from ra_customer_trx_all (the
+-- full invoice universe) and LEFT JOINing per-invoice schedule/GL totals
+-- with the missing side COALESCEd to 0, exactly mirroring silver's
+-- `invoice_level` CTE.
+invoice_recognition AS (
+  SELECT
+    CUSTOMER_TRX_ID,
+    SUM(RECOGNIZED_AMOUNT) AS recognized_total
+  FROM oracle_erp_source.revenue_recognition_schedule
+  GROUP BY CUSTOMER_TRX_ID
+),
+invoice_gl AS (
+  SELECT
+    h.CUSTOMER_TRX_ID,
+    SUM(l.ENTERED_CR) AS gl_posted
+  FROM oracle_erp_source.gl_je_lines l
+  JOIN oracle_erp_source.gl_je_headers h ON l.JE_HEADER_ID = h.JE_HEADER_ID
+  JOIN oracle_erp_source.gl_code_combinations cc ON l.CODE_COMBINATION_ID = cc.CODE_COMBINATION_ID
+  WHERE cc.ACCOUNT = '4000'
+  GROUP BY h.CUSTOMER_TRX_ID
+),
 rev_rec_by_invoice AS (
   SELECT
     t.CUSTOMER_TRX_ID,
     hz.TMF_CUSTOMER_ID AS customer_id,
-    SUM(r.RECOGNIZED_AMOUNT) AS invoice_recognized_total,
-    MAX(gl.gl_posted) AS invoice_gl_posted
-  FROM oracle_erp_source.revenue_recognition_schedule r
-  JOIN oracle_erp_source.ra_customer_trx_all t
-    ON t.CUSTOMER_TRX_ID = r.CUSTOMER_TRX_ID
+    COALESCE(ir.recognized_total, 0) AS invoice_recognized_total,
+    COALESCE(ig.gl_posted, 0) AS invoice_gl_posted
+  FROM oracle_erp_source.ra_customer_trx_all t
   LEFT JOIN oracle_erp_source.hz_cust_accounts hz
     ON t.BILL_TO_CUSTOMER_ID = hz.CUST_ACCOUNT_ID
-  LEFT JOIN (
-    SELECT h.CUSTOMER_TRX_ID, SUM(l.ENTERED_CR) AS gl_posted
-    FROM oracle_erp_source.gl_je_lines l
-    JOIN oracle_erp_source.gl_je_headers h ON l.JE_HEADER_ID = h.JE_HEADER_ID
-    JOIN oracle_erp_source.gl_code_combinations cc ON l.CODE_COMBINATION_ID = cc.CODE_COMBINATION_ID
-    WHERE cc.ACCOUNT = '4000'
-    GROUP BY h.CUSTOMER_TRX_ID
-  ) gl ON gl.CUSTOMER_TRX_ID = t.CUSTOMER_TRX_ID
-  GROUP BY t.CUSTOMER_TRX_ID, hz.TMF_CUSTOMER_ID
+  LEFT JOIN invoice_recognition ir ON ir.CUSTOMER_TRX_ID = t.CUSTOMER_TRX_ID
+  LEFT JOIN invoice_gl ig ON ig.CUSTOMER_TRX_ID = t.CUSTOMER_TRX_ID
 ),
 rev_rec_check AS (
   SELECT

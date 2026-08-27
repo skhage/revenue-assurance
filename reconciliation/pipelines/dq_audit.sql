@@ -148,9 +148,65 @@ scorecard_uniqueness_check AS (
     CASE WHEN observed_records = unique_records THEN 'GREEN' ELSE 'RED' END AS status,
     'row_count = count(distinct customer_id)' AS expected_condition
   FROM scorecard_counts
+),
+-- DQ-2 (set-level half): SOURCE_LINE_ITEM_ID must be a genuine primary key on
+-- ra_billed_circuit_rates, or the 1:1 join in silver_contract_price_reconciliation
+-- degrades back into a many-to-many fan-out. Row-level EXPECT clauses cannot
+-- express uniqueness (no aggregates), so this lives here alongside DQ-5.
+billed_rate_key_counts AS (
+  SELECT
+    COUNT(*) AS observed_records,
+    COUNT(DISTINCT SOURCE_LINE_ITEM_ID) AS unique_records
+  FROM oracle_erp_source.ra_billed_circuit_rates
+),
+billed_rate_key_uniqueness_check AS (
+  SELECT
+    'DQ-2' AS check_type,
+    'oracle_erp_source.ra_billed_circuit_rates' AS dataset,
+    'dq2_source_line_item_id_unique' AS expectation_name,
+    CAST(NULL AS STRING) AS update_id,
+    CAST(NULL AS TIMESTAMP) AS observed_at,
+    observed_records,
+    unique_records AS passed_records,
+    observed_records - unique_records AS failed_records,
+    CASE WHEN observed_records = unique_records THEN 'GREEN' ELSE 'RED' END AS status,
+    'row_count = count(distinct SOURCE_LINE_ITEM_ID)' AS expected_condition
+  FROM billed_rate_key_counts
+),
+-- DQ-2 (set-level half): silver_contract_price_reconciliation must emit
+-- exactly one row per contract line -- the row-level line_item_match_count
+-- expectation catches a fan-out that DOES happen, but this independently
+-- proves the silver MV's total row count equals contract_line_item's row
+-- count (i.e. the join dropped nothing AND duplicated nothing).
+price_recon_grain_counts AS (
+  SELECT
+    (SELECT COUNT(*) FROM silver_contract_price_reconciliation) AS observed_records,
+    (SELECT COUNT(DISTINCT line_item_id) FROM silver_contract_price_reconciliation) AS unique_line_items,
+    (SELECT COUNT(*) FROM salesforce_source.contract_line_item) AS contract_line_item_count
+),
+price_recon_grain_check AS (
+  SELECT
+    'DQ-2' AS check_type,
+    'silver_contract_price_reconciliation' AS dataset,
+    'dq2_exactly_one_row_per_contract_line' AS expectation_name,
+    CAST(NULL AS STRING) AS update_id,
+    CAST(NULL AS TIMESTAMP) AS observed_at,
+    observed_records,
+    unique_line_items AS passed_records,
+    observed_records - unique_line_items AS failed_records,
+    CASE
+      WHEN observed_records = unique_line_items AND observed_records = contract_line_item_count
+      THEN 'GREEN' ELSE 'RED'
+    END AS status,
+    'row_count = count(distinct line_item_id) = contract_line_item row_count' AS expected_condition
+  FROM price_recon_grain_counts
 )
 SELECT * FROM inline_expectation_checks
 UNION ALL
 SELECT * FROM source_volume_checks
 UNION ALL
-SELECT * FROM scorecard_uniqueness_check;
+SELECT * FROM scorecard_uniqueness_check
+UNION ALL
+SELECT * FROM billed_rate_key_uniqueness_check
+UNION ALL
+SELECT * FROM price_recon_grain_check;
