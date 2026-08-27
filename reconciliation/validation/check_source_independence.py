@@ -108,6 +108,30 @@ def check_price_reconciliation_independence(sql: str) -> None:
             "stayed 1:1 (DQ-2's dq2_one_to_one_join constraint) is missing"
         )
 
+    # FULL-SIDED: must be a FULL OUTER JOIN (not LEFT/INNER) so a
+    # Salesforce-only or ERP-only record survives, and must publish an
+    # explicit 4-way reconciliation_status rather than a bare boolean.
+    if "FULL OUTER JOIN" not in body:
+        FAILURES.append(
+            "silver_contract_price_reconciliation does not use a FULL OUTER "
+            "JOIN -- a LEFT/INNER join would silently drop ERP-only or "
+            "Salesforce-only records instead of retaining them as MISSING_* rows"
+        )
+    for required_status in ("'MATCHED'", "'MISMATCH'", "'MISSING_ERP'", "'MISSING_SALESFORCE'"):
+        if required_status not in body:
+            FAILURES.append(
+                f"silver_contract_price_reconciliation is missing the "
+                f"{required_status} outcome -- reconciliation_status must "
+                "cover all four explicit statuses"
+            )
+    if "estimated_amount_at_risk IS NOT NULL" not in body:
+        FAILURES.append(
+            "silver_contract_price_reconciliation's DQ-2 no longer asserts "
+            "estimated_amount_at_risk IS NOT NULL -- exposure must be "
+            "non-null for every reconciliation_status, including the "
+            "missing-side outcomes"
+        )
+
 
 def check_fx_validation_independence(sql: str) -> None:
     """silver_fx_rate_validation must compare an applied rate to the market
@@ -136,6 +160,21 @@ def check_fx_validation_independence(sql: str) -> None:
             "appears to have been removed"
         )
 
+    # EXPLICIT EXCEPTION STATUSES: a missing market rate or a missing
+    # applied rate must be their OWN status, not a silent FALSE/clean
+    # fallthrough indistinguishable from "checked and matched".
+    for required_status in ("'MISSING_MARKET_RATE'", "'MISSING_APPLIED_RATE'", "'MATCHED'"):
+        if required_status not in body:
+            FAILURES.append(
+                f"silver_fx_rate_validation is missing the {required_status} "
+                "fx_validation_status outcome"
+            )
+    if "fx_validation_status" not in body:
+        FAILURES.append(
+            "silver_fx_rate_validation does not publish an explicit "
+            "fx_validation_status column"
+        )
+
 
 def check_billed_price_generation_independence(py_source: str) -> None:
     """oracle_erp_source.ra_billed_circuit_rates (BILLED_UNIT_PRICE) must not
@@ -143,20 +182,14 @@ def check_billed_price_generation_independence(py_source: str) -> None:
     re-derived from the shared stable business parameters (list_mrr, the
     negotiated discount fraction) with its own independent leakage draw."""
     match = re.search(
-        r"billed_rates_out\s*=\s*cli\.select\(.*?\)\)",
+        r"# ---- Independent ERP-side.*?billed_rates_out = billed_rates_out\.unionByName\(missing_sfdc_rates\)",
         py_source,
         re.DOTALL,
     )
     if not match:
-        # Fall back to a looser window around the billed-rate computation.
-        match = re.search(
-            r"# ---- Independent ERP-side.*?billed_rates_out = cli\.select\(.*?\)\)",
-            py_source,
-            re.DOTALL,
-        )
-    if not match:
         FAILURES.append(
-            "billed_rates_out computation not found in simulate_source_systems.py"
+            "billed_rates_out computation (including missing-side injection) "
+            "not found in simulate_source_systems.py"
         )
         return
 
@@ -312,6 +345,47 @@ def check_scorecard_revrec_full_universe(gold_sql: str) -> None:
         )
 
 
+def check_rev_rec_risk_amount_exception_consistency(gold_sql: str) -> None:
+    """rev_rec_risk_amount must sum variance only for invoices that breach
+    the 5% material-timing threshold, matching rev_rec_exceptions' count --
+    not SUM(ABS(...)) over every invoice regardless of materiality (the
+    same class of bug fixed for ar_risk_amount elsewhere in this file)."""
+    match = re.search(r"rev_rec_check AS \(.*?\n\),\n", gold_sql, re.DOTALL)
+    if not match:
+        FAILURES.append("rev_rec_check CTE not found in gold_aggregation.sql")
+        return
+    body = match.group(0)
+
+    # The naive (bug) form: SUM(ABS(invoice_recognized_total - invoice_gl_posted))
+    # with no surrounding CASE WHEN threshold guard.
+    naive_form = re.search(
+        r"SUM\(ABS\(invoice_recognized_total - invoice_gl_posted\)\) AS rev_rec_risk_amount",
+        body,
+    )
+    if naive_form:
+        FAILURES.append(
+            "rev_rec_check computes rev_rec_risk_amount as a naive "
+            "SUM(ABS(...)) over every invoice -- it must sum only "
+            "invoices that breach the 5% material-timing threshold, "
+            "consistent with rev_rec_exceptions' count"
+        )
+    if "rev_rec_risk_amount" in body and not naive_form:
+        # Must have a CASE WHEN ... > 0.05 THEN ABS(...) ELSE 0 END guard.
+        guarded_form = re.search(
+            r"CASE\s+WHEN\s+ABS\(invoice_recognized_total - invoice_gl_posted\)\s*"
+            r"/\s*NULLIF\(GREATEST\(invoice_recognized_total, invoice_gl_posted\), 0\)\s*>\s*0\.05\s+"
+            r"THEN\s+ABS\(invoice_recognized_total - invoice_gl_posted\)\s+ELSE\s+0\s*\n\s*"
+            r"END\)\s*AS\s+rev_rec_risk_amount",
+            body,
+        )
+        if not guarded_form:
+            FAILURES.append(
+                "rev_rec_check's rev_rec_risk_amount does not appear to be "
+                "guarded by the same > 0.05 threshold CASE WHEN used for "
+                "rev_rec_exceptions"
+            )
+
+
 def main() -> int:
     sql = SILVER_RECON.read_text()
     check_price_reconciliation_independence(sql)
@@ -321,6 +395,7 @@ def main() -> int:
     gold_sql = (REPO_ROOT / "reconciliation" / "pipelines" / "gold_aggregation.sql").read_text()
     check_gold_leakage_flag_removed(gold_sql)
     check_scorecard_revrec_full_universe(gold_sql)
+    check_rev_rec_risk_amount_exception_consistency(gold_sql)
 
     py_source = DATA_SIM.read_text()
     check_billed_price_generation_independence(py_source)

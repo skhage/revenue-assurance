@@ -34,58 +34,69 @@
 -- -----------------------------------------------------------------------------
 -- Contract Price Reconciliation
 -- Contracted UnitPrice (Salesforce, the negotiated source of truth) vs actual
--- billed unit price (Oracle ERP's independent circuit-rate extract). Detects
--- price_mismatch where the two systems disagree on what a circuit costs.
+-- billed unit price (Oracle ERP's independent circuit-rate extract).
 --
--- ONE-TO-ONE JOIN: joins on billed.SOURCE_LINE_ITEM_ID = cli.Id -- the
---   contract line's own immutable primary key, carried through unchanged
---   into ra_billed_circuit_rates by the simulator. The PRIOR join on
---   (SERVICE_CIRCUIT_ID, SOURCE_CONTRACT_ID) was many-to-many: two lines on
---   the same contract can independently hash to the same circuit
---   (Service_Circuit_Id__c is drawn by hashing the line's own key modulo the
---   circuit count), so that composite is not a candidate key and could fan
---   out a single contract line into multiple priced rows. DQ-2 now also
---   enforces exactly one billed row matched per contract line (see
+-- FULL-SIDED: joins salesforce_source.contract_line_item to
+--   oracle_erp_source.ra_billed_circuit_rates with a FULL OUTER JOIN on the
+--   contract line's own immutable id (SOURCE_LINE_ITEM_ID = cli.Id), so a
+--   contract line with no matching ERP rate (MISSING_ERP) and an ERP rate
+--   with no matching contract line (MISSING_SALESFORCE, e.g. a migration
+--   artifact) BOTH survive as rows, instead of one side silently
+--   disappearing under a LEFT/INNER JOIN. Every row publishes an explicit
+--   `reconciliation_status` in {MATCHED, MISMATCH, MISSING_ERP,
+--   MISSING_SALESFORCE} -- never a bare boolean or a NULL-shaped "clean"
+--   fallthrough that's indistinguishable from "nothing to compare".
+--
+-- ONE-TO-ONE JOIN: SOURCE_LINE_ITEM_ID is the contract line's own primary
+--   key, carried through unchanged into ra_billed_circuit_rates by the
+--   simulator. The PRIOR join on (SERVICE_CIRCUIT_ID, SOURCE_CONTRACT_ID)
+--   was many-to-many: two lines on the same contract can independently hash
+--   to the same circuit (Service_Circuit_Id__c is drawn by hashing the
+--   line's own key modulo the circuit count), so that composite was not a
+--   candidate key. DQ-2 enforces exactly one match per side (see
 --   dq2_one_to_one_join below) and dq_audit.sql independently asserts
 --   SOURCE_LINE_ITEM_ID uniqueness in ra_billed_circuit_rates itself.
 --
 -- INDEPENDENCE: this check reads NO simulator ground-truth/leakage column.
 --   contract_line_item carries no leakage marker into this pipeline at all;
---   `price_mismatch_pct` and `reconciliation_status` below are derived
---   purely by comparing contracted_price to billed_unit_price, two
---   independently generated cross-system values (see
+--   `price_mismatch_pct` is derived purely by comparing contracted_price to
+--   billed_unit_price, two independently generated cross-system values (see
 --   data-sim/simulate_source_systems.py, where the billed side is re-derived
 --   from list_mrr + the negotiated discount fraction with its OWN leakage
 --   draw, never reading contract_line_item.UnitPrice). A >1% relative
---   divergence is what flags the row, matching how a real price audit
---   would work.
+--   divergence is what flags a MATCHED row as a MISMATCH.
 --
--- QUANTITY-AWARE EXPOSURE: `estimated_amount_at_risk` is the dollar exposure
---   of the mismatch, so it must scale with Quantity (a line covering 4
---   circuits carries 4x the dollar exposure of an identical per-unit
---   mismatch on 1 circuit). `price_mismatch_pct` stays a per-unit percentage
---   (the detection threshold) while the dollar amount compares
---   contracted_total vs billed_total (each price * Quantity).
+-- QUANTITY-AWARE EXPOSURE: `estimated_amount_at_risk` is the dollar exposure,
+--   so it scales with Quantity (a line covering 4 circuits carries 4x the
+--   dollar exposure of an identical per-unit mismatch on 1 circuit).
+--   `price_mismatch_pct` stays a per-unit percentage (the MISMATCH
+--   threshold) while the dollar amount compares contracted_total vs
+--   billed_total. NON-NULL SEMANTICS: estimated_amount_at_risk and
+--   price_mismatch_pct are never NULL for any status -- a MISSING_ERP row's
+--   exposure is its full contracted_total (the entire committed revenue is
+--   at risk if the ERP never billed it); a MISSING_SALESFORCE row's
+--   exposure is its full billed_total (ERP is charging for something with
+--   no contract on file); MATCHED/MISMATCH compare both sides as before.
 --
--- DQ-2: customer_id resolvable; billed rate present; amount at risk
---   non-negative; and the join produced at most one billed match per line
---   (the row-level signature of a 1:1 join -- a true fan-out would emit
---   duplicate line_item_id rows, which COUNT(*) OVER(...) here catches).
---   Action: warn (default, no ON VIOLATION) — invalid rows are still written
---   and surface in the event log, which is the point: the demo shows the
---   breach rather than silently hiding it.
+-- DQ-2: customer_id resolvable for rows with a Salesforce side; amount at
+--   risk non-negative and never NULL; and the join produced at most one
+--   match per side (the row-level signature of a 1:1 join -- a true
+--   fan-out would emit duplicate line_item_id rows, which COUNT(*)
+--   OVER(...) here catches). Action: warn (default, no ON VIOLATION) —
+--   invalid rows are still written and surface in the event log, which is
+--   the point: the demo shows the breach rather than silently hiding it.
 -- -----------------------------------------------------------------------------
 CREATE OR REFRESH MATERIALIZED VIEW silver_contract_price_reconciliation (
-  CONSTRAINT dq2_customer_id_resolvable
-    EXPECT (customer_id IS NOT NULL),
-  CONSTRAINT dq2_billed_rate_resolvable
-    EXPECT (billed_unit_price IS NOT NULL),
+  CONSTRAINT dq2_amount_at_risk_present
+    EXPECT (estimated_amount_at_risk IS NOT NULL),
   CONSTRAINT dq2_amount_at_risk_non_negative
     EXPECT (estimated_amount_at_risk >= 0),
+  CONSTRAINT dq2_reconciliation_status_in_known_set
+    EXPECT (reconciliation_status IN ('MATCHED', 'MISMATCH', 'MISSING_ERP', 'MISSING_SALESFORCE')),
   CONSTRAINT dq2_one_to_one_join
-    EXPECT (line_item_match_count <= 1)
+    EXPECT (line_item_match_count <= 1 AND billed_rate_match_count <= 1)
 )
-COMMENT 'Compares contracted circuit prices (salesforce_source.contract_line_item.UnitPrice, the negotiated source of truth) against the independently-derived billed unit price (oracle_erp_source.ra_billed_circuit_rates), joined 1:1 on the contract line''s own immutable id (SOURCE_LINE_ITEM_ID). Flags price_mismatch where the two systems disagree by more than 1% per unit; estimated_amount_at_risk is the Quantity-scaled dollar exposure (contracted_total vs billed_total), not just the per-unit difference.'
+COMMENT 'Full-sided comparison of contracted circuit prices (salesforce_source.contract_line_item.UnitPrice, the negotiated source of truth) against the independently-derived billed unit price (oracle_erp_source.ra_billed_circuit_rates), FULL OUTER JOINed 1:1 on the contract line''s own immutable id (SOURCE_LINE_ITEM_ID). Publishes an explicit reconciliation_status in {MATCHED, MISMATCH, MISSING_ERP, MISSING_SALESFORCE}; estimated_amount_at_risk is always non-null and Quantity-scaled.'
 AS
 WITH contract_lines AS (
   SELECT
@@ -103,24 +114,57 @@ WITH contract_lines AS (
   JOIN salesforce_source.contract c
     ON cli.Contract__c = c.Id
 ),
--- price_mismatch_pct and the quantity-aware totals computed exactly once;
--- every downstream flag reads them back instead of re-deriving the
--- ABS(...)/NULLIF(...) expression. line_item_match_count proves the join
--- stayed 1:1: a real fan-out would make this > 1 for the affected line.
-priced AS (
+billed_rates AS (
   SELECT
-    cl.*,
-    billed.BILLED_UNIT_PRICE AS billed_unit_price,
-    COALESCE(billed.BILLED_TOTAL_AMOUNT, billed.BILLED_UNIT_PRICE * cl.Quantity) AS billed_total,
-    ABS(cl.contracted_price - billed.BILLED_UNIT_PRICE)
-      / NULLIF(cl.contracted_price, 0) AS price_mismatch_pct,
+    SOURCE_LINE_ITEM_ID,
+    BILLED_UNIT_PRICE,
+    COALESCE(BILLED_TOTAL_AMOUNT, BILLED_UNIT_PRICE) AS BILLED_TOTAL_AMOUNT,
+    COUNT(*) OVER (PARTITION BY SOURCE_LINE_ITEM_ID) AS billed_rate_match_count
+  FROM oracle_erp_source.ra_billed_circuit_rates
+),
+-- FULL OUTER JOIN so a Salesforce-only line (no billed row) and an ERP-only
+-- rate (no contract line) both survive. line_item_match_count is computed
+-- over contract_lines alone (before the join) since a Salesforce-only line
+-- can't fan out via the join it isn't part of on that side.
+joined AS (
+  SELECT
+    cl.line_item_id,
+    cl.contract_id,
+    cl.ContractNumber,
+    cl.Service_Circuit_Id__c,
+    cl.ProductCode,
+    cl.Quantity,
+    cl.contracted_price,
+    cl.contracted_total,
+    cl.AccountId,
+    cl.customer_id,
+    br.SOURCE_LINE_ITEM_ID AS billed_line_item_id,
+    br.BILLED_UNIT_PRICE AS billed_unit_price,
+    br.BILLED_TOTAL_AMOUNT AS billed_total,
+    COALESCE(br.billed_rate_match_count, 0) AS billed_rate_match_count,
     COUNT(*) OVER (PARTITION BY cl.line_item_id) AS line_item_match_count
   FROM contract_lines cl
-  LEFT JOIN oracle_erp_source.ra_billed_circuit_rates billed
-    ON billed.SOURCE_LINE_ITEM_ID = cl.line_item_id
+  FULL OUTER JOIN billed_rates br
+    ON br.SOURCE_LINE_ITEM_ID = cl.line_item_id
+),
+priced AS (
+  SELECT
+    j.*,
+    -- price_mismatch_pct is only meaningful when both sides are present;
+    -- NULL here is fine (it's an internal working column, not published
+    -- directly) since reconciliation_status/estimated_amount_at_risk below
+    -- are always non-null regardless of this value.
+    ABS(j.contracted_price - j.billed_unit_price) / NULLIF(j.contracted_price, 0) AS price_mismatch_pct,
+    CASE
+      WHEN j.line_item_id IS NULL THEN 'MISSING_SALESFORCE'
+      WHEN j.billed_line_item_id IS NULL THEN 'MISSING_ERP'
+      WHEN ABS(j.contracted_price - j.billed_unit_price) / NULLIF(j.contracted_price, 0) > 0.01 THEN 'MISMATCH'
+      ELSE 'MATCHED'
+    END AS reconciliation_status
+  FROM joined j
 )
 SELECT
-  p.line_item_id,
+  COALESCE(p.line_item_id, p.billed_line_item_id) AS line_item_id,
   p.contract_id,
   p.ContractNumber,
   p.Service_Circuit_Id__c,
@@ -131,13 +175,21 @@ SELECT
   p.billed_unit_price,
   p.billed_total,
   p.line_item_match_count,
+  p.billed_rate_match_count,
   p.customer_id,
   a.Name AS account_name,
   xw.SOURCE_PARTY_ID AS salesforce_account_id,
   p.price_mismatch_pct,
-  CASE WHEN p.price_mismatch_pct > 0.01 THEN 'price_mismatch' ELSE NULL END AS leakage_flag,
-  CASE WHEN p.price_mismatch_pct > 0.01 THEN 'LEAKAGE_CONFIRMED' ELSE 'CLEAN' END AS reconciliation_status,
-  ABS(p.contracted_total - p.billed_total) AS estimated_amount_at_risk,
+  p.reconciliation_status,
+  -- NON-NULL EXPOSURE: MATCHED/MISMATCH compare both totals; a
+  -- MISSING_ERP row's full contracted commitment is at risk (never
+  -- billed); a MISSING_SALESFORCE row's full billed amount is at risk
+  -- (billed with no contract backing it). Never NULL.
+  CASE p.reconciliation_status
+    WHEN 'MISSING_ERP' THEN p.contracted_total
+    WHEN 'MISSING_SALESFORCE' THEN p.billed_total
+    ELSE ABS(p.contracted_total - p.billed_total)
+  END AS estimated_amount_at_risk,
   'rule_based' AS detection_method
 FROM priced p
 LEFT JOIN salesforce_source.account a
@@ -208,23 +260,38 @@ LEFT JOIN salesforce_source.account a
 -- (oracle_erp_source.ra_customer_trx_all.APPLIED_EXCHANGE_RATE) matches the
 -- Refinitiv market rate for that currency/date. Flags > 1% deviation.
 --
+-- EXPLICIT EXCEPTION STATUSES: a missing market rate (no Refinitiv quote for
+--   that currency/date) or a missing applied rate previously fell through to
+--   rate_deviation_flag = FALSE -- indistinguishable from "checked and
+--   clean". Both are now their own status: MISSING_MARKET_RATE (no
+--   Refinitiv row for that currency/date -- can't validate at all, which is
+--   itself worth flagging, not silently passing) and MISSING_APPLIED_RATE
+--   (a non-USD invoice with no APPLIED_EXCHANGE_RATE value on record --
+--   itself a data-completeness exception). `fx_validation_status` is one of
+--   MATCHED, DEVIATION, MISSING_MARKET_RATE, MISSING_APPLIED_RATE,
+--   NOT_APPLICABLE (USD invoices, which have nothing to convert).
+--
 -- INDEPENDENCE: both sides come from data-sim, but through unrelated formulas
 --   (see simulate_source_systems.py) — APPLIED_EXCHANGE_RATE is not copied
 --   from CONVERSION_RATE, so a real divergence must be injected for the two to
---   differ. USD invoices carry APPLIED_EXCHANGE_RATE = 1.0 and are excluded
---   from the deviation flag (there's no conversion to validate).
+--   differ. USD invoices carry APPLIED_EXCHANGE_RATE = 1.0 and are
+--   NOT_APPLICABLE (there is no conversion to validate).
 --
--- DQ: a matched market rate must be positive. A NULL rate means no Refinitiv
---   quote for that currency/date — legitimate and worth seeing, so this warns
---   rather than drops.
+-- DQ: a matched market rate must be positive; fx_validation_status must be
+--   one of the known statuses (row-level proof the CASE above is
+--   exhaustive -- no invoice should fall through with an unrecognized
+--   status).
 -- -----------------------------------------------------------------------------
 CREATE OR REFRESH MATERIALIZED VIEW silver_fx_rate_validation (
   CONSTRAINT dq_market_rate_positive
     EXPECT (market_rate IS NULL OR market_rate > 0),
   CONSTRAINT dq_invoice_currency_present
-    EXPECT (INVOICE_CURRENCY_CODE IS NOT NULL)
+    EXPECT (INVOICE_CURRENCY_CODE IS NOT NULL),
+  CONSTRAINT dq_fx_validation_status_in_known_set
+    EXPECT (fx_validation_status IN
+      ('MATCHED', 'DEVIATION', 'MISSING_MARKET_RATE', 'MISSING_APPLIED_RATE', 'NOT_APPLICABLE'))
 )
-COMMENT 'Validates the FX rate billing actually applied to non-USD invoices (ra_customer_trx_all.APPLIED_EXCHANGE_RATE) against the independently-sourced Refinitiv market rate for that currency/date. Flags conversions deviating > 1% from market.'
+COMMENT 'Validates the FX rate billing actually applied to non-USD invoices (ra_customer_trx_all.APPLIED_EXCHANGE_RATE) against the independently-sourced Refinitiv market rate for that currency/date. Publishes an explicit fx_validation_status in {MATCHED, DEVIATION, MISSING_MARKET_RATE, MISSING_APPLIED_RATE, NOT_APPLICABLE} -- a missing rate on either side is its own exception, never a silent clean fallthrough.'
 AS
 SELECT
   trx.CUSTOMER_TRX_ID,
@@ -239,7 +306,18 @@ SELECT
   ABS(trx.APPLIED_EXCHANGE_RATE - fx.CONVERSION_RATE)
     / NULLIF(fx.CONVERSION_RATE, 0) AS rate_deviation_pct,
   CASE
+    WHEN trx.INVOICE_CURRENCY_CODE = 'USD' THEN 'NOT_APPLICABLE'
+    WHEN trx.APPLIED_EXCHANGE_RATE IS NULL THEN 'MISSING_APPLIED_RATE'
+    WHEN fx.CONVERSION_RATE IS NULL THEN 'MISSING_MARKET_RATE'
+    WHEN ABS(trx.APPLIED_EXCHANGE_RATE - fx.CONVERSION_RATE) / NULLIF(fx.CONVERSION_RATE, 0) > 0.01 THEN 'DEVIATION'
+    ELSE 'MATCHED'
+  END AS fx_validation_status,
+  -- rate_deviation_flag kept (renamed semantics unchanged) for backward
+  -- compatibility with any existing consumer of the boolean; DEVIATION is
+  -- the authoritative signal going forward.
+  CASE
     WHEN trx.INVOICE_CURRENCY_CODE != 'USD'
+      AND trx.APPLIED_EXCHANGE_RATE IS NOT NULL AND fx.CONVERSION_RATE IS NOT NULL
       AND ABS(trx.APPLIED_EXCHANGE_RATE - fx.CONVERSION_RATE) / NULLIF(fx.CONVERSION_RATE, 0) > 0.01
     THEN TRUE
     ELSE FALSE

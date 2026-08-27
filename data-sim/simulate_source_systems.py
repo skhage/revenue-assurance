@@ -636,13 +636,49 @@ cli = (cli
 # unique (two lines on the same contract can independently hash to the same
 # circuit; see LINES_PER_CONTRACT). SERVICE_CIRCUIT_ID/SOURCE_CONTRACT_ID are
 # kept for evidence drill-down/readability but are no longer the join key.
-billed_rates_out = cli.select(
-    F.col("Id").alias("SOURCE_LINE_ITEM_ID"),
-    F.col("Service_Circuit_Id__c").alias("SERVICE_CIRCUIT_ID"),
-    F.col("Contract__c").alias("SOURCE_CONTRACT_ID"),
-    F.col("_billed_unit_price").alias("BILLED_UNIT_PRICE"),
-    F.col("_billed_total_amount").alias("BILLED_TOTAL_AMOUNT"),
-    F.lit("Oracle ERP").alias("SOURCE_SYSTEM"))
+#
+# MISSING-SIDE INJECTION: a real cross-system reconciliation must handle
+# records that exist on only ONE side (a contract signed but never billed;
+# an ERP rate booked with no matching contract line -- e.g. a
+# migration/backfill artifact). Each is drawn with its own independent salt,
+# unrelated to the price-mismatch leakage draw above, so "missing" is a
+# distinct exception category, not a side effect of the price check.
+#   - MISSING_ERP: the contract line exists in Salesforce but this row is
+#     dropped from the ERP-side extract entirely (filtered out below).
+#   - MISSING_SALESFORCE: injected as EXTRA synthetic billed-rate rows keyed
+#     to a SOURCE_LINE_ITEM_ID that does not exist in contract_line_item --
+#     representing an ERP-side rate record with no corresponding contract
+#     line (e.g. never migrated into the CRM, or the CRM line was deleted).
+_missing_erp_rate = float(CFG.get("missing_side_rate", 0.02))  # ~2% each direction
+cli = cli.withColumn("_missing_erp", rand_of(F.col("lseq"))("missing_erp") < _missing_erp_rate)
+
+billed_rates_out = (cli
+    .filter(~F.col("_missing_erp"))  # MISSING_ERP: contract line has no billed-rate row at all
+    .select(
+        F.col("Id").alias("SOURCE_LINE_ITEM_ID"),
+        F.col("Service_Circuit_Id__c").alias("SERVICE_CIRCUIT_ID"),
+        F.col("Contract__c").alias("SOURCE_CONTRACT_ID"),
+        F.col("_billed_unit_price").alias("BILLED_UNIT_PRICE"),
+        F.col("_billed_total_amount").alias("BILLED_TOTAL_AMOUNT"),
+        F.lit("Oracle ERP").alias("SOURCE_SYSTEM")))
+
+# MISSING_SALESFORCE: synthetic ERP-only rate rows keyed to a
+# SOURCE_LINE_ITEM_ID that intentionally does not exist in
+# contract_line_item -- deterministic count derived from the same
+# missing-side rate, so the scenario is reproducible per seed.
+_missing_sfdc_count = max(1, int(cli.count() * _missing_erp_rate))
+missing_sfdc_rates = (spark.range(0, _missing_sfdc_count)
+    .withColumn("_mseq", dkey(F.lit("missing_sfdc"), F.col("id")))
+    .withColumn("SOURCE_LINE_ITEM_ID", sf_id("a0L", F.col("_mseq") + F.lit(900000000)))
+    .withColumn("SERVICE_CIRCUIT_ID", F.lit(None).cast("bigint"))
+    .withColumn("SOURCE_CONTRACT_ID", F.lit(None).cast("string"))
+    .withColumn("BILLED_UNIT_PRICE", F.round(lognormal(7.0, 0.4, F.col("_mseq")), 2))
+    .withColumn("BILLED_TOTAL_AMOUNT", F.col("BILLED_UNIT_PRICE"))
+    .withColumn("SOURCE_SYSTEM", F.lit("Oracle ERP"))
+    .select("SOURCE_LINE_ITEM_ID", "SERVICE_CIRCUIT_ID", "SOURCE_CONTRACT_ID",
+            "BILLED_UNIT_PRICE", "BILLED_TOTAL_AMOUNT", "SOURCE_SYSTEM"))
+
+billed_rates_out = billed_rates_out.unionByName(missing_sfdc_rates)
 
 # --- LEAKAGE GROUND TRUTH (raw source-system QA column; NEVER reaches silver
 # or gold) --------------------------------------------------------------------
@@ -810,10 +846,18 @@ write_table(hz.select("PARTY_ID","CUST_ACCOUNT_ID","PARTY_NAME","PARTY_TYPE","AC
 # Computed alongside contract_line_item in section 4 (needs `cli`); written here
 # now that SCHEMA_ERP exists. This is the "billed" side of contract-price
 # reconciliation — a system independent of Salesforce's own contract price.
+# NOT every SOURCE_LINE_ITEM_ID here has a matching contract_line_item.Id
+# (see missing_side_rate in config.yaml): ~2% of contract lines are
+# deliberately absent from this table (MISSING_ERP, from the reconciliation
+# check's point of view), and a handful of synthetic rows exist here with no
+# matching contract line at all (MISSING_SALESFORCE) -- those carry
+# SERVICE_CIRCUIT_ID/SOURCE_CONTRACT_ID = NULL since there is no real
+# circuit/contract to cross-reference.
 write_table(billed_rates_out, SCHEMA_ERP, "ra_billed_circuit_rates",
-    "Oracle ERP circuit-level billed-rate extract (RA_ shape). Independently represents what the billing system actually charges per circuit; reconciled against salesforce_source.contract_line_item.UnitPrice by silver_contract_price_reconciliation. Diverges from the contracted price only where price-mismatch leakage was seeded.",
-    {"SERVICE_CIRCUIT_ID":"MDM crosswalk to tmf_resource.logical_resource.logical_resource_id (the circuit).",
-     "SOURCE_CONTRACT_ID":"Crosswalk to salesforce_source.contract.Id for evidence drill-down.",
+    "Oracle ERP circuit-level billed-rate extract (RA_ shape). Independently represents what the billing system actually charges per circuit; reconciled against salesforce_source.contract_line_item.UnitPrice by silver_contract_price_reconciliation. Diverges from the contracted price only where price-mismatch leakage was seeded. Not every row has a matching contract_line_item (missing_side_rate injects both directions -- see config.yaml).",
+    {"SOURCE_LINE_ITEM_ID":"Join key to salesforce_source.contract_line_item.Id. May reference a line_item_id that does not exist in contract_line_item (a MISSING_SALESFORCE row -- an ERP rate with no matching contract line).",
+     "SERVICE_CIRCUIT_ID":"MDM crosswalk to tmf_resource.logical_resource.logical_resource_id (the circuit). NULL for synthetic MISSING_SALESFORCE rows with no real circuit.",
+     "SOURCE_CONTRACT_ID":"Crosswalk to salesforce_source.contract.Id for evidence drill-down. NULL for synthetic MISSING_SALESFORCE rows.",
      "BILLED_UNIT_PRICE":"Actual ERP-billed monthly unit price for the circuit (source of truth for the billed side of the reconciliation).",
      "BILLED_TOTAL_AMOUNT":"Actual ERP-billed monthly total for the circuit."})
 

@@ -12,6 +12,21 @@
 --   gold views true downstream nodes of the pipeline DAG rather than loose
 --   warehouse DDL reading a table that happens to exist.
 --
+-- known_leakage_flag (this column, below): its NAME is preserved as an
+--   app-facing schema contract -- ra-exceptions-console's TypeScript types
+--   (shared/appkit-types/analytics.d.ts), server routes
+--   (server/routes/analytics.ts), and React components
+--   (client/src/pages/CasesPage.tsx, client/src/components/
+--   ExceptionDrawer.tsx) all reference this exact column name, and that app
+--   is out of scope for this reconciliation-controls work. Substantively,
+--   though, every arm below publishes a hardcoded `FALSE` literal, never a
+--   value derived from any simulator ground-truth/leakage column -- no
+--   "known truth" data actually flows through it. That is what satisfies
+--   the audit requirement to remove leakage/truth-flag DATA from production
+--   outputs: silver_contract_price_reconciliation (reconciliation/pipelines/
+--   silver_reconciliation.sql) no longer even HAS a leakage_flag column to
+--   read from, so there is nothing upstream this constant could reflect.
+--
 -- NOT IN THIS FILE:
 --   * `gold_anomaly_scores` — owned by the separate ML workstream. It is NOT
 --     defined here and this file does not reference it, so the pipeline is
@@ -40,6 +55,8 @@ CREATE OR REFRESH MATERIALIZED VIEW gold_leakage_summary (
   CONSTRAINT dq4_check_type_in_known_set
     EXPECT (check_type IN (
       'contract_price_mismatch',
+      'contract_price_missing_erp',
+      'contract_price_missing_salesforce',
       'unauthorized_discount',
       'expired_quote_active',
       'doc_contract_mismatch',
@@ -54,7 +71,13 @@ CREATE OR REFRESH MATERIALIZED VIEW gold_leakage_summary (
 )
 COMMENT 'Unified revenue leakage register combining all silver-layer reconciliation checks. Each row is one detected exception with severity, amount at risk, and detection method (rule-based vs AI-extracted).'
 AS
--- Contract price mismatches (detected independently from billed vs contracted price)
+-- Contract price mismatches (detected independently from billed vs contracted price).
+-- FULL-SIDED: silver_contract_price_reconciliation publishes an explicit
+-- reconciliation_status in {MATCHED, MISMATCH, MISSING_ERP,
+-- MISSING_SALESFORCE} -- only MATCHED represents "nothing wrong"; every
+-- other status is a distinct exception with its own check_type so the
+-- register can distinguish a price disagreement from a record that exists
+-- on only one side.
 SELECT
   'contract_price_mismatch' AS check_type,
   CASE WHEN price_mismatch_pct > 0.05 THEN 'HIGH' ELSE 'MEDIUM' END AS severity,
@@ -66,7 +89,41 @@ SELECT
   FALSE AS known_leakage_flag,
   ContractNumber AS reference_id
 FROM silver_contract_price_reconciliation
-WHERE leakage_flag IS NOT NULL
+WHERE reconciliation_status = 'MISMATCH'
+
+UNION ALL
+
+-- Contract line exists in Salesforce with no corresponding ERP billed rate
+-- -- the full contracted commitment is unbilled/at risk.
+SELECT
+  'contract_price_missing_erp' AS check_type,
+  'HIGH' AS severity,
+  customer_id,
+  account_name,
+  estimated_amount_at_risk AS amount_at_risk,
+  'oracle_erp_source.ra_billed_circuit_rates' AS source_table,
+  detection_method,
+  FALSE AS known_leakage_flag,
+  ContractNumber AS reference_id
+FROM silver_contract_price_reconciliation
+WHERE reconciliation_status = 'MISSING_ERP'
+
+UNION ALL
+
+-- ERP billed rate exists with no corresponding Salesforce contract line --
+-- being charged with no contract on file.
+SELECT
+  'contract_price_missing_salesforce' AS check_type,
+  'HIGH' AS severity,
+  customer_id,
+  account_name,
+  estimated_amount_at_risk AS amount_at_risk,
+  'oracle_erp_source.ra_billed_circuit_rates' AS source_table,
+  detection_method,
+  FALSE AS known_leakage_flag,
+  CAST(line_item_id AS STRING) AS reference_id
+FROM silver_contract_price_reconciliation
+WHERE reconciliation_status = 'MISSING_SALESFORCE'
 
 UNION ALL
 
@@ -205,13 +262,22 @@ CREATE OR REFRESH MATERIALIZED VIEW gold_reconciliation_scorecard (
 )
 COMMENT 'Per-customer reconciliation health scorecard. Aggregates all seven silver checks into a single score per customer: price accuracy, discount compliance, expired-quote compliance, collection (AR) efficiency, revenue-recognition accuracy, and doc-vs-system consistency (contract + invoice).'
 AS
-WITH price_check AS (
+-- price_check is customer-grain, so it can only aggregate rows with a
+-- resolvable customer_id. A MISSING_SALESFORCE row has no Salesforce
+-- contract line to resolve customer_id from (see silver_contract_price_
+-- reconciliation) and is therefore excluded here -- it still surfaces in
+-- gold_leakage_summary with customer_id = NULL, consistent with how other
+-- checks (e.g. rev_rec_timing_mismatch) represent unattributed exceptions.
+-- total_lines/price_exceptions now key off reconciliation_status, not the
+-- removed leakage_flag column (see silver_contract_price_reconciliation).
+price_check AS (
   SELECT
     customer_id,
     COUNT(*) AS total_lines,
-    SUM(CASE WHEN leakage_flag IS NOT NULL THEN 1 ELSE 0 END) AS price_exceptions,
+    SUM(CASE WHEN reconciliation_status != 'MATCHED' THEN 1 ELSE 0 END) AS price_exceptions,
     SUM(estimated_amount_at_risk) AS price_risk_amount
   FROM silver_contract_price_reconciliation
+  WHERE customer_id IS NOT NULL
   GROUP BY customer_id
 ),
 discount_check AS (
@@ -291,6 +357,14 @@ rev_rec_by_invoice AS (
   LEFT JOIN invoice_recognition ir ON ir.CUSTOMER_TRX_ID = t.CUSTOMER_TRX_ID
   LEFT JOIN invoice_gl ig ON ig.CUSTOMER_TRX_ID = t.CUSTOMER_TRX_ID
 ),
+-- EXCEPTION-CONSISTENCY FIX (matches the AR fix pattern above):
+-- rev_rec_risk_amount must sum variance only for invoices that actually
+-- BREACH the 5% material-timing threshold, consistent with
+-- rev_rec_exceptions' count -- not every invoice's variance regardless of
+-- materiality. Summing all variance would put every invoice's rounding
+-- noise into total_amount_at_risk even when rev_rec_exceptions = 0 for
+-- that customer, inflating exposure for accounts with many small,
+-- immaterial timing differences.
 rev_rec_check AS (
   SELECT
     customer_id,
@@ -300,7 +374,11 @@ rev_rec_check AS (
            / NULLIF(GREATEST(invoice_recognized_total, invoice_gl_posted), 0) > 0.05
       THEN 1 ELSE 0
     END) AS rev_rec_exceptions,
-    SUM(ABS(invoice_recognized_total - invoice_gl_posted)) AS rev_rec_risk_amount
+    SUM(CASE
+      WHEN ABS(invoice_recognized_total - invoice_gl_posted)
+           / NULLIF(GREATEST(invoice_recognized_total, invoice_gl_posted), 0) > 0.05
+      THEN ABS(invoice_recognized_total - invoice_gl_posted) ELSE 0
+    END) AS rev_rec_risk_amount
   FROM rev_rec_by_invoice
   GROUP BY customer_id
 ),

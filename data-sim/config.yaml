@@ -40,6 +40,13 @@ scale:
 # ---------------------------------------------------------------------------
 leakage_rate: 0.06                  # ~6% of contract lines carry a seeded exception
 
+# Missing-side injection for the contract-price check (MISSING_ERP /
+# MISSING_SALESFORCE outcomes). Independent of leakage_rate: a contract line
+# with no ERP billed-rate row (MISSING_ERP), and a synthetic ERP-only rate
+# row with no matching contract line (MISSING_SALESFORCE). Set to 0.0 to
+# disable (every contract line has exactly one matching billed-rate row).
+missing_side_rate: 0.02             # ~2% of lines missing on each side
+
 # ---------------------------------------------------------------------------
 # Forecast anomaly injection (ai_forecast / gold_revenue_forecast_anomalies)
 # Deterministic month-specific step changes in GL revenue (account 4000) so the

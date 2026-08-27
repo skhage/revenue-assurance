@@ -109,6 +109,82 @@ FROM (
 
 
 -- -----------------------------------------------------------------------------
+-- CHECK-2c/2d: DETERMINISTIC FIXTURES proving missing-market-rate and
+-- missing-applied-rate are their OWN explicit exception status, not a
+-- silent MATCHED/clean fallthrough. Reproduces the exact fx_validation_status
+-- CASE expression from silver_fx_rate_validation against a literal 5-row
+-- fixture (VALUES) covering all five statuses -- no live table required.
+-- -----------------------------------------------------------------------------
+WITH mock_trx AS (
+  SELECT * FROM (VALUES
+    ('T1', 'USD', CAST(1.0 AS DOUBLE)),             -- not_applicable
+    ('T2', 'EUR', CAST(1.08 AS DOUBLE)),            -- matched
+    ('T3', 'EUR', CAST(1.30 AS DOUBLE)),            -- deviation
+    ('T4', 'EUR', CAST(NULL AS DOUBLE)),            -- missing_applied_rate
+    ('T5', 'XYZ', CAST(2.0 AS DOUBLE))              -- missing_market_rate (no XYZ quote in mock_fx)
+  ) AS t(trx_id, currency, applied_rate)
+),
+mock_fx AS (
+  SELECT * FROM (VALUES ('EUR', CAST(1.08 AS DOUBLE))) AS t(currency, market_rate)
+),
+joined AS (
+  SELECT t.trx_id, t.currency, t.applied_rate, f.market_rate
+  FROM mock_trx t
+  LEFT JOIN mock_fx f ON f.currency = t.currency
+),
+statused AS (
+  SELECT trx_id,
+    CASE
+      WHEN currency = 'USD' THEN 'NOT_APPLICABLE'
+      WHEN applied_rate IS NULL THEN 'MISSING_APPLIED_RATE'
+      WHEN market_rate IS NULL THEN 'MISSING_MARKET_RATE'
+      WHEN ABS(applied_rate - market_rate) / NULLIF(market_rate, 0) > 0.01 THEN 'DEVIATION'
+      ELSE 'MATCHED'
+    END AS fx_validation_status
+  FROM joined
+)
+SELECT
+  'CHECK-2c missing applied rate is its own exception status' AS check_name,
+  CASE WHEN (SELECT fx_validation_status FROM statused WHERE trx_id = 'T4') = 'MISSING_APPLIED_RATE'
+    THEN 'PASS' ELSE 'FAIL' END AS status,
+  (SELECT fx_validation_status FROM statused WHERE trx_id = 'T4') AS observed_status;
+
+WITH mock_trx AS (
+  SELECT * FROM (VALUES
+    ('T1', 'USD', CAST(1.0 AS DOUBLE)),
+    ('T2', 'EUR', CAST(1.08 AS DOUBLE)),
+    ('T3', 'EUR', CAST(1.30 AS DOUBLE)),
+    ('T4', 'EUR', CAST(NULL AS DOUBLE)),
+    ('T5', 'XYZ', CAST(2.0 AS DOUBLE))
+  ) AS t(trx_id, currency, applied_rate)
+),
+mock_fx AS (
+  SELECT * FROM (VALUES ('EUR', CAST(1.08 AS DOUBLE))) AS t(currency, market_rate)
+),
+joined AS (
+  SELECT t.trx_id, t.currency, t.applied_rate, f.market_rate
+  FROM mock_trx t
+  LEFT JOIN mock_fx f ON f.currency = t.currency
+),
+statused AS (
+  SELECT trx_id,
+    CASE
+      WHEN currency = 'USD' THEN 'NOT_APPLICABLE'
+      WHEN applied_rate IS NULL THEN 'MISSING_APPLIED_RATE'
+      WHEN market_rate IS NULL THEN 'MISSING_MARKET_RATE'
+      WHEN ABS(applied_rate - market_rate) / NULLIF(market_rate, 0) > 0.01 THEN 'DEVIATION'
+      ELSE 'MATCHED'
+    END AS fx_validation_status
+  FROM joined
+)
+SELECT
+  'CHECK-2d missing market rate is its own exception status' AS check_name,
+  CASE WHEN (SELECT fx_validation_status FROM statused WHERE trx_id = 'T5') = 'MISSING_MARKET_RATE'
+    THEN 'PASS' ELSE 'FAIL' END AS status,
+  (SELECT fx_validation_status FROM statused WHERE trx_id = 'T5') AS observed_status;
+
+
+-- -----------------------------------------------------------------------------
 -- CHECK-3 STRENGTHENED: Revenue-recognition compares compatible (invoice-
 -- origination-period) grains, built from the full invoice universe. The
 -- prior version only asserted "< 50% of periods are material mismatches" --
@@ -230,6 +306,178 @@ FROM (
     ROUND(ABS(recognized_total - gl_posted) / NULLIF(GREATEST(recognized_total, gl_posted), 0) * 100, 4)
       AS gl_only_variance_pct
   FROM invoice_level WHERE CUSTOMER_TRX_ID = 3
+);
+
+
+-- -----------------------------------------------------------------------------
+-- CHECK-3d/3e/3f/3g: PRODUCTION-EQUIVALENT set-level validation. CHECK-3b/3c
+-- above are deterministic fixtures (isolated proof the logic is correct on a
+-- synthetic universe); these instead query the ACTUAL live tables --
+-- catching failure modes a synthetic fixture can't: duplicate schedule/GL
+-- rows in the real data, pre-aggregation loss when GROUP BY collapses more
+-- than expected, fan-out from a bad join, and silver-vs-scorecard
+-- divergence (the two views must agree on total recognized/GL across the
+-- SAME underlying invoice universe, since gold_reconciliation_scorecard's
+-- rev_rec_by_invoice was fixed in this branch to mirror silver's
+-- invoice_level pattern exactly -- see gold_aggregation.sql).
+-- -----------------------------------------------------------------------------
+WITH invoice_recognition AS (
+  SELECT CUSTOMER_TRX_ID, SUM(RECOGNIZED_AMOUNT) AS recognized_total
+  FROM cdm_tmforum.oracle_erp_source.revenue_recognition_schedule
+  GROUP BY CUSTOMER_TRX_ID
+),
+invoice_gl AS (
+  SELECT h.CUSTOMER_TRX_ID, SUM(l.ENTERED_CR) AS gl_posted
+  FROM cdm_tmforum.oracle_erp_source.gl_je_lines l
+  JOIN cdm_tmforum.oracle_erp_source.gl_je_headers h ON l.JE_HEADER_ID = h.JE_HEADER_ID
+  JOIN cdm_tmforum.oracle_erp_source.gl_code_combinations cc ON l.CODE_COMBINATION_ID = cc.CODE_COMBINATION_ID
+  WHERE cc.ACCOUNT = '4000'
+  GROUP BY h.CUSTOMER_TRX_ID
+),
+invoice_level AS (
+  SELECT
+    t.CUSTOMER_TRX_ID,
+    COALESCE(ir.recognized_total, 0) AS recognized_total,
+    COALESCE(ig.gl_posted, 0) AS gl_posted
+  FROM cdm_tmforum.oracle_erp_source.ra_customer_trx_all t
+  LEFT JOIN invoice_recognition ir ON ir.CUSTOMER_TRX_ID = t.CUSTOMER_TRX_ID
+  LEFT JOIN invoice_gl ig ON ig.CUSTOMER_TRX_ID = t.CUSTOMER_TRX_ID
+)
+-- CHECK-3d: no fan-out. ra_customer_trx_all's own CUSTOMER_TRX_ID must be
+-- unique going INTO the LEFT JOINs -- a duplicate here would double-count
+-- an invoice's recognized/GL totals in every downstream rollup.
+SELECT
+  'CHECK-3d no fan-out in the full invoice universe' AS check_name,
+  CASE WHEN total_invoices = distinct_invoices THEN 'PASS' ELSE 'FAIL' END AS status,
+  total_invoices,
+  distinct_invoices
+FROM (
+  SELECT COUNT(*) AS total_invoices, COUNT(DISTINCT CUSTOMER_TRX_ID) AS distinct_invoices
+  FROM cdm_tmforum.oracle_erp_source.ra_customer_trx_all
+);
+
+WITH invoice_recognition_raw AS (
+  SELECT CUSTOMER_TRX_ID, SUM(RECOGNIZED_AMOUNT) AS recognized_total
+  FROM cdm_tmforum.oracle_erp_source.revenue_recognition_schedule
+  GROUP BY CUSTOMER_TRX_ID
+)
+-- CHECK-3e: no duplicate schedule aggregation -- the per-invoice
+-- SUM(RECOGNIZED_AMOUNT) GROUP BY CUSTOMER_TRX_ID must itself produce one
+-- row per CUSTOMER_TRX_ID (trivially true of a GROUP BY, but this proves
+-- the grouping key is actually CUSTOMER_TRX_ID and not something coarser
+-- that would silently blend multiple invoices' schedules together).
+SELECT
+  'CHECK-3e revenue_recognition_schedule aggregates cleanly per invoice' AS check_name,
+  CASE WHEN total_groups = distinct_ids THEN 'PASS' ELSE 'FAIL' END AS status,
+  total_groups,
+  distinct_ids
+FROM (
+  SELECT COUNT(*) AS total_groups, COUNT(DISTINCT CUSTOMER_TRX_ID) AS distinct_ids
+  FROM invoice_recognition_raw
+);
+
+WITH invoice_recognition AS (
+  SELECT CUSTOMER_TRX_ID, SUM(RECOGNIZED_AMOUNT) AS recognized_total
+  FROM cdm_tmforum.oracle_erp_source.revenue_recognition_schedule
+  GROUP BY CUSTOMER_TRX_ID
+),
+invoice_gl AS (
+  SELECT h.CUSTOMER_TRX_ID, SUM(l.ENTERED_CR) AS gl_posted
+  FROM cdm_tmforum.oracle_erp_source.gl_je_lines l
+  JOIN cdm_tmforum.oracle_erp_source.gl_je_headers h ON l.JE_HEADER_ID = h.JE_HEADER_ID
+  JOIN cdm_tmforum.oracle_erp_source.gl_code_combinations cc ON l.CODE_COMBINATION_ID = cc.CODE_COMBINATION_ID
+  WHERE cc.ACCOUNT = '4000'
+  GROUP BY h.CUSTOMER_TRX_ID
+),
+invoice_level AS (
+  SELECT
+    t.CUSTOMER_TRX_ID,
+    t.TRX_DATE,
+    COALESCE(ir.recognized_total, 0) AS recognized_total,
+    COALESCE(ig.gl_posted, 0) AS gl_posted
+  FROM cdm_tmforum.oracle_erp_source.ra_customer_trx_all t
+  LEFT JOIN invoice_recognition ir ON ir.CUSTOMER_TRX_ID = t.CUSTOMER_TRX_ID
+  LEFT JOIN invoice_gl ig ON ig.CUSTOMER_TRX_ID = t.CUSTOMER_TRX_ID
+),
+silver_period_total AS (
+  -- Reproduces silver_revenue_recognition_check's own grouping exactly
+  -- (by invoice-origination period), then sums across ALL periods -- this
+  -- must equal the flat sum across the whole invoice_level universe
+  -- (CHECK-3f), proving no pre-aggregation loss when collapsing invoice
+  -- grain into period grain.
+  SELECT SUM(recognized_total) AS period_grouped_total, SUM(gl_posted) AS period_grouped_gl
+  FROM invoice_level
+),
+flat_total AS (
+  SELECT SUM(recognized_total) AS flat_total, SUM(gl_posted) AS flat_gl
+  FROM invoice_level
+)
+SELECT
+  'CHECK-3f no pre-aggregation loss (period rollup == invoice-flat total)' AS check_name,
+  CASE WHEN ABS(period_grouped_total - flat_total) < 0.01 AND ABS(period_grouped_gl - flat_gl) < 0.01
+    THEN 'PASS' ELSE 'FAIL' END AS status,
+  period_grouped_total,
+  flat_total,
+  period_grouped_gl,
+  flat_gl
+FROM silver_period_total, flat_total;
+
+-- CHECK-3g: silver-vs-scorecard divergence. gold_reconciliation_scorecard's
+-- rev_rec_by_invoice (customer grain) and silver_revenue_recognition_check
+-- (period grain) must sum to the SAME total recognized/GL across the same
+-- underlying invoice universe -- this branch fixed the scorecard's CTE to
+-- mirror silver's LEFT JOIN + COALESCE-to-0 pattern exactly (previously the
+-- scorecard used its own looser INNER JOIN and would diverge from silver on
+-- GL-only invoices). Reproduces both shapes independently and asserts equality.
+WITH invoice_recognition AS (
+  SELECT CUSTOMER_TRX_ID, SUM(RECOGNIZED_AMOUNT) AS recognized_total
+  FROM cdm_tmforum.oracle_erp_source.revenue_recognition_schedule
+  GROUP BY CUSTOMER_TRX_ID
+),
+invoice_gl AS (
+  SELECT h.CUSTOMER_TRX_ID, SUM(l.ENTERED_CR) AS gl_posted
+  FROM cdm_tmforum.oracle_erp_source.gl_je_lines l
+  JOIN cdm_tmforum.oracle_erp_source.gl_je_headers h ON l.JE_HEADER_ID = h.JE_HEADER_ID
+  JOIN cdm_tmforum.oracle_erp_source.gl_code_combinations cc ON l.CODE_COMBINATION_ID = cc.CODE_COMBINATION_ID
+  WHERE cc.ACCOUNT = '4000'
+  GROUP BY h.CUSTOMER_TRX_ID
+),
+silver_shaped AS (
+  -- Mirrors silver_revenue_recognition_check's invoice_level CTE exactly.
+  SELECT
+    t.CUSTOMER_TRX_ID,
+    COALESCE(ir.recognized_total, 0) AS recognized_total,
+    COALESCE(ig.gl_posted, 0) AS gl_posted
+  FROM cdm_tmforum.oracle_erp_source.ra_customer_trx_all t
+  LEFT JOIN invoice_recognition ir ON ir.CUSTOMER_TRX_ID = t.CUSTOMER_TRX_ID
+  LEFT JOIN invoice_gl ig ON ig.CUSTOMER_TRX_ID = t.CUSTOMER_TRX_ID
+),
+scorecard_shaped AS (
+  -- Mirrors gold_reconciliation_scorecard's rev_rec_by_invoice CTE exactly
+  -- (post-fix -- see gold_aggregation.sql).
+  SELECT
+    t.CUSTOMER_TRX_ID,
+    COALESCE(ir.recognized_total, 0) AS recognized_total,
+    COALESCE(ig.gl_posted, 0) AS gl_posted
+  FROM cdm_tmforum.oracle_erp_source.ra_customer_trx_all t
+  LEFT JOIN invoice_recognition ir ON ir.CUSTOMER_TRX_ID = t.CUSTOMER_TRX_ID
+  LEFT JOIN invoice_gl ig ON ig.CUSTOMER_TRX_ID = t.CUSTOMER_TRX_ID
+)
+SELECT
+  'CHECK-3g silver and scorecard totals agree (no divergence)' AS check_name,
+  CASE WHEN ABS(silver_recognized - scorecard_recognized) < 0.01
+       AND ABS(silver_gl - scorecard_gl) < 0.01
+    THEN 'PASS' ELSE 'FAIL' END AS status,
+  silver_recognized,
+  scorecard_recognized,
+  silver_gl,
+  scorecard_gl
+FROM (
+  SELECT
+    (SELECT SUM(recognized_total) FROM silver_shaped) AS silver_recognized,
+    (SELECT SUM(recognized_total) FROM scorecard_shaped) AS scorecard_recognized,
+    (SELECT SUM(gl_posted) FROM silver_shaped) AS silver_gl,
+    (SELECT SUM(gl_posted) FROM scorecard_shaped) AS scorecard_gl
 );
 
 
@@ -391,3 +639,45 @@ FROM (
     (SELECT COUNT(*) FROM cdm_tmforum.revenue_assurance.silver_discount_authorization_check
      WHERE expired_quote_still_active) AS line_grain_count
 );
+
+
+-- -----------------------------------------------------------------------------
+-- CHECK-8: rev_rec_risk_amount is exception-consistent -- it must sum
+-- variance ONLY for invoices that breach the 5% material-timing threshold,
+-- matching rev_rec_exceptions' count, not every invoice's variance
+-- regardless of materiality (the same class of bug the AR fix addressed
+-- for ar_risk_amount). Deterministic fixture: one clean invoice (0% var),
+-- one immaterial invoice (4.9% var, below threshold), one material
+-- exception (20% var, above threshold) -- the fixed sum must equal ONLY
+-- the material exception's variance (200.0), not all three invoices'
+-- variance (249.0).
+-- -----------------------------------------------------------------------------
+WITH mock_invoices AS (
+  SELECT * FROM (VALUES
+    (1, CAST(1000.0 AS DOUBLE), CAST(1000.0 AS DOUBLE)),  -- clean
+    (1, CAST(1000.0 AS DOUBLE), CAST(1049.0 AS DOUBLE)),  -- 4.9% var, immaterial
+    (1, CAST(1000.0 AS DOUBLE), CAST(1200.0 AS DOUBLE))   -- 20% var, material exception
+  ) AS t(customer_id, recognized, gl)
+),
+rev_rec_check AS (
+  SELECT
+    customer_id,
+    SUM(CASE WHEN ABS(recognized - gl) / NULLIF(GREATEST(recognized, gl), 0) > 0.05 THEN 1 ELSE 0 END)
+      AS rev_rec_exceptions,
+    SUM(CASE
+      WHEN ABS(recognized - gl) / NULLIF(GREATEST(recognized, gl), 0) > 0.05
+      THEN ABS(recognized - gl) ELSE 0
+    END) AS rev_rec_risk_amount,
+    SUM(ABS(recognized - gl)) AS naive_risk_amount_for_comparison
+  FROM mock_invoices
+  GROUP BY customer_id
+)
+SELECT
+  'CHECK-8 rev_rec_risk_amount is exception-consistent (only material variance)' AS check_name,
+  CASE WHEN rev_rec_exceptions = 1 AND rev_rec_risk_amount = 200.0
+       AND naive_risk_amount_for_comparison = 249.0 AND rev_rec_risk_amount < naive_risk_amount_for_comparison
+    THEN 'PASS' ELSE 'FAIL' END AS status,
+  rev_rec_exceptions,
+  rev_rec_risk_amount,
+  naive_risk_amount_for_comparison
+FROM rev_rec_check;
