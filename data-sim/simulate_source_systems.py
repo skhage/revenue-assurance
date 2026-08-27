@@ -570,28 +570,49 @@ cli = (contract_lkp
     .withColumn("TotalPrice", F.col("UnitPrice") * F.col("Quantity"))
     .withColumn("Billing_Frequency__c", F.lit("Monthly")))
 
-# --- LEAKAGE INJECTION (flagged) : seed price mismatch + expired discount -----
+# --- LEAKAGE GROUND TRUTH (metadata only, NOT read by the reconciliation check) -
+# `leakage_flag` marks which lines carry a seeded billing-side price drift, for
+# `known_leakage_flag` in the gold register. UnitPrice itself is NEVER mutated —
+# it stays the true negotiated contracted price. The actual divergence is
+# injected independently into oracle_erp_source.ra_billed_circuit_rates (below),
+# so silver_contract_price_reconciliation detects it by comparing two
+# independently-generated cross-system values, not by reading this flag.
 cli = (cli
     .withColumn("_leak", rand_of(F.col("lseq"))("leak") < LEAKAGE_RATE)
-    .withColumn("leakage_flag",
-        F.when(F.col("_leak") & ((F.abs(F.hash(F.col("lseq"),F.lit(7))) % 2)==0), F.lit("price_mismatch"))
-         .when(F.col("_leak"), F.lit("expired_discount"))
-         .otherwise(F.lit(None)))
-    # price_mismatch: contracted price silently differs from what billing will hold
-    .withColumn("UnitPrice",
-        F.when(F.col("leakage_flag")=="price_mismatch", F.round(F.col("UnitPrice")*1.18,2))
-         .otherwise(F.col("UnitPrice")))
-    .withColumn("TotalPrice", F.col("UnitPrice")*F.col("Quantity")))
+    .withColumn("leakage_flag", F.when(F.col("_leak"), F.lit("price_mismatch")).otherwise(F.lit(None))))
 
 cli_out = cli.select("Id","Contract__c","AccountId","Product2Id","ProductCode","Service_Circuit_Id__c",
     "Quantity","UnitPrice","TotalPrice","Discount__c","Billing_Frequency__c","bandwidth_mbps","leakage_flag")
 write_table(cli_out, SCHEMA_SFDC, "contract_line_item",
-    "Salesforce custom object Contract_Line_Item__c. One row per contracted circuit/service; UnitPrice is the negotiated source-of-truth MRR reconciled against tmf billing. `leakage_flag` marks seeded exceptions.",
+    "Salesforce custom object Contract_Line_Item__c. One row per contracted circuit/service; UnitPrice is the negotiated source-of-truth MRR, never mutated by leakage injection. `leakage_flag` is ground-truth metadata only (not read by the reconciliation check itself) — the actual billing-side divergence lives independently in oracle_erp_source.ra_billed_circuit_rates.",
     {"Id":"Contract line Id (keyPrefix a0L).","Contract__c":"FK to contract.Id.",
      "Service_Circuit_Id__c":"MDM crosswalk to tmf_resource.logical_resource.logical_resource_id (the circuit).",
-     "UnitPrice":"Negotiated monthly price (source of truth for contract-price reconciliation).",
+     "UnitPrice":"Negotiated monthly price (source of truth for contract-price reconciliation). Never mutated by leakage seeding.",
      "Discount__c":"Negotiated discount percent off list.",
-     "leakage_flag":"DEMO ONLY: seeded exception type (price_mismatch / expired_discount) or null."})
+     "leakage_flag":"DEMO ONLY ground truth: seeded exception marker (price_mismatch) or null. Not read by the reconciliation SQL, which detects the mismatch independently from billed rates."})
+
+# ---- Independent ERP-side "billed" circuit rate extract ---------------------
+# A real cross-system reconciliation needs the billed amount to come from a
+# system OTHER than the contract itself. This mirrors contract_line_item's
+# circuits with an ERP-billed rate that is correlated to the negotiated price
+# (so cleanly-reconciling circuits match exactly, satisfying CHK-0) but
+# deterministically drifts for leakage-injected circuits — the injected drift
+# is the only source of divergence, so the reconciliation SQL's own arithmetic
+# comparison (contracted vs billed) is what detects it, independent of any flag.
+# Computed here (needs `cli`); written to oracle_erp_source in section 5 below,
+# once that schema exists.
+billed_rates_out = (cli
+    .withColumn("_drift_pct", F.round(rand_of(F.col("lseq"))("drift") * 0.15 + 0.10, 3))  # 10-25%
+    .withColumn("BILLED_UNIT_PRICE",
+        F.when(F.col("leakage_flag") == "price_mismatch",
+               F.round(F.col("UnitPrice") * (1 + F.col("_drift_pct")), 2))
+         .otherwise(F.col("UnitPrice")))
+    .withColumn("BILLED_TOTAL_AMOUNT", F.col("BILLED_UNIT_PRICE") * F.col("Quantity"))
+    .withColumn("SOURCE_SYSTEM", F.lit("Oracle ERP"))
+    .select(
+        F.col("Service_Circuit_Id__c").alias("SERVICE_CIRCUIT_ID"),
+        F.col("Contract__c").alias("SOURCE_CONTRACT_ID"),
+        "BILLED_UNIT_PRICE", "BILLED_TOTAL_AMOUNT", "SOURCE_SYSTEM"))
 
 # ---- Opportunity (pipeline; Q4-seasonal close dates) ------------------------
 opp = (acct_lkp
@@ -726,25 +747,74 @@ write_table(hz.select("PARTY_ID","CUST_ACCOUNT_ID","PARTY_NAME","PARTY_TYPE","AC
      "ORIG_SYSTEM_REFERENCE":"Source cross-reference = external_customer_code (MDM survivorship key).",
      "TMF_CUSTOMER_ID":"MDM crosswalk to golden customer_id.","STATUS":"Account status (A=active)."})
 
+# ---- RA_BILLED_CIRCUIT_RATES : independent billed-rate extract ---------------
+# Computed alongside contract_line_item in section 4 (needs `cli`); written here
+# now that SCHEMA_ERP exists. This is the "billed" side of contract-price
+# reconciliation — a system independent of Salesforce's own contract price.
+write_table(billed_rates_out, SCHEMA_ERP, "ra_billed_circuit_rates",
+    "Oracle ERP circuit-level billed-rate extract (RA_ shape). Independently represents what the billing system actually charges per circuit; reconciled against salesforce_source.contract_line_item.UnitPrice by silver_contract_price_reconciliation. Diverges from the contracted price only where price-mismatch leakage was seeded.",
+    {"SERVICE_CIRCUIT_ID":"MDM crosswalk to tmf_resource.logical_resource.logical_resource_id (the circuit).",
+     "SOURCE_CONTRACT_ID":"Crosswalk to salesforce_source.contract.Id for evidence drill-down.",
+     "BILLED_UNIT_PRICE":"Actual ERP-billed monthly unit price for the circuit (source of truth for the billed side of the reconciliation).",
+     "BILLED_TOTAL_AMOUNT":"Actual ERP-billed monthly total for the circuit."})
+
 # ---- RA_CUSTOMER_TRX_ALL : AR invoice headers (from tmf bill) ----------------
+# Invoice currency is the customer's real billing_currency (tmf_customer.customer),
+# restricted to the currency pairs Refinitiv actually quotes (config.yaml
+# `fx_pairs:`) — customers outside that set invoice in USD. This gives FX
+# validation meaningful non-USD transactions to check, instead of an all-USD book.
+_fx_currencies = [p[0] for p in FX_PAIRS if p[0] != "USD"]
+_fx_currency_expr = F.array(*[F.lit(c) for c in _fx_currencies]) if _fx_currencies else F.array()
+_fx_base_rate_map = F.create_map(*sum(
+    [[F.lit(frm), F.lit(base)] for frm, _, base in FX_PAIRS if frm != "USD"], []))
+cust_currency = spark.table(f"{CATALOG}.tmf_customer.customer").select(
+    F.col("customer_id").alias("_ccid"),
+    F.when(F.array_contains(_fx_currency_expr, F.col("billing_currency")), F.col("billing_currency"))
+     .otherwise(F.lit("USD")).alias("INVOICE_CURRENCY_CODE"))
+
 trx = (bill.select("bill_id","customer_id","total_amount","tax_amount",
                    "billing_period_start_date","billing_period_end_date","date","due_date",
                    "outstanding_amount","paid_amount","paid_date")
+    .join(cust_currency, bill.customer_id == cust_currency._ccid, "left")
+    .withColumn("INVOICE_CURRENCY_CODE", F.coalesce(F.col("INVOICE_CURRENCY_CODE"), F.lit("USD")))
     .withColumn("CUSTOMER_TRX_ID", F.col("bill_id") + F.lit(PK_START_OFFSET))
     .withColumn("TRX_NUMBER", F.concat(F.lit("INV-"), F.lpad(F.col("bill_id").cast("string"),10,"0")))
     .withColumn("TRX_DATE", F.to_date("date"))
     .withColumn("BILL_TO_CUSTOMER_ID", F.col("customer_id") + F.lit(PK_START_OFFSET))
-    .withColumn("INVOICE_CURRENCY_CODE", F.lit("USD"))
     .withColumn("CUST_TRX_TYPE", F.lit("INV"))
-    .withColumn("COMPLETE_FLAG", F.lit("Y")))
+    .withColumn("COMPLETE_FLAG", F.lit("Y"))
+    # APPLIED_EXCHANGE_RATE: the rate billing actually used to convert this
+    # invoice to USD functional currency. Reconstructed with the SAME
+    # base-rate + daily-drift formula gl_daily_rates uses below (so a clean
+    # invoice's applied rate equals the Refinitiv market rate for that
+    # currency/day exactly), then a deterministic bias is layered on only for
+    # leakage-seeded invoices. The bias is the sole source of divergence, so
+    # silver_fx_rate_validation compares two independently-derived rates
+    # rather than reading a ground-truth flag.
+    .withColumn("_days_since_epoch", F.datediff(F.to_date("date"), F.lit("2018-01-01")))
+    .withColumn("_base_rate", F.coalesce(_fx_base_rate_map[F.col("INVOICE_CURRENCY_CODE")], F.lit(1.0)))
+    .withColumn("_market_drift",
+        (F.abs(F.hash(F.col("INVOICE_CURRENCY_CODE"), F.col("_days_since_epoch"))) % 300 - 150) / 10000.0)
+    .withColumn("_fx_leak", rand_of(F.col("bill_id"))("fxleak") < LEAKAGE_RATE)
+    .withColumn("_fx_bias_pct", F.round((rand_of(F.col("bill_id"))("fxbias") * 0.06) + 0.02, 4))  # 2-8%
+    .withColumn("_fx_bias_signed",
+        F.when(F.abs(F.hash(F.col("bill_id"), F.lit(23))) % 2 == 0, F.col("_fx_bias_pct"))
+         .otherwise(-F.col("_fx_bias_pct")))
+    .withColumn("APPLIED_EXCHANGE_RATE",
+        F.when(F.col("INVOICE_CURRENCY_CODE") == "USD", F.lit(1.0))
+         .otherwise(F.round(
+             F.col("_base_rate") * (1 + F.col("_market_drift"))
+             * (1 + F.when(F.col("_fx_leak"), F.col("_fx_bias_signed")).otherwise(F.lit(0.0))), 6))))
 write_table(trx.select("CUSTOMER_TRX_ID","TRX_NUMBER","TRX_DATE","BILL_TO_CUSTOMER_ID",
-        "INVOICE_CURRENCY_CODE","CUST_TRX_TYPE","COMPLETE_FLAG",
+        "INVOICE_CURRENCY_CODE","CUST_TRX_TYPE","COMPLETE_FLAG","APPLIED_EXCHANGE_RATE",
         F.col("total_amount").alias("INVOICE_AMOUNT"), F.col("tax_amount").alias("TAX_AMOUNT"),
         F.col("bill_id").alias("TMF_BILL_ID")),
     SCHEMA_ERP, "ra_customer_trx_all",
-    "Oracle Receivables RA_CUSTOMER_TRX_ALL: AR invoice headers. Derived 1:1 from tmf_customer.bill so ERP finance and billing reconcile to the same invoices.",
+    "Oracle Receivables RA_CUSTOMER_TRX_ALL: AR invoice headers. Derived 1:1 from tmf_customer.bill so ERP finance and billing reconcile to the same invoices. Invoice currency follows the customer's real billing_currency (restricted to Refinitiv-quoted pairs).",
     {"CUSTOMER_TRX_ID":"Receivables transaction id (PK).","TRX_NUMBER":"Human-readable invoice number.",
      "TRX_DATE":"Invoice date.","BILL_TO_CUSTOMER_ID":"FK to hz_cust_accounts.CUST_ACCOUNT_ID.",
+     "INVOICE_CURRENCY_CODE":"Invoice currency (customer billing_currency, restricted to Refinitiv-quoted pairs; else USD).",
+     "APPLIED_EXCHANGE_RATE":"Rate the billing system actually applied to convert this invoice to USD. Reconciled against refinitiv_fx_source.gl_daily_rates by silver_fx_rate_validation; diverges only where FX leakage was seeded.",
      "INVOICE_AMOUNT":"Invoice total (matches tmf bill.total_amount).","TMF_BILL_ID":"Crosswalk to tmf_customer.bill.bill_id."})
 
 # ---- RA_CUSTOMER_TRX_LINES_ALL : invoice lines -------------------------------

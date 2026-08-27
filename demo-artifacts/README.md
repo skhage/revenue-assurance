@@ -103,9 +103,9 @@ exception register that backs the queue and KPIs (~48K rows, ~$601M at risk; col
 
 | Silver check (materialized view) | Real evidence | `check_type` in `gold_leakage_summary` |
 |---|---|---|
-| `silver_contract_price_reconciliation` | `salesforce_source.contract_line_item.UnitPrice` vs `tmf_customer.bill` | `contract_price_mismatch` |
-| `silver_discount_authorization_check` | `salesforce_source.sbqq__quoteline__c` vs `sbqq__quote__c.discount_approval__c` | `unauthorized_discount`, `expired_quote_active` |
-| `silver_fx_rate_validation` | `oracle_erp_source.ra_customer_trx_all` vs Refinitiv mid-market rates (>1% dev) | (FX deviation; not unioned into the register) |
+| `silver_contract_price_reconciliation` | `salesforce_source.contract_line_item.UnitPrice` (negotiated source of truth) vs `oracle_erp_source.ra_billed_circuit_rates.BILLED_UNIT_PRICE` (independent ERP-billed extract; >1% divergence flags) | `contract_price_mismatch` |
+| `silver_discount_authorization_check` | `salesforce_source.sbqq__quoteline__c` vs `sbqq__quote__c.discount_approval__c` | `unauthorized_discount`, `expired_quote_active` (counted at quote grain) |
+| `silver_fx_rate_validation` | `oracle_erp_source.ra_customer_trx_all.APPLIED_EXCHANGE_RATE` (billing-applied rate) vs Refinitiv mid-market `CONVERSION_RATE` (>1% dev) | (FX deviation; not unioned into the register) |
 | `silver_ar_aging_analysis` | `oracle_erp_source.ar_payment_schedules_all` (DSO, 90+ days overdue) | `ar_collection_risk` |
 | `silver_revenue_recognition_check` | ASC-606 `oracle_erp_source.revenue_recognition_schedule` vs `gl_je_lines` | `rev_rec_timing_mismatch` |
 | `silver_doc_intelligence_contracts` | `ai_parse_document` + `ai_extract` on `ironclad_clm_source` contract PDFs vs system | `doc_contract_mismatch` |

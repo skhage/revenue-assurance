@@ -8,6 +8,7 @@
 > - ❌ **Was:** Two-schema `ra_silver`/`ra_gold` split; a materialized `service_instance` identity bridge; the "6 checks" being active-unbilled / usage–billing variance / billing-start-lag / partner-settlement; case state in a Delta `exception_case` ↔ `ra_trouble_ticket`. ✅ **Now:** One `revenue_assurance` schema; **no materialized bridge** (checks join `*_source` → `tmf_*` directly); the **7 silver checks** are contract-price, discount-authorization, FX-validation, AR-aging, rev-rec timing, and two AI document-intelligence checks; **case state lives in Lakebase Postgres** (project `ra-console-lakebase`, schema `ra`: `ra.cases` / `ra.case_notes`).
 > - ❌ **Was:** App implied FastAPI/HTML; golden table `reconciliation_exceptions`, `leakage_kpis`, `revenue_forecast`. ✅ **Now:** RA Exceptions Console is a **Databricks AppKit** app (React/TypeScript + type-safe SQL): reads via the analytics plugin (SQL warehouse) over `revenue_assurance.gold_*`, writes case state via the lakebase plugin. Serving tables are `gold_leakage_summary`, `gold_reconciliation_scorecard`, `gold_anomaly_scores`, `gold_revenue_forecast_anomalies`.
 > - ✅ **Kept:** Scenario structure (Given/When/Then), reconciliation-check coverage, ML/forecast test, case workflow, data-quality expectations, security/governance, smoke tests. Updated assertion targets and data bindings to the real tables.
+> - ❌ **WRONG (audit finding, fixed 2026-08):** CHK-1's "diverges from billed `tmf_customer.bill`" and CHK-3's FX check both read simulator ground-truth (a `leakage_flag` and a hardcoded `1.0`) instead of independently comparing source-of-truth values, and CHK-5's rev-rec grain mismatch produced false positives on clean data. **FIXED:** CHK-1 now compares `contract_line_item.UnitPrice` against a new independent `oracle_erp_source.ra_billed_circuit_rates.BILLED_UNIT_PRICE` extract; CHK-3 now compares `ra_customer_trx_all.APPLIED_EXCHANGE_RATE` against the Refinitiv market rate over real non-USD invoices; CHK-5 now groups both sides by invoice-origination period. CHK-2's expired-quote count is now quote-grain, not line-grain. See §1.3/§1.4 for scorecard and forecast fixes.
 
 **Demo:** Revenue Assurance Lakehouse for Lakelink Fiber (pitched to Lumen Technologies) | **Catalog:** `cdm_tmforum` (reading `tmf_*`; building the `revenue_assurance` schema; sources simulated in `*_source`) | **Scope:** source simulation → the reconciliation checks (silver) → the unified leakage register + scorecard + forecast (gold) → ML/`ai_forecast` → RA Exceptions Console case workflow (Lakebase) → governance & smoke tests → golden outputs.
 
@@ -32,11 +33,11 @@ Each check is a `CREATE OR REFRESH MATERIALIZED VIEW` in `cdm_tmforum.revenue_as
 
 | ID | Silver check (MV) | Given | When | Then (`check_type` in `gold_leakage_summary`) |
 | :---- | :---- | :---- | :---- | :---- |
-| CHK-1 | `silver_contract_price_reconciliation` | `salesforce_source.contract_line_item.UnitPrice` diverges from billed `tmf_customer.bill` | Refresh runs | `contract_price_mismatch`; `amount_at_risk` = contracted − billed; HIGH/MEDIUM by size |
-| CHK-2 | `silver_discount_authorization_check` | A quote line discount exceeds `sbqq__quote__c.discount_approval__c`, or an expired quote is still Approved | Refresh runs | `unauthorized_discount` (HIGH) and/or `expired_quote_active` (MEDIUM) |
-| CHK-3 | `silver_fx_rate_validation` | An invoice FX rate on `oracle_erp_source.ra_customer_trx_all` deviates > 1% from the Refinitiv mid-market rate | Refresh runs | FX-deviation row flagged (validation check; not unioned into the register) |
+| CHK-1 | `silver_contract_price_reconciliation` | `salesforce_source.contract_line_item.UnitPrice` (contracted, source of truth) diverges >1% from the independent `oracle_erp_source.ra_billed_circuit_rates.BILLED_UNIT_PRICE` extract | Refresh runs | `contract_price_mismatch`; `amount_at_risk` = |contracted − billed|; HIGH/MEDIUM by size |
+| CHK-2 | `silver_discount_authorization_check` | A quote line discount exceeds `sbqq__quote__c.discount_approval__c`, or an expired quote is still Approved | Refresh runs | `unauthorized_discount` (HIGH, line grain) and/or `expired_quote_active` (MEDIUM, quote grain — deduped so a multi-line quote counts once) |
+| CHK-3 | `silver_fx_rate_validation` | The rate billing actually applied (`ra_customer_trx_all.APPLIED_EXCHANGE_RATE`) to a non-USD invoice deviates > 1% from the independently-sourced Refinitiv market rate | Refresh runs | FX-deviation row flagged (validation check; not unioned into the register) |
 | CHK-4 | `silver_ar_aging_analysis` | `oracle_erp_source.ar_payment_schedules_all` shows 90+ day overdue / high DSO | Refresh runs | `ar_collection_risk` (HIGH); `amount_at_risk` = outstanding |
-| CHK-5 | `silver_revenue_recognition_check` | ASC-606 `revenue_recognition_schedule` diverges from `gl_je_lines` postings | Refresh runs | `rev_rec_timing_mismatch` (MEDIUM); `amount_at_risk` = |recognition variance| |
+| CHK-5 | `silver_revenue_recognition_check` | ASC-606 `revenue_recognition_schedule`'s full per-invoice recognition total diverges from that same invoice-origination period's `gl_je_lines` postings (compatible grain — both sides are "revenue attributable to invoices billed in period X") | Refresh runs | `rev_rec_timing_mismatch` (MEDIUM); `amount_at_risk` = |recognition variance| |
 | CHK-6 | `silver_doc_intelligence_contracts` | `ai_parse_document` + `ai_extract` on an `ironclad_clm_source` contract PDF disagrees with the system record | Refresh runs | `doc_contract_mismatch` (HIGH); `detection_method='ai_extracted'` |
 | CHK-7 | `silver_doc_intelligence_invoices` | `ai_extract` on an invoice PDF shows an amount mismatch vs the system | Refresh runs | `doc_invoice_mismatch` (HIGH); `detection_method='ai_extracted'` |
 | CHK-0 | No false positives | A cleanly-reconciling customer (no seeded defect in any source) | Refresh runs | **No** row in `gold_leakage_summary` for it |
@@ -46,14 +47,14 @@ Each check is a `CREATE OR REFRESH MATERIALIZED VIEW` in `cdm_tmforum.revenue_as
 | ID | Given | When | Then |
 | :---- | :---- | :---- | :---- |
 | SCR-1 | `gold_reconciliation_scorecard` for a customer | Refresh runs | One row per scored customer with `composite_health_score` and `risk_tier` ∈ {GREEN, AMBER, RED} |
-| SCR-2 | Leakage exceptions across multiple check_types | Gold refresh completes | Scorecard aggregates all check_types per customer; one row per customer, no duplicates |
+| SCR-2 | Leakage exceptions across multiple check_types | Gold refresh completes | Scorecard aggregates **all seven** check_types per customer (price, discount, expired-quote, AR, rev-rec, doc-contract, doc-invoice), not a subset; one row per customer, no duplicates |
 | SCR-3 | A customer with no exceptions | Refresh runs | They appear in the scorecard with `risk_tier='GREEN'` and `composite_health_score` near 100 |
 
 ### 1.4 ML anomaly + revenue forecast (`gold_anomaly_scores`, `gold_revenue_forecast_anomalies`)
 
 | ID | Given | When | Then |
 | :---- | :---- | :---- | :---- |
-| ML-1 | Monthly GL revenue (account 4000) with seeded sharp deviations | `gold_revenue_forecast_anomalies` refreshes (uses `ai_forecast`) | Months outside the forecast interval get `anomaly_status` ∈ {ABOVE_EXPECTED, BELOW_EXPECTED}; normal months `NORMAL` |
+| ML-1 | Monthly GL revenue (account 4000) with seeded sharp deviations | `gold_revenue_forecast_anomalies` refreshes: trains `ai_forecast` on all but the trailing 24 months so the future-only forecast output overlaps those held-out months, and retains pure-future rows (past the last actual) via a FULL OUTER JOIN | Held-out months outside the forecast interval get `anomaly_status` ∈ {ABOVE_EXPECTED, BELOW_EXPECTED}; normal months `NORMAL`; pure-future rows carry non-null forecast bounds and `actual_revenue IS NULL` |
 | ML-2 | A stable revenue month | Refresh runs | `anomaly_status='NORMAL'`; `budget_variance_pct` computed vs `gl_budgets` |
 | ML-3 | ML anomaly scoring | `gold_anomaly_scores` refreshes | Scores present and joinable to exceptions; higher scores concentrate on injected anomalies |
 | ML-4 | Determinism | Re-run with same seed | Same set of anomaly flags produced |
@@ -81,7 +82,7 @@ Case state is written by the AppKit app to Lakebase Postgres (project `ra-consol
 | ID | Table | Expectation | Action |
 | :---- | :---- | :---- | :---- |
 | DQ-1 | `*_source.*` | Row counts within tolerance of seed targets (e.g., ~10K customers, ~100K circuits) | warn |
-| DQ-2 | `revenue_assurance.silver_contract_price_reconciliation` | `customer_id` resolvable; `leakage_flag` ∈ expected set | warn |
+| DQ-2 | `revenue_assurance.silver_contract_price_reconciliation` | `customer_id` resolvable; independent `billed_unit_price` resolvable; `estimated_amount_at_risk` ≥ 0 | warn |
 | DQ-3 | `revenue_assurance.silver_ar_aging_analysis` | `total_outstanding` ≥ 0; `collection_risk` ∈ {LOW, MEDIUM, HIGH} | drop invalid |
 | DQ-4 | `revenue_assurance.gold_leakage_summary` | `check_type` ∈ the 7 known types; `severity` ∈ {HIGH, MEDIUM}; `amount_at_risk` ≥ 0 | fail |
 | DQ-5 | `revenue_assurance.gold_reconciliation_scorecard` | one row per scored customer; `composite_health_score` ∈ [0,100]; `risk_tier` ∈ {GREEN, AMBER, RED} | fail |

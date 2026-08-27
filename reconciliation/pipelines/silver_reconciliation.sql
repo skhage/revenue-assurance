@@ -33,23 +33,32 @@
 
 -- -----------------------------------------------------------------------------
 -- Contract Price Reconciliation
--- Contracted UnitPrice (Salesforce) vs actual billed amount (TMF billing).
--- Detects: price_mismatch and expired_discount leakage.
+-- Contracted UnitPrice (Salesforce, the negotiated source of truth) vs actual
+-- billed unit price (Oracle ERP's independent circuit-rate extract). Detects
+-- price_mismatch where the two systems disagree on what a circuit costs.
 --
--- DQ-2: customer_id resolvable; leakage_flag in the expected set. Action: warn
---   (default, no ON VIOLATION) — invalid rows are still written and surface in
---   the event log, which is the point: the demo shows the breach rather than
---   silently hiding it.
+-- INDEPENDENCE: `leakage_flag` on contract_line_item is ground-truth metadata
+--   only (for `known_leakage_flag` downstream) — this check does NOT read it.
+--   `price_mismatch_pct` and `reconciliation_status` below are derived purely
+--   by comparing contracted_price to billed_unit_price, two independently
+--   generated cross-system values (see data-sim/simulate_source_systems.py
+--   section 4/5). A >1% relative divergence is what flags the row, matching
+--   how a real price audit would work.
+--
+-- DQ-2: customer_id resolvable; billed rate present; amount at risk non-negative.
+--   Action: warn (default, no ON VIOLATION) — invalid rows are still written
+--   and surface in the event log, which is the point: the demo shows the
+--   breach rather than silently hiding it.
 -- -----------------------------------------------------------------------------
 CREATE OR REFRESH MATERIALIZED VIEW silver_contract_price_reconciliation (
   CONSTRAINT dq2_customer_id_resolvable
     EXPECT (customer_id IS NOT NULL),
-  CONSTRAINT dq2_leakage_flag_in_expected_set
-    EXPECT (leakage_flag IS NULL OR leakage_flag IN ('price_mismatch', 'expired_discount')),
+  CONSTRAINT dq2_billed_rate_resolvable
+    EXPECT (billed_unit_price IS NOT NULL),
   CONSTRAINT dq2_amount_at_risk_non_negative
     EXPECT (estimated_amount_at_risk >= 0)
 )
-COMMENT 'Compares contracted circuit prices (salesforce_source.contract_line_item.UnitPrice) against actual billed amounts (tmf_customer.bill). Flags price_mismatch and expired_discount leakage where contracted != billed.'
+COMMENT 'Compares contracted circuit prices (salesforce_source.contract_line_item.UnitPrice, the negotiated source of truth) against the independently-derived billed unit price (oracle_erp_source.ra_billed_circuit_rates). Flags price_mismatch where the two systems disagree by more than 1% -- computed purely from the arithmetic comparison, not a leakage flag.'
 AS
 WITH contract_lines AS (
   SELECT
@@ -58,40 +67,49 @@ WITH contract_lines AS (
     cli.Service_Circuit_Id__c,
     cli.ProductCode,
     cli.UnitPrice AS contracted_price,
-    cli.leakage_flag,
+    cli.leakage_flag AS known_leakage_flag,
     c.AccountId,
     c.TMF_Customer_Id__c AS customer_id,
     c.ContractNumber
   FROM salesforce_source.contract_line_item cli
   JOIN salesforce_source.contract c
     ON cli.Contract__c = c.Id
+),
+-- price_mismatch_pct computed exactly once; every downstream flag reads it
+-- back instead of re-deriving the ABS(...)/NULLIF(...) expression.
+priced AS (
+  SELECT
+    cl.*,
+    billed.BILLED_UNIT_PRICE AS billed_unit_price,
+    ABS(cl.contracted_price - billed.BILLED_UNIT_PRICE)
+      / NULLIF(cl.contracted_price, 0) AS price_mismatch_pct
+  FROM contract_lines cl
+  LEFT JOIN oracle_erp_source.ra_billed_circuit_rates billed
+    ON billed.SERVICE_CIRCUIT_ID = cl.Service_Circuit_Id__c
+    AND billed.SOURCE_CONTRACT_ID = cl.contract_id
 )
 SELECT
-  cl.line_item_id,
-  cl.contract_id,
-  cl.ContractNumber,
-  cl.Service_Circuit_Id__c,
-  cl.ProductCode,
-  cl.contracted_price,
-  cl.leakage_flag,
-  cl.customer_id,
+  p.line_item_id,
+  p.contract_id,
+  p.ContractNumber,
+  p.Service_Circuit_Id__c,
+  p.ProductCode,
+  p.contracted_price,
+  p.billed_unit_price,
+  p.known_leakage_flag,
+  p.customer_id,
   a.Name AS account_name,
   xw.SOURCE_PARTY_ID AS salesforce_account_id,
-  CASE
-    WHEN cl.leakage_flag IS NOT NULL THEN 'LEAKAGE_CONFIRMED'
-    ELSE 'CLEAN'
-  END AS reconciliation_status,
-  CASE
-    WHEN cl.leakage_flag = 'price_mismatch' THEN cl.contracted_price * 0.15
-    WHEN cl.leakage_flag = 'expired_discount' THEN cl.contracted_price * 0.10
-    ELSE 0.0
-  END AS estimated_amount_at_risk,
+  p.price_mismatch_pct,
+  CASE WHEN p.price_mismatch_pct > 0.01 THEN 'price_mismatch' ELSE NULL END AS leakage_flag,
+  CASE WHEN p.price_mismatch_pct > 0.01 THEN 'LEAKAGE_CONFIRMED' ELSE 'CLEAN' END AS reconciliation_status,
+  ABS(p.contracted_price - p.billed_unit_price) AS estimated_amount_at_risk,
   'rule_based' AS detection_method
-FROM contract_lines cl
+FROM priced p
 LEFT JOIN salesforce_source.account a
-  ON cl.AccountId = a.Id
+  ON p.AccountId = a.Id
 LEFT JOIN mdm_source.customer_crosswalk xw
-  ON xw.MASTER_CUSTOMER_ID = cl.customer_id
+  ON xw.MASTER_CUSTOMER_ID = p.customer_id
   AND xw.SOURCE_SYSTEM = 'SALESFORCE';
 
 
@@ -152,8 +170,15 @@ LEFT JOIN salesforce_source.account a
 
 -- -----------------------------------------------------------------------------
 -- FX Rate Validation
--- Checks that invoice currency conversions used the correct market rate.
--- Flags > 1% deviation from Refinitiv mid-market.
+-- Checks that the rate billing actually applied to a non-USD invoice
+-- (oracle_erp_source.ra_customer_trx_all.APPLIED_EXCHANGE_RATE) matches the
+-- Refinitiv market rate for that currency/date. Flags > 1% deviation.
+--
+-- INDEPENDENCE: both sides come from data-sim, but through unrelated formulas
+--   (see simulate_source_systems.py) — APPLIED_EXCHANGE_RATE is not copied
+--   from CONVERSION_RATE, so a real divergence must be injected for the two to
+--   differ. USD invoices carry APPLIED_EXCHANGE_RATE = 1.0 and are excluded
+--   from the deviation flag (there's no conversion to validate).
 --
 -- DQ: a matched market rate must be positive. A NULL rate means no Refinitiv
 --   quote for that currency/date — legitimate and worth seeing, so this warns
@@ -165,7 +190,7 @@ CREATE OR REFRESH MATERIALIZED VIEW silver_fx_rate_validation (
   CONSTRAINT dq_invoice_currency_present
     EXPECT (INVOICE_CURRENCY_CODE IS NOT NULL)
 )
-COMMENT 'Validates FX rates applied to multi-currency invoices against Refinitiv market rates. Flags conversions deviating > 1% from mid-market.'
+COMMENT 'Validates the FX rate billing actually applied to non-USD invoices (ra_customer_trx_all.APPLIED_EXCHANGE_RATE) against the independently-sourced Refinitiv market rate for that currency/date. Flags conversions deviating > 1% from market.'
 AS
 SELECT
   trx.CUSTOMER_TRX_ID,
@@ -173,14 +198,15 @@ SELECT
   trx.TRX_DATE,
   trx.INVOICE_CURRENCY_CODE,
   trx.INVOICE_AMOUNT,
+  trx.APPLIED_EXCHANGE_RATE AS applied_rate,
   fx.CONVERSION_RATE AS market_rate,
   fx.CONVERSION_DATE,
   fx.SOURCE AS rate_source,
-  -- For USD-denominated invoices, the rate should be 1.0
-  -- For non-USD, check against market rate
+  ABS(trx.APPLIED_EXCHANGE_RATE - fx.CONVERSION_RATE)
+    / NULLIF(fx.CONVERSION_RATE, 0) AS rate_deviation_pct,
   CASE
     WHEN trx.INVOICE_CURRENCY_CODE != 'USD'
-      AND ABS(fx.CONVERSION_RATE - 1.0) / NULLIF(fx.CONVERSION_RATE, 0) > 0.01
+      AND ABS(trx.APPLIED_EXCHANGE_RATE - fx.CONVERSION_RATE) / NULLIF(fx.CONVERSION_RATE, 0) > 0.01
     THEN TRUE
     ELSE FALSE
   END AS rate_deviation_flag,
@@ -240,31 +266,47 @@ GROUP BY ALL;
 
 -- -----------------------------------------------------------------------------
 -- Revenue Recognition Check
--- ASC-606 recognized vs deferred timing against GL postings.
+-- ASC-606 recognition schedule vs GL postings, compared at a COMPATIBLE grain.
+--
+-- GRAIN FIX: the prior version summed RECOGNIZED_AMOUNT by the schedule row's
+--   OWN period (its ratable 1/12th recognition month) and compared that to
+--   GL's full invoice-total posting in the INVOICE's month. Those are
+--   different cohorts of invoices — a given period's rev-rec total blends
+--   1/12th slices from up to 12 trailing invoice cohorts, while GL's total for
+--   that same period is 100% of that one month's invoices. Comparing them
+--   produced a large structural variance on almost every period that had
+--   nothing to do with an actual timing error (verified live: 3-60% variance
+--   even on clean data). Fixed by grouping the recognition schedule by the
+--   ORIGINATING invoice's period (joining back to ra_customer_trx_all) so both
+--   sides represent "total revenue attributable to invoices billed in period
+--   X" — the same cohort, the same grain. On clean data these two totals are
+--   equal by construction (the 12 ratable slices of an invoice sum to its
+--   full billed amount); a real mismatch now only appears where the GL side
+--   was independently modified (e.g. the forecast-anomaly GL step-change,
+--   which intentionally does NOT touch the recognition schedule) or where a
+--   billed invoice has no corresponding schedule at all.
 --
 -- DQ: every row must carry a period label, otherwise the rev-rec variance
 --   cannot be attributed to a close period (and `reference_id` in the register
 --   would be NULL). Action: warn.
---
--- NOTE: PERIOD_NAME is COALESCEd across the FULL OUTER JOIN. Selecting
---   `rr.PERIOD_NAME` alone would yield NULL for GL-only periods — i.e. exactly
---   the "revenue posted with no recognition schedule" case this check exists to
---   catch, which would then land in the register with a NULL reference_id.
 -- -----------------------------------------------------------------------------
 CREATE OR REFRESH MATERIALIZED VIEW silver_revenue_recognition_check (
   CONSTRAINT dq_period_name_present
     EXPECT (PERIOD_NAME IS NOT NULL)
 )
-COMMENT 'Compares ASC-606 revenue recognition schedule (RECOGNIZED vs DEFERRED) against actual GL journal postings. Flags timing mismatches where revenue was recognized early or deferred incorrectly.'
+COMMENT 'Compares the ASC-606 revenue recognition schedule against GL journal postings at a compatible grain: both sides are grouped by the ORIGINATING invoice period, so a period''s full recognition-schedule total (the sum of all 12 ratable slices for invoices billed that period) is compared against that same period''s GL revenue posting. Flags timing mismatches where the two diverge, e.g. from the forecast-anomaly GL step-change or an unscheduled invoice.'
 AS
-WITH rev_rec_by_period AS (
+WITH rev_rec_by_origination_period AS (
   SELECT
-    PERIOD_NAME,
-    SUM(CASE WHEN STATUS = 'RECOGNIZED' THEN RECOGNIZED_AMOUNT ELSE 0 END) AS scheduled_recognized,
-    SUM(CASE WHEN STATUS = 'DEFERRED' THEN RECOGNIZED_AMOUNT ELSE 0 END) AS scheduled_deferred,
+    DATE_FORMAT(t.TRX_DATE, 'MMM-yy') AS PERIOD_NAME,
+    SUM(r.RECOGNIZED_AMOUNT) AS scheduled_recognized_total,
+    SUM(CASE WHEN r.STATUS = 'RECOGNIZED' THEN r.RECOGNIZED_AMOUNT ELSE 0 END) AS recognized_to_date,
+    SUM(CASE WHEN r.STATUS = 'DEFERRED' THEN r.RECOGNIZED_AMOUNT ELSE 0 END) AS deferred_to_date,
     COUNT(*) AS schedule_entries
-  FROM oracle_erp_source.revenue_recognition_schedule
-  GROUP BY PERIOD_NAME
+  FROM oracle_erp_source.revenue_recognition_schedule r
+  JOIN oracle_erp_source.ra_customer_trx_all t
+    ON t.CUSTOMER_TRX_ID = r.CUSTOMER_TRX_ID
+  GROUP BY DATE_FORMAT(t.TRX_DATE, 'MMM-yy')
 ),
 gl_revenue_by_period AS (
   SELECT
@@ -280,20 +322,22 @@ gl_revenue_by_period AS (
 )
 SELECT
   COALESCE(rr.PERIOD_NAME, gl.PERIOD_NAME) AS PERIOD_NAME,
-  rr.scheduled_recognized,
-  rr.scheduled_deferred,
+  rr.scheduled_recognized_total,
+  rr.recognized_to_date,
+  rr.deferred_to_date,
   rr.schedule_entries,
   gl.gl_revenue_posted,
-  -- Variance between scheduled recognition and GL posting
-  COALESCE(rr.scheduled_recognized, 0) - COALESCE(gl.gl_revenue_posted, 0) AS recognition_variance,
+  -- Variance between the full recognition-schedule total and GL posting,
+  -- both anchored to the same invoice-origination period.
+  COALESCE(rr.scheduled_recognized_total, 0) - COALESCE(gl.gl_revenue_posted, 0) AS recognition_variance,
   -- Flag material variance (> 5% difference)
   CASE
-    WHEN ABS(COALESCE(rr.scheduled_recognized, 0) - COALESCE(gl.gl_revenue_posted, 0))
-         / NULLIF(GREATEST(rr.scheduled_recognized, gl.gl_revenue_posted), 0) > 0.05
+    WHEN ABS(COALESCE(rr.scheduled_recognized_total, 0) - COALESCE(gl.gl_revenue_posted, 0))
+         / NULLIF(GREATEST(rr.scheduled_recognized_total, gl.gl_revenue_posted), 0) > 0.05
     THEN TRUE
     ELSE FALSE
   END AS material_timing_mismatch,
   'rule_based' AS detection_method
-FROM rev_rec_by_period rr
+FROM rev_rec_by_origination_period rr
 FULL OUTER JOIN gl_revenue_by_period gl
   ON rr.PERIOD_NAME = gl.PERIOD_NAME;

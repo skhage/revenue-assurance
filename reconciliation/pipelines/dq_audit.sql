@@ -80,6 +80,8 @@ source_counts AS (
   UNION ALL
   SELECT 'salesforce_source.sbqq__quoteline__c', COUNT(*), 5000, 50000 FROM salesforce_source.sbqq__quoteline__c
   UNION ALL
+  SELECT 'oracle_erp_source.ra_billed_circuit_rates', COUNT(*), 50000, 150000 FROM oracle_erp_source.ra_billed_circuit_rates
+  UNION ALL
   SELECT 'oracle_erp_source.ra_customer_trx_all', COUNT(*), 10000, CAST(NULL AS BIGINT) FROM oracle_erp_source.ra_customer_trx_all
   UNION ALL
   SELECT 'oracle_erp_source.ra_customer_trx_lines_all', COUNT(*), 100000, CAST(NULL AS BIGINT) FROM oracle_erp_source.ra_customer_trx_lines_all

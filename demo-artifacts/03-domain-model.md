@@ -8,6 +8,7 @@
 > - ❌ **WRONG (superseded):** The "6 checks" (active-circuit-unbilled, usage–billing variance, billing-start-lag, partner-settlement). **FIXED:** the built check **set changed** — seven silver checks centered on contract-price, discount authorization, FX validation, AR aging, rev-rec timing, and two AI document-intelligence checks (see §7).
 > - ✅ **KEPT:** Personas (Dana Whitfield, Marcus Chen, Priya Nair), the RA Exceptions Console app, and UC-governed PII masking.
 > - ✅ **2026-08 correction applied:** Unified single `cdm_tmforum.revenue_assurance` schema, 7 check_type enum values, Lakebase Postgres case store (`ra.cases`/`ra.case_notes`), AppKit architecture; all data bindings updated; `service_instance` bridge removed; ML/forecast via `ai_forecast` + `gold_revenue_forecast_anomalies`; ~48K rows, ~$601M at-risk register.
+> - ❌ **WRONG (audit finding, fixed 2026-08):** `silver_contract_price_reconciliation` read the simulator's seeded `leakage_flag` to derive its own detection status, and `silver_fx_rate_validation` compared the market rate to a hardcoded `1.0` — neither check was an independent comparison of source-of-truth values. **FIXED:** contract price now compares `contract_line_item.UnitPrice` against a new independent `oracle_erp_source.ra_billed_circuit_rates.BILLED_UNIT_PRICE` extract; FX now compares `ra_customer_trx_all.APPLIED_EXCHANGE_RATE` against Refinitiv's market rate, over real non-USD invoices (`INVOICE_CURRENCY_CODE` now follows the customer's actual `billing_currency`, not a hardcoded `'USD'`). Revenue-recognition now groups both sides by invoice-origination period (previously compared full-invoice GL postings against a different mixed-cohort recognition-schedule grain). The forecast anomaly view now retains future rows and evaluates a held-out actuals window instead of joining historical actuals to a future-only forecast that never overlapped. The scorecard now scores all seven controls, not four. Expired-quote counting is now at quote grain, not line grain.
 
 **Demo:** Revenue Assurance Lakehouse for Lakelink Fiber (Lumen pitch audience)  
 **Catalog / schema:** `cdm_tmforum` (TM Forum SID, read-only) + one new `cdm_tmforum.revenue_assurance` schema  
@@ -68,7 +69,7 @@ All silver MVs are `CREATE OR REFRESH MATERIALIZED VIEW cdm_tmforum.revenue_assu
 
 | Materialized view | Source of truth | Key leakage columns |
 | :---- | :---- | :---- |
-| `silver_contract_price_reconciliation` | `salesforce_source.contract_line_item.UnitPrice` vs `tmf_customer.bill` | `customer_id`, `account_name`, `estimated_amount_at_risk`, `leakage_flag` (`price_mismatch`…), `ContractNumber` |
+| `silver_contract_price_reconciliation` | `salesforce_source.contract_line_item.UnitPrice` vs `oracle_erp_source.ra_billed_circuit_rates.BILLED_UNIT_PRICE` | `customer_id`, `account_name`, `estimated_amount_at_risk`, `leakage_flag` (`price_mismatch`…), `ContractNumber` |
 | `silver_discount_authorization_check` | `salesforce_source.sbqq__quoteline__c` vs `sbqq__quote__c.discount_approval__c` | `customer_id`, `account_name`, `discount_overrun_amount`, `unauthorized_discount` (bool), `expired_quote_still_active` (bool), `quote_id` |
 | `silver_fx_rate_validation` | `oracle_erp_source.ra_customer_trx_all` vs `refinitiv_fx_source` mid-market | invoice/currency keys, applied vs market rate, deviation % (flag >1%) |
 | `silver_ar_aging_analysis` | `oracle_erp_source.ar_payment_schedules_all` | `customer_id`, `customer_name`, `total_outstanding`, `estimated_dso_days`, `collection_risk` (`HIGH`…), `BILL_TO_CUSTOMER_ID` |
@@ -178,13 +179,13 @@ No raw PII leaves silver into gold except masked.
 
 | Source (`*_source` + `tmf_*`) | → silver check MV | → gold serving MV |
 | :---- | :---- | :---- |
-| `salesforce_source.contract_line_item` + `tmf_customer.bill` | silver_contract_price_reconciliation | gold_leakage_summary, gold_reconciliation_scorecard |
+| `salesforce_source.contract_line_item` + `oracle_erp_source.ra_billed_circuit_rates` | silver_contract_price_reconciliation | gold_leakage_summary, gold_reconciliation_scorecard |
 | `salesforce_source.sbqq__quoteline__c` / `sbqq__quote__c` | silver_discount_authorization_check | gold_leakage_summary, gold_reconciliation_scorecard |
 | `oracle_erp_source.ra_customer_trx_all` + `refinitiv_fx_source` | silver_fx_rate_validation | (FX deviation; not in the register union) |
 | `oracle_erp_source.ar_payment_schedules_all` | silver_ar_aging_analysis | gold_leakage_summary, gold_reconciliation_scorecard |
-| `oracle_erp_source.revenue_recognition_schedule` + `gl_je_lines` | silver_revenue_recognition_check | gold_leakage_summary |
+| `oracle_erp_source.revenue_recognition_schedule` + `gl_je_lines` + `ra_customer_trx_all` | silver_revenue_recognition_check | gold_leakage_summary, gold_reconciliation_scorecard |
 | `ironclad_clm_source` contract PDFs (`ai_parse_document`/`ai_extract`) | silver_doc_intelligence_contracts | gold_leakage_summary, gold_reconciliation_scorecard |
-| `ironclad_clm_source` invoice PDFs | silver_doc_intelligence_invoices | gold_leakage_summary |
+| `ironclad_clm_source` invoice PDFs | silver_doc_intelligence_invoices | gold_leakage_summary, gold_reconciliation_scorecard |
 | `oracle_erp_source.gl_*` (acct 4000) + `gl_budgets` | — | gold_revenue_forecast_anomalies (`ai_forecast`) |
 | `_metrics.*` (71 pre-built views) | — | dashboards / KPIs (context) |
 | gold_leakage_summary (read) | — | RA Exceptions Console → `ra.cases` (Lakebase write-back) |
@@ -195,7 +196,7 @@ No raw PII leaves silver into gold except masked.
 
 | Silver check (materialized view) | Evidence in data | `check_type` in `gold_leakage_summary` |
 | :---- | :---- | :---- |
-| **silver_contract_price_reconciliation** | `salesforce_source.contract_line_item.UnitPrice` vs `tmf_customer.bill` | `contract_price_mismatch` |
+| **silver_contract_price_reconciliation** | `salesforce_source.contract_line_item.UnitPrice` vs `oracle_erp_source.ra_billed_circuit_rates.BILLED_UNIT_PRICE` (>1% dev) | `contract_price_mismatch` |
 | **silver_discount_authorization_check** | `sbqq__quoteline__c` vs `sbqq__quote__c.discount_approval__c` | `unauthorized_discount`, `expired_quote_active` |
 | **silver_fx_rate_validation** | `oracle_erp_source.ra_customer_trx_all` vs Refinitiv mid-market (>1% dev) | (FX deviation — not unioned into register) |
 | **silver_ar_aging_analysis** | `oracle_erp_source.ar_payment_schedules_all` (DSO, 90+ days) | `ar_collection_risk` |
