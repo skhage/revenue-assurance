@@ -5,7 +5,7 @@
 variables:
   sql_warehouse_id:
     description: SQL warehouse ID used by the AI/BI dashboard and Genie space.
-    default: REPLACE_WITH_SQL_WAREHOUSE_ID
+    default: 7b65956f30d66feb
 
 resources:
   dashboards:

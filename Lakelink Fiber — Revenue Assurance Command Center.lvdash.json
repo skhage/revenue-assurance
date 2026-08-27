@@ -1281,11 +1281,11 @@
               }
             ],
             "spec": {
-              "version": 2,
               "frame": {
-                "title": "Forecast Detail",
-                "showTitle": true
+                "showTitle": true,
+                "title": "Forecast Detail"
               },
+              "version": 2,
               "widgetType": "table",
               "encodings": {
                 "columns": [
@@ -1328,13 +1328,15 @@
                   {
                     "fieldName": "budget_variance_pct",
                     "format": {
-                      "type": "number-percent",
+                      "type": "number-plain",
+                      "abbreviation": "none",
                       "decimalPlaces": {
                         "type": "exact",
                         "places": 1
                       }
                     },
                     "displayName": "Variance %",
+                    "formatTemplate": "{{ @formatted }}%",
                     "style": {
                       "type": "basic",
                       "rules": [
@@ -1342,7 +1344,7 @@
                           "condition": {
                             "operand": {
                               "type": "data-value",
-                              "value": "0.1"
+                              "value": "10"
                             },
                             "operator": ">"
                           },
@@ -1353,11 +1355,22 @@
                           "condition": {
                             "operand": {
                               "type": "data-value",
-                              "value": "0.05"
+                              "value": "5"
                             },
                             "operator": ">"
                           },
                           "backgroundColor": "#F59E0B",
+                          "foregroundColor": "#FFFFFF"
+                        },
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
+                              "value": "-10"
+                            },
+                            "operator": "<"
+                          },
+                          "backgroundColor": "#DC2626",
                           "foregroundColor": "#FFFFFF"
                         }
                       ]
