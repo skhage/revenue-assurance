@@ -1,10 +1,22 @@
 import { createBrowserRouter, RouterProvider, NavLink, Outlet, useLocation } from 'react-router';
 import { useState } from 'react';
 import { Button, Sheet, SheetContent } from '@databricks/appkit-ui/react';
-import { LayoutGrid, ListChecks, Briefcase, Menu, Moon, Sun, Activity, SearchCheck, Zap } from 'lucide-react';
+import {
+  LayoutGrid,
+  ListChecks,
+  Briefcase,
+  Menu,
+  Moon,
+  Sun,
+  Activity,
+  SearchCheck,
+  Zap,
+  Waypoints,
+} from 'lucide-react';
 import { OverviewPage } from './pages/OverviewPage';
 import { QueuePage } from './pages/QueuePage';
 import { CasesPage } from './pages/CasesPage';
+import { ArchitecturePage } from './pages/ArchitecturePage';
 import { useTheme } from './lib/useTheme';
 import { WhoAmIProvider, useWhoAmI } from './lib/whoami';
 import { initials } from './lib/format';
@@ -15,10 +27,16 @@ const NAV = [
   { to: '/cases', label: 'My cases', icon: Briefcase, end: false },
 ];
 
+const SECONDARY_NAV = [{ to: '/architecture', label: 'Architecture', icon: Waypoints, end: false }];
+
 const TITLES: Record<string, { title: string; sub: string }> = {
   '/': { title: 'Overview', sub: 'Revenue leakage across all reconciliation checks' },
   '/queue': { title: 'Exception queue', sub: 'Triage detected leakage, highest impact first' },
   '/cases': { title: 'My cases', sub: 'Cases you are investigating and recovering' },
+  '/architecture': {
+    title: 'Architecture',
+    sub: 'How source simulation, reconciliation, ML, and serving fit together',
+  },
 };
 
 function navItemClass({ isActive }: { isActive: boolean }) {
@@ -62,6 +80,16 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         <div className="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-muted-foreground/60">
           <Zap className="h-4 w-4 shrink-0" /> Anomaly models
         </div>
+      </nav>
+
+      <nav className="flex flex-col gap-0.5">
+        <div className="px-2.5 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Learn</div>
+        {SECONDARY_NAV.map(({ to, label, icon: Icon, end }) => (
+          <NavLink key={to} to={to} end={end} className={navItemClass} onClick={onNavigate}>
+            <Icon className="h-4 w-4 shrink-0" />
+            {label}
+          </NavLink>
+        ))}
       </nav>
 
       <div className="mt-auto flex items-center gap-2.5 border-t border-sidebar-border pt-3">
@@ -134,6 +162,7 @@ const router = createBrowserRouter([
       { path: '/', element: <OverviewPage /> },
       { path: '/queue', element: <QueuePage /> },
       { path: '/cases', element: <CasesPage /> },
+      { path: '/architecture', element: <ArchitecturePage /> },
     ],
   },
 ]);
