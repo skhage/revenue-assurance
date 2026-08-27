@@ -54,11 +54,10 @@ FROM exceptions
 LEFT JOIN ${WORKFLOW_TABLE} workflow USING (exception_id)
 `;
 
+export type SqlParam = ReturnType<(typeof sql)[keyof typeof sql]>;
+
 export interface AnalyticsClient {
-  query(
-    text: string,
-    params?: Record<string, ReturnType<(typeof sql)['string']> | ReturnType<(typeof sql)['int']>>
-  ): Promise<{ data_array?: unknown[][] }>;
+  query(text: string, params?: Record<string, SqlParam>): Promise<{ data_array?: unknown[][] }>;
 }
 
 export interface LakebaseClient {
@@ -76,9 +75,6 @@ function textValue(value: unknown) {
     ? String(value)
     : '';
 }
-
-const quote = (value: unknown) => `'${textValue(value).replace(/'/g, "''")}'`;
-const nullable = (value: unknown) => (value == null ? 'NULL' : quote(value));
 
 export async function ensureWorkflowSchema(lakebase: LakebaseClient) {
   await lakebase.query('CREATE SCHEMA IF NOT EXISTS ra');
@@ -146,7 +142,7 @@ interface IdentityRecord {
 }
 
 export function identityMatchKey(record: IdentityRecord) {
-  return [record.reference_id, record.account_name, record.check_type, Number(record.amount_at_risk ?? 0).toFixed(6)]
+  return [record.reference_id, record.account_name, record.check_type]
     .map((value) => textValue(value).trim().toLowerCase())
     .join('|');
 }
@@ -215,7 +211,9 @@ export async function reconcileCaseIdentities(analytics: AnalyticsClient, lakeba
       );
       await enqueueSnapshot(client, migration.canonicalId);
     });
-    await analytics.query(`DELETE FROM ${WORKFLOW_TABLE} WHERE exception_id = ${quote(migration.legacyId)}`);
+    await analytics.query(`DELETE FROM ${WORKFLOW_TABLE} WHERE exception_id = :legacy_id`, {
+      legacy_id: sql.string(migration.legacyId),
+    });
   }
   if (plan.orphaned.length) {
     await lakebase.query("UPDATE ra.cases SET identity_status='orphaned' WHERE exception_id = ANY($1::text[])", [
@@ -262,20 +260,38 @@ export async function withTransaction<T>(
   }
 }
 
+export const RECONCILIATION_INTERVAL_MS = 5 * 60 * 1000;
+
 export function createProjection(analytics: AnalyticsClient, lakebase: LakebaseClient) {
   let running: Promise<void> | null = null;
+  let reconciling: Promise<{ migrations: number; orphaned: number }> | null = null;
   let ready = false;
   let lastError: string | null = null;
+  let reconciliationTimer: ReturnType<typeof setInterval> | null = null;
+
+  async function runReconciliation() {
+    if (reconciling) return reconciling;
+    reconciling = reconcileCaseIdentities(analytics, lakebase).finally(() => {
+      reconciling = null;
+    });
+    return reconciling;
+  }
 
   async function initialize() {
     await ensureWorkflowSchema(lakebase);
     try {
       await analytics.query(CREATE_WORKFLOW_TABLE_SQL);
       await analytics.query(CREATE_EXCEPTION_VIEW_SQL);
-      const reconciliation = await reconcileCaseIdentities(analytics, lakebase);
+      const reconciliation = await runReconciliation();
       ready = true;
       lastError = null;
       console.log('[workflow-projection] ready:', reconciliation);
+      reconciliationTimer = setInterval(() => {
+        runReconciliation().catch((error) => {
+          lastError = error instanceof Error ? error.message : String(error);
+          console.error('[workflow-projection] scheduled reconciliation failed:', error);
+        });
+      }, RECONCILIATION_INTERVAL_MS);
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
       console.error('[workflow-projection] initialization failed; Lakebase writes remain queued:', error);
@@ -288,19 +304,33 @@ export function createProjection(analytics: AnalyticsClient, lakebase: LakebaseC
     );
     for (const row of rows) {
       try {
-        await analytics.query(`
-          MERGE INTO ${WORKFLOW_TABLE} target
-          USING (SELECT ${quote(row.exception_id)} exception_id) source
+        const params: Record<string, SqlParam> = {
+          exception_id: sql.string(textValue(row.exception_id)),
+          status: sql.string(textValue(row.status)),
+          assignee: sql.string(row.assignee == null ? '' : textValue(row.assignee)),
+          version: sql.bigint(Number(row.version)),
+          latest_note: sql.string(row.latest_note == null ? '' : textValue(row.latest_note)),
+          latest_note_author: sql.string(row.latest_note_author == null ? '' : textValue(row.latest_note_author)),
+          note_count: sql.bigint(Number(row.note_count)),
+          updated_at: sql.timestamp(textValue(row.updated_at)),
+        };
+        const assigneeExpr = row.assignee == null ? 'NULL' : ':assignee';
+        const noteExpr = row.latest_note == null ? 'NULL' : ':latest_note';
+        const noteAuthorExpr = row.latest_note_author == null ? 'NULL' : ':latest_note_author';
+        await analytics.query(
+          `MERGE INTO ${WORKFLOW_TABLE} target
+          USING (SELECT :exception_id AS exception_id) source
           ON target.exception_id = source.exception_id
-          WHEN MATCHED AND target.version <= ${Number(row.version)} THEN UPDATE SET
-            status = ${quote(row.status)}, assignee = ${nullable(row.assignee)}, version = ${Number(row.version)},
-            latest_note = ${nullable(row.latest_note)}, latest_note_author = ${nullable(row.latest_note_author)},
-            note_count = ${Number(row.note_count)}, updated_at = CAST(${quote(row.updated_at)} AS TIMESTAMP), projected_at = current_timestamp()
+          WHEN MATCHED AND target.version <= :version THEN UPDATE SET
+            status = :status, assignee = ${assigneeExpr}, version = :version,
+            latest_note = ${noteExpr}, latest_note_author = ${noteAuthorExpr},
+            note_count = :note_count, updated_at = CAST(:updated_at AS TIMESTAMP), projected_at = current_timestamp()
           WHEN NOT MATCHED THEN INSERT (exception_id, status, assignee, version, latest_note, latest_note_author, note_count, updated_at, projected_at)
-          VALUES (${quote(row.exception_id)}, ${quote(row.status)}, ${nullable(row.assignee)}, ${Number(row.version)},
-            ${nullable(row.latest_note)}, ${nullable(row.latest_note_author)}, ${Number(row.note_count)},
-            CAST(${quote(row.updated_at)} AS TIMESTAMP), current_timestamp())
-        `);
+          VALUES (:exception_id, :status, ${assigneeExpr}, :version,
+            ${noteExpr}, ${noteAuthorExpr}, :note_count,
+            CAST(:updated_at AS TIMESTAMP), current_timestamp())`,
+          params
+        );
         await lakebase.query('UPDATE ra.workflow_outbox SET projected_at = NOW(), last_error = NULL WHERE id = $1', [
           row.id,
         ]);
@@ -329,8 +359,16 @@ export function createProjection(analytics: AnalyticsClient, lakebase: LakebaseC
       lastError,
       pending: Number(rows[0]?.pending ?? 0),
       maxAttempts: Number(rows[0]?.max_attempts ?? 0),
+      reconciling: reconciling !== null,
     };
   }
 
-  return { initialize, flush, health };
+  function stop() {
+    if (reconciliationTimer) {
+      clearInterval(reconciliationTimer);
+      reconciliationTimer = null;
+    }
+  }
+
+  return { initialize, flush, health, stop, runReconciliation };
 }
