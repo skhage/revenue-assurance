@@ -33,10 +33,7 @@ const TITLES: Record<string, { title: string; sub: string }> = {
   '/': { title: 'Overview', sub: 'Revenue leakage across all reconciliation checks' },
   '/queue': { title: 'Exception queue', sub: 'Triage detected leakage, highest impact first' },
   '/cases': { title: 'My cases', sub: 'Cases you are investigating and recovering' },
-  '/architecture': {
-    title: 'Architecture',
-    sub: 'How source simulation, reconciliation, ML, and serving fit together',
-  },
+  '/architecture': { title: 'Architecture', sub: 'The demo mapped onto the Databricks Data + AI Platform' },
 };
 
 function navItemClass({ isActive }: { isActive: boolean }) {

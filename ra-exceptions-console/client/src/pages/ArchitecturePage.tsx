@@ -1,191 +1,451 @@
 import { useEffect, useState } from 'react';
+import { Button, Card, CardContent } from '@databricks/appkit-ui/react';
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-  Badge,
-  Skeleton,
-} from '@databricks/appkit-ui/react';
-import { Database, Waypoints, Sparkles, LayoutDashboard, Boxes } from 'lucide-react';
+  AppWindow,
+  BarChart3,
+  Sparkles,
+  Bot,
+  Network,
+  ShieldCheck,
+  Workflow,
+  Brain,
+  Warehouse,
+  DatabaseZap,
+  Layers,
+  ArrowRight,
+  ArrowLeft,
+  RotateCcw,
+  MapPin,
+  type LucideIcon,
+} from 'lucide-react';
 import { WorkspaceLinkButton } from '../components/WorkspaceLinkButton';
-import { architectureApi, type ArchitectureConfig } from '../lib/architecture';
 import {
+  architectureApi,
+  type ArchitectureConfig,
   exploreDataUrl,
   pipelineUrl,
   jobUrl,
-  dashboardUrl,
   genieUrl,
   mlflowExperimentUrl,
   lakebaseUrl,
 } from '../lib/architecture';
 
-interface Stage {
-  key: string;
-  icon: React.ComponentType<{ className?: string }>;
+/**
+ * Architecture tab.
+ *
+ * Recreates the Databricks Data + AI Platform layered diagram, but every tile is a
+ * real component of THIS demo (per demo-artifacts/05-repository-blueprint.md). On top
+ * of the layered map sits a guided clickthrough that walks the request path:
+ *   App → Genie One → Genie Agent → SDP → MLOps → Unity Catalog → Data.
+ * Each tour step carries "Open in workspace" deep links built from real bundle config
+ * (see lib/architecture.ts + server/routes/architecture.ts).
+ */
+
+const BRAND = '#FF3621'; // Databricks coral
+
+type NodeId = 'app' | 'aibi' | 'genie-one' | 'genie-agent' | 'uc' | 'sdp' | 'mlops' | 'lakehouse' | 'lakebase';
+
+interface NodeDef {
+  id: NodeId;
   title: string;
-  tagline: string;
-  explanation: string;
-  links: (cfg: ArchitectureConfig) => { label: string; href: string | null }[];
+  sub: string;
+  icon: LucideIcon;
 }
 
-const STAGES: Stage[] = [
+interface BandDef {
+  key: string;
+  label: string;
+  tagline: string;
+  tint: string; // subtle band background (theme-aware via /N alpha on tokens)
+  nodes: NodeDef[];
+}
+
+const BANDS: BandDef[] = [
   {
-    key: 'source-sim',
-    icon: Database,
-    title: '1. Source-system simulation',
-    tagline: 'data-sim/simulate_source_systems.py → *_source schemas',
-    explanation:
-      'Before any reconciliation can happen, the demo needs upstream systems that disagree with each other on purpose. A serverless notebook job writes deterministic, seeded data into simulated Salesforce, Oracle ERP, Refinitiv FX, Ironclad CLM, and MDM schemas — the same systems a real telco would reconcile against. It reads the read-only cdm_tmforum.tmf_* golden data but never writes to it.',
-    links: (cfg) => [
-      { label: 'Open simulate_source_systems job', href: jobUrl(cfg, cfg.datasimJobId) },
-      { label: 'Browse *_source schemas', href: exploreDataUrl(cfg, cfg.catalog) },
+    key: 'apps',
+    label: 'Agentic Apps',
+    tagline: 'Deploy agents at scale to transform work',
+    tint: 'bg-muted/40',
+    nodes: [
+      { id: 'app', title: 'RA Exceptions Console', sub: 'Custom App · AppKit', icon: AppWindow },
+      { id: 'aibi', title: 'RA Command Center', sub: 'AI/BI dashboard', icon: BarChart3 },
     ],
   },
   {
-    key: 'reconciliation',
-    icon: Waypoints,
-    title: '2. Reconciliation pipeline',
-    tagline: 'ra_medallion_pipeline → 7 silver checks + 4 gold materialized views',
-    explanation:
-      'A Lakeflow Declarative Pipeline runs seven independent silver checks — contract price, unauthorized discount, expired quote, AR collection risk, revenue-recognition timing, and two AI-powered document-intelligence checks that read contract/invoice PDFs with ai_parse_document + ai_extract. All seven union into gold_leakage_summary, the single leakage register everything else in this app reads from, alongside gold_reconciliation_scorecard for customer health.',
-    links: (cfg) => [
-      { label: 'Open ra_medallion_pipeline', href: pipelineUrl(cfg) },
-      { label: 'Browse revenue_assurance schema', href: exploreDataUrl(cfg) },
-      {
-        label: 'Inspect gold_leakage_summary',
-        href: exploreDataUrl(cfg, `${cfg.catalog}/${cfg.schema}/gold_leakage_summary`),
-      },
+    key: 'work',
+    label: 'Agentic Work',
+    tagline: 'Data-smart coworkers for every employee',
+    tint: 'bg-muted/60',
+    nodes: [
+      { id: 'genie-one', title: 'Genie One', sub: 'Org-wide AI coworker', icon: Sparkles },
+      { id: 'genie-agent', title: 'RA Genie Agent', sub: 'Curated Genie Space', icon: Bot },
     ],
   },
   {
-    key: 'ml',
-    icon: Sparkles,
-    title: '3. ML anomaly detection + forecasting',
-    tagline: 'ra_anomaly_ml_pipeline job + ai_forecast → gold_anomaly_scores / gold_revenue_forecast_anomalies',
-    explanation:
-      'Not every leakage signal is a hard rule. A scheduled job builds features from the exception population, trains a Unity Catalog IsolationForest model with MLflow, and publishes ranked anomaly scores back to gold_anomaly_scores. Separately, ai_forecast projects expected monthly revenue and flags months where actuals fall outside the confidence band — catching variance before the month closes rather than in a post-mortem.',
-    links: (cfg) => [
-      { label: 'Open ra_anomaly_ml_pipeline job', href: jobUrl(cfg, cfg.mlJobId) },
-      { label: 'Open MLflow experiments', href: mlflowExperimentUrl(cfg) },
-      {
-        label: 'Inspect gold_anomaly_scores',
-        href: exploreDataUrl(cfg, `${cfg.catalog}/${cfg.schema}/gold_anomaly_scores`),
-      },
-    ],
+    key: 'gov',
+    label: 'Unified Governance',
+    tagline: 'Data + AI control and cost management',
+    tint: 'bg-muted/40',
+    nodes: [{ id: 'uc', title: 'Unity Catalog', sub: 'Metric Views · Domains · Glossary · Access', icon: ShieldCheck }],
   },
   {
-    key: 'serving',
-    icon: LayoutDashboard,
-    title: '4. Serving: dashboard + Genie',
-    tagline: 'AI/BI "Revenue Assurance Command Center" dashboard + RA Genie space',
-    explanation:
-      'The gold layer serves two audiences directly in the workspace, with the same Unity Catalog grants and PII masking as everywhere else. The AI/BI dashboard gives Dana (VP RA) an executive KPI view — total at-risk, root-cause breakdown, account scorecards, forecast variance. The Genie space lets Marcus (analyst) ask questions in plain English over the same governed tables and get back the generated SQL.',
-    links: (cfg) => [
-      { label: 'Open Revenue Assurance dashboard', href: dashboardUrl(cfg) },
-      { label: 'Open RA Genie space', href: genieUrl(cfg) },
+    key: 'data',
+    label: 'Agentic Data',
+    tagline: 'Unified, real-time data foundation',
+    tint: 'bg-muted/60',
+    nodes: [
+      { id: 'sdp', title: 'Reconciliation Pipelines', sub: 'Lakeflow SDP · 7 silver + 4 gold', icon: Workflow },
+      { id: 'mlops', title: 'Anomaly & Forecast', sub: 'MLflow model · ai_forecast', icon: Brain },
+      { id: 'lakehouse', title: 'Lakehouse', sub: 'cdm_tmforum · TM Forum SID', icon: Warehouse },
+      { id: 'lakebase', title: 'Lakebase', sub: 'Serverless Postgres · case store', icon: DatabaseZap },
     ],
-  },
-  {
-    key: 'lakebase',
-    icon: Boxes,
-    title: '5. Case management (Lakebase)',
-    tagline: 'ra.cases / ra.case_notes — managed Postgres, written by this app',
-    explanation:
-      'Detection stays in Delta; the day-to-day work of triaging leakage does not. Every assignment, status change, and investigation note you make in the Exception queue and My cases screens writes to Lakebase Postgres — fully managed, autoscaling OLTP inside the workspace, in the ra schema (ra.cases / ra.case_notes). It is the only writable state in this app; everything else here is read-only analytics over Delta.',
-    links: (cfg) => [{ label: 'Open Lakebase in workspace', href: lakebaseUrl(cfg) }],
   },
 ];
 
-function StageCard({ stage, cfg }: { stage: Stage; cfg: ArchitectureConfig }) {
-  const Icon = stage.icon;
-  const links = stage.links(cfg);
+const INFRA_CHIPS = [
+  'Delta Lake',
+  'TM Forum SID model',
+  'salesforce_source',
+  'oracle_erp_source',
+  'refinitiv_fx_source',
+  'ironclad_clm_source',
+  'mdm_source',
+];
+
+interface StepLink {
+  label: string;
+  build: (cfg: ArchitectureConfig) => string | null;
+}
+
+interface TourStep {
+  node: NodeId;
+  kicker: string;
+  title: string;
+  body: string;
+  artifact: string;
+  links: StepLink[];
+}
+
+// The requested clickthrough: App → Genie One → Genie Agent → SDP → MLOps → UC → Data.
+// Each step links into the real workspace resource it maps to.
+const TOUR: TourStep[] = [
+  {
+    node: 'app',
+    kicker: 'Step 1 · You are here',
+    title: 'RA Exceptions Console',
+    body: 'The AppKit app an analyst uses to triage leakage and work cases. It reads analytics through the SQL warehouse and writes case state back to Lakebase Postgres.',
+    artifact: 'ra-exceptions-console · reads gold_* / silver_*, writes ra.cases · ra.case_notes',
+    links: [
+      { label: 'Explore RA schema', build: (cfg) => exploreDataUrl(cfg) },
+      { label: 'Case store (Lakebase)', build: (cfg) => lakebaseUrl(cfg) },
+    ],
+  },
+  {
+    node: 'genie-one',
+    kicker: 'Step 2 · Agentic Work',
+    title: 'Genie One',
+    body: 'The org-wide AI coworker. A business user asks “where are we leaking revenue this quarter?” in plain language; Genie One routes it through the Genie Ontology to the right governed data.',
+    artifact: 'Genie One · natural-language entry point across all domains',
+    links: [{ label: 'Open Genie', build: (cfg) => genieUrl(cfg) }],
+  },
+  {
+    node: 'genie-agent',
+    kicker: 'Step 3 · Agentic Work',
+    title: 'RA Genie Agent',
+    body: 'A curated Genie Space scoped to revenue assurance. It is grounded on the RA metric views and business glossary, so answers use the same KPI definitions the pipelines compute.',
+    artifact: 'Genie Space · grounded on revenue_assurance metric views + glossary',
+    links: [{ label: 'Open RA Genie space', build: (cfg) => genieUrl(cfg) }],
+  },
+  {
+    node: 'sdp',
+    kicker: 'Step 4 · Agentic Data',
+    title: 'Reconciliation Pipelines (SDP)',
+    body: 'Lakeflow Spark Declarative Pipelines run the seven silver reconciliation checks (one per check_type) and roll them into four gold views the app and Genie read.',
+    artifact: 'silver_reconciliation · gold_leakage_summary · gold_reconciliation_scorecard',
+    links: [
+      { label: 'Open pipeline', build: (cfg) => pipelineUrl(cfg) },
+      { label: 'Explore gold views', build: (cfg) => exploreDataUrl(cfg) },
+    ],
+  },
+  {
+    node: 'mlops',
+    kicker: 'Step 5 · Agentic Data',
+    title: 'Anomaly Detection & Forecast',
+    body: 'An MLflow anomaly model scores exceptions and ai_forecast projects expected revenue, surfacing leakage that fixed rules miss. Models are registered and governed in Unity Catalog.',
+    artifact: 'gold_anomaly_scores · gold_revenue_forecast_anomalies',
+    links: [
+      { label: 'ML job', build: (cfg) => jobUrl(cfg, cfg.mlJobId) },
+      { label: 'MLflow experiments', build: (cfg) => mlflowExperimentUrl(cfg) },
+    ],
+  },
+  {
+    node: 'uc',
+    kicker: 'Step 6 · Unified Governance',
+    title: 'Unity Catalog',
+    body: 'Every table, view, model, and metric is governed here. Metric Views define KPIs with synonyms, the domain tag maps resources to Sales/Ops/Finance, and the glossary reconciles the terms each team uses differently.',
+    artifact: 'Metric Views · domain tag matrix · business glossary · access + lineage',
+    links: [{ label: 'Open Catalog Explorer', build: (cfg) => exploreDataUrl(cfg) }],
+  },
+  {
+    node: 'lakehouse',
+    kicker: 'Step 7 · The data',
+    title: 'cdm_tmforum + source systems',
+    body: 'The pre-populated TM Forum SID catalog (resource, service, product, customer, business partner) plus the simulated upstream sources. This golden data is what every layer above reconciles against.',
+    artifact: 'cdm_tmforum.tmf_* (read-only) · *_source schemas · revenue_assurance',
+    links: [
+      { label: 'Explore cdm_tmforum', build: (cfg) => exploreDataUrl(cfg, cfg.catalog) },
+      { label: 'Data-sim job', build: (cfg) => jobUrl(cfg, cfg.datasimJobId) },
+    ],
+  },
+];
+
+// node → tour index (for the step-number badge shown on the diagram)
+const NODE_STEP: Partial<Record<NodeId, number>> = {};
+TOUR.forEach((s, i) => {
+  if (!(s.node in NODE_STEP)) NODE_STEP[s.node] = i;
+});
+
+function NodeTile({
+  node,
+  active,
+  dimmed,
+  onClick,
+}: {
+  node: NodeDef;
+  active: boolean;
+  dimmed: boolean;
+  onClick: () => void;
+}) {
+  const Icon = node.icon;
+  const step = NODE_STEP[node.id];
+  const interactive = step !== undefined; // only tour nodes are clickable
+  const className = `group relative flex w-full items-center gap-3 rounded-lg border bg-card p-3 text-left transition-all ${
+    active ? 'shadow-md' : 'border-border'
+  } ${interactive && !active ? 'hover:border-foreground/20 hover:shadow-sm' : ''} ${
+    dimmed ? 'opacity-40' : 'opacity-100'
+  }`;
+  const style = active ? { borderColor: BRAND, boxShadow: `0 0 0 1px ${BRAND}` } : undefined;
+
+  const inner = (
+    <>
+      {step !== undefined && (
+        <span
+          className="absolute -left-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold text-white"
+          style={{ backgroundColor: active ? BRAND : 'var(--muted-foreground, #71717a)' }}
+        >
+          {step + 1}
+        </span>
+      )}
+      <span
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md"
+        style={{ backgroundColor: `${BRAND}1a` }}
+      >
+        <Icon className="h-5 w-5" style={{ color: BRAND }} />
+      </span>
+      <span className="min-w-0">
+        <span className="block truncate text-sm font-semibold text-foreground">{node.title}</span>
+        <span className="block truncate text-xs text-muted-foreground">{node.sub}</span>
+      </span>
+    </>
+  );
+
+  // Non-tour tiles (e.g. AI/BI, Lakebase) are context only — render them static
+  // so they don't present a clickable affordance that does nothing.
+  if (!interactive) {
+    return (
+      <div className={className} style={style}>
+        {inner}
+      </div>
+    );
+  }
   return (
-    <Card className="shadow-sm">
-      <CardHeader className="pb-2">
-        <div className="flex items-start gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-            <Icon className="h-4.5 w-4.5" />
-          </div>
-          <div className="flex flex-col gap-1">
-            <CardTitle className="text-sm">{stage.title}</CardTitle>
-            <CardDescription className="font-mono text-[11px]">{stage.tagline}</CardDescription>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        <p className="text-sm leading-relaxed text-muted-foreground">{stage.explanation}</p>
-        <div className="flex flex-wrap gap-2">
-          {links.map((link) => (
-            <WorkspaceLinkButton key={link.label} label={link.label} href={link.href} />
-          ))}
-        </div>
-      </CardContent>
-    </Card>
+    <button type="button" onClick={onClick} aria-pressed={active} className={className} style={style}>
+      {inner}
+    </button>
   );
 }
 
 export function ArchitecturePage() {
+  // -1 = tour not started (show full map, no dimming)
+  const [step, setStep] = useState(-1);
   const [cfg, setCfg] = useState<ArchitectureConfig | null>(null);
-  const [error, setError] = useState(false);
 
+  // Workspace config powers the "Open in workspace" deep links. Optional — if it
+  // fails to load, WorkspaceLinkButton renders disabled with a tooltip.
   useEffect(() => {
+    let alive = true;
     architectureApi
       .config()
-      .then(setCfg)
-      .catch(() => setError(true));
+      .then((c) => {
+        if (alive) setCfg(c);
+      })
+      .catch(() => {
+        /* leave cfg null → links disabled */
+      });
+    return () => {
+      alive = false;
+    };
   }, []);
 
-  return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
-      <Card className="shadow-sm">
-        <CardHeader className="pb-2">
-          <CardTitle>How this demo is built</CardTitle>
-          <CardDescription>
-            Data flows one direction — source simulation feeds reconciliation, reconciliation feeds ML and serving, and
-            this console is the only surface that writes anything back (case state, to Lakebase).
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {!cfg?.workspaceHost && (
-            <Badge variant="outline" className="text-xs text-muted-foreground">
-              {error
-                ? 'Workspace links unavailable'
-                : cfg
-                  ? 'No workspace host configured — links will open the workspace list pages once deployed'
-                  : 'Loading workspace configuration…'}
-            </Badge>
-          )}
-        </CardContent>
-      </Card>
+  const touring = step >= 0;
+  const current = touring ? TOUR[step] : null;
+  const activeNode = current?.node ?? null;
 
-      {cfg == null && !error ? (
-        <div className="flex flex-col gap-4">
-          {Array.from({ length: 5 }, (_, i) => (
-            <Skeleton key={i} className="h-40 w-full" />
-          ))}
+  const start = () => setStep(0);
+  const prev = () => setStep((s) => Math.max(0, s - 1));
+  const next = () => setStep((s) => Math.min(TOUR.length - 1, s + 1));
+  const reset = () => setStep(-1);
+
+  const jumpToNode = (id: NodeId) => {
+    const idx = TOUR.findIndex((t) => t.node === id);
+    if (idx >= 0) setStep(idx);
+  };
+
+  return (
+    <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
+      {/* Tour controls (page title/subtitle come from the layout header in App.tsx) */}
+      <div className="flex items-center justify-end">
+        <div className="flex items-center gap-2">
+          {touring ? (
+            <>
+              <Button variant="outline" size="sm" onClick={prev} disabled={step === 0}>
+                <ArrowLeft className="mr-1 h-4 w-4" /> Prev
+              </Button>
+              <span className="min-w-[3.5rem] text-center text-xs font-medium tabular-nums text-muted-foreground">
+                {step + 1} / {TOUR.length}
+              </span>
+              <Button size="sm" onClick={next} disabled={step === TOUR.length - 1}>
+                Next <ArrowRight className="ml-1 h-4 w-4" />
+              </Button>
+              <Button variant="ghost" size="icon" onClick={reset} aria-label="Reset tour">
+                <RotateCcw className="h-4 w-4" />
+              </Button>
+            </>
+          ) : (
+            <Button size="sm" onClick={start} style={{ backgroundColor: BRAND }}>
+              <MapPin className="mr-1 h-4 w-4" /> Start guided tour
+            </Button>
+          )}
         </div>
-      ) : (
-        <div className="flex flex-col gap-4">
-          {STAGES.map((stage) => (
-            <StageCard key={stage.key} stage={stage} cfg={cfg ?? EMPTY_CONFIG} />
-          ))}
-        </div>
-      )}
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        {/* Layered platform diagram */}
+        <Card className="shadow-sm lg:col-span-2">
+          <CardContent className="flex flex-col gap-3 p-4">
+            {BANDS.map((band) => (
+              <div key={band.key} className={`rounded-xl ${band.tint} p-3`}>
+                <div className="mb-2 px-1">
+                  <div className="text-sm font-semibold text-foreground">{band.label}</div>
+                  <div className="text-xs text-muted-foreground">{band.tagline}</div>
+                </div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {band.nodes.map((n) => (
+                    <NodeTile
+                      key={n.id}
+                      node={n}
+                      active={activeNode === n.id}
+                      dimmed={touring && activeNode !== n.id}
+                      onClick={() => jumpToNode(n.id)}
+                    />
+                  ))}
+                </div>
+                {band.key === 'work' && (
+                  <div className="mt-2 flex items-center justify-center gap-2 rounded-md border border-dashed border-border py-1.5 text-xs text-muted-foreground">
+                    <Network className="h-3.5 w-3.5" style={{ color: BRAND }} /> Genie Ontology — shared semantic layer
+                  </div>
+                )}
+              </div>
+            ))}
+
+            {/* Open infrastructure strip */}
+            <div className="rounded-xl border border-border p-3">
+              <div className="mb-2 flex items-center gap-2 px-1">
+                <Layers className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-semibold text-foreground">Open Infrastructure</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {INFRA_CHIPS.map((c) => (
+                  <span
+                    key={c}
+                    className="rounded-full border border-border bg-card px-2.5 py-1 font-mono text-[11px] text-muted-foreground"
+                  >
+                    {c}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Detail / narration panel */}
+        <Card className="shadow-sm">
+          <CardContent className="flex h-full flex-col gap-4 p-5">
+            {current ? (
+              <>
+                <div
+                  className="inline-flex w-fit items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-white"
+                  style={{ backgroundColor: BRAND }}
+                >
+                  {current.kicker}
+                </div>
+                <h3 className="text-xl font-semibold text-foreground">{current.title}</h3>
+                <p className="text-sm leading-relaxed text-muted-foreground">{current.body}</p>
+                <div className="rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                    In this demo
+                  </div>
+                  <code className="block break-words text-xs text-foreground">{current.artifact}</code>
+                </div>
+
+                {current.links.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {current.links.map((l) => (
+                      <WorkspaceLinkButton key={l.label} label={l.label} href={cfg ? l.build(cfg) : null} />
+                    ))}
+                  </div>
+                )}
+
+                {/* Flow breadcrumb */}
+                <div className="mt-auto flex flex-wrap items-center gap-1 pt-2">
+                  {TOUR.map((t, i) => (
+                    <button
+                      key={t.node}
+                      type="button"
+                      onClick={() => setStep(i)}
+                      className="flex items-center gap-1"
+                      aria-label={`Go to step ${i + 1}: ${t.title}`}
+                    >
+                      <span
+                        className={`h-2 w-2 rounded-full transition-all ${i === step ? 'w-5' : ''}`}
+                        style={{ backgroundColor: i === step ? BRAND : 'var(--border, #e4e4e7)' }}
+                      />
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+                <span
+                  className="flex h-12 w-12 items-center justify-center rounded-xl"
+                  style={{ backgroundColor: `${BRAND}1a` }}
+                >
+                  <MapPin className="h-6 w-6" style={{ color: BRAND }} />
+                </span>
+                <div className="text-sm font-medium text-foreground">Follow the request path</div>
+                <p className="max-w-xs text-sm text-muted-foreground">
+                  Start the guided tour to trace a business question from this app down through Genie, the pipelines,
+                  and Unity Catalog to the underlying data — each step links into the live workspace. Or click any
+                  numbered tile.
+                </p>
+                <Button size="sm" variant="outline" onClick={start}>
+                  Start guided tour
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
-
-const EMPTY_CONFIG: ArchitectureConfig = {
-  workspaceHost: null,
-  workspaceId: null,
-  catalog: 'cdm_tmforum',
-  schema: 'revenue_assurance',
-  pipelineId: null,
-  mlJobId: null,
-  datasimJobId: null,
-  dashboardId: null,
-  genieSpaceId: null,
-  lakebaseProject: null,
-};
