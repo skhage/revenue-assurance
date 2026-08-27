@@ -234,10 +234,17 @@ expired_quote_check AS (
   FROM silver_discount_authorization_check
   GROUP BY customer_id
 ),
+-- AR EXCEPTION-CONSISTENCY FIX: `ar_risk_amount` sums total_outstanding only
+-- for HIGH-risk (exception) aging buckets, matching `ar_exceptions`' count --
+-- not every aging bucket regardless of risk. Summing all buckets would put a
+-- customer's ENTIRE outstanding balance (including current/LOW-risk
+-- receivables) into total_amount_at_risk even when zero buckets are actually
+-- flagged as exceptions, inflating exposure for accounts with large but
+-- healthy AR alongside a small high-risk sliver.
 collection_check AS (
   SELECT
     customer_id,
-    SUM(total_outstanding) AS total_outstanding,
+    SUM(CASE WHEN collection_risk = 'HIGH' THEN total_outstanding ELSE 0 END) AS ar_risk_amount,
     MAX(estimated_dso_days) AS max_dso_days,
     SUM(CASE WHEN collection_risk = 'HIGH' THEN 1 ELSE 0 END) AS ar_exceptions
   FROM silver_ar_aging_analysis
@@ -300,7 +307,14 @@ doc_invoice_check AS (
   WHERE customer_id IS NOT NULL
   GROUP BY customer_id
 ),
--- Component scores computed exactly once each.
+-- Component scores computed exactly once each. Every component is COALESCEd
+-- to 100 HERE (not just inside the composite below) -- a customer with no
+-- applicable rows in a given check has nothing wrong on that dimension, so
+-- the PUBLISHED per-component column must read 100, not NULL. Previously
+-- only composite_raw's internal COALESCE covered this: the composite came
+-- out correct, but a customer with e.g. zero doc-invoice records would show
+-- doc_invoice_consistency_score = NULL in the published scorecard row even
+-- though their composite already (correctly) treated it as 100.
 scored AS (
   SELECT
     cust.customer_id,
@@ -308,20 +322,26 @@ scored AS (
     cust.account_status,
     cust.arpu_tier,
     cust.billing_currency,
-    100.0 * (1 - COALESCE(pc.price_exceptions, 0) / NULLIF(pc.total_lines, 0)) AS price_accuracy_score,
-    100.0 * (1 - COALESCE(dc.discount_exceptions, 0) / NULLIF(dc.total_lines, 0)) AS discount_compliance_score,
-    100.0 * (1 - COALESCE(eq.expired_quotes, 0) / NULLIF(eq.total_quotes, 0)) AS expired_quote_compliance_score,
+    COALESCE(100.0 * (1 - COALESCE(pc.price_exceptions, 0) / NULLIF(pc.total_lines, 0)), 100.0)
+      AS price_accuracy_score,
+    COALESCE(100.0 * (1 - COALESCE(dc.discount_exceptions, 0) / NULLIF(dc.total_lines, 0)), 100.0)
+      AS discount_compliance_score,
+    COALESCE(100.0 * (1 - COALESCE(eq.expired_quotes, 0) / NULLIF(eq.total_quotes, 0)), 100.0)
+      AS expired_quote_compliance_score,
     CASE
       WHEN COALESCE(cc.max_dso_days, 0) <= 30 THEN 100.0
       WHEN cc.max_dso_days <= 60 THEN 75.0
       WHEN cc.max_dso_days <= 90 THEN 50.0
       ELSE 25.0
     END AS collection_efficiency_score,
-    100.0 * (1 - COALESCE(rr.rev_rec_exceptions, 0) / NULLIF(rr.total_invoices, 0)) AS rev_rec_accuracy_score,
-    100.0 * (1 - COALESCE(docc.doc_contract_exceptions, 0) / NULLIF(docc.total_docs, 0)) AS doc_consistency_score,
-    100.0 * (1 - COALESCE(doci.doc_invoice_exceptions, 0) / NULLIF(doci.total_invoice_docs, 0)) AS doc_invoice_consistency_score,
+    COALESCE(100.0 * (1 - COALESCE(rr.rev_rec_exceptions, 0) / NULLIF(rr.total_invoices, 0)), 100.0)
+      AS rev_rec_accuracy_score,
+    COALESCE(100.0 * (1 - COALESCE(docc.doc_contract_exceptions, 0) / NULLIF(docc.total_docs, 0)), 100.0)
+      AS doc_consistency_score,
+    COALESCE(100.0 * (1 - COALESCE(doci.doc_invoice_exceptions, 0) / NULLIF(doci.total_invoice_docs, 0)), 100.0)
+      AS doc_invoice_consistency_score,
     COALESCE(pc.price_risk_amount, 0) + COALESCE(dc.discount_risk_amount, 0)
-      + COALESCE(cc.total_outstanding, 0) + COALESCE(rr.rev_rec_risk_amount, 0)
+      + COALESCE(cc.ar_risk_amount, 0) + COALESCE(rr.rev_rec_risk_amount, 0)
       + COALESCE(doci.doc_invoice_risk_amount, 0) AS total_amount_at_risk,
     COALESCE(pc.price_exceptions, 0) + COALESCE(dc.discount_exceptions, 0)
       + COALESCE(eq.expired_quotes, 0) + COALESCE(cc.ar_exceptions, 0)
@@ -338,18 +358,20 @@ scored AS (
   LEFT JOIN doc_contract_check docc ON docc.customer_id = cust.customer_id
   LEFT JOIN doc_invoice_check doci ON doci.customer_id = cust.customer_id
 ),
--- Composite computed exactly once. A customer with no rows in a given check
--- scores 100 for that component (nothing found wrong).
+-- Composite computed exactly once, reading the already-defaulted component
+-- scores from `scored` -- no COALESCE needed here anymore since every
+-- component is guaranteed non-NULL (except collection_efficiency_score,
+-- which is a CASE with no NULL branch and therefore never NULL).
 composite AS (
   SELECT
     *,
-    0.20 * COALESCE(price_accuracy_score, 100)
-      + 0.15 * COALESCE(discount_compliance_score, 100)
-      + 0.10 * COALESCE(expired_quote_compliance_score, 100)
+    0.20 * price_accuracy_score
+      + 0.15 * discount_compliance_score
+      + 0.10 * expired_quote_compliance_score
       + 0.20 * collection_efficiency_score
-      + 0.15 * COALESCE(rev_rec_accuracy_score, 100)
-      + 0.10 * COALESCE(doc_consistency_score, 100)
-      + 0.10 * COALESCE(doc_invoice_consistency_score, 100) AS composite_raw
+      + 0.15 * rev_rec_accuracy_score
+      + 0.10 * doc_consistency_score
+      + 0.10 * doc_invoice_consistency_score AS composite_raw
   FROM scored
 )
 SELECT

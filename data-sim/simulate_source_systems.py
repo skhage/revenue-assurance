@@ -430,6 +430,35 @@ anchor.groupBy("size_tier").count().show()
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ## 3b · Market FX rates (computed early; written to `refinitiv_fx_source`
+# MAGIC in §6, referenced directly by the ERP applied-rate below)
+# MAGIC
+# MAGIC Computed here -- rather than inline where it's written -- so
+# MAGIC `oracle_erp_source.ra_customer_trx_all.APPLIED_EXCHANGE_RATE` (§5) can
+# MAGIC **join to this actual DataFrame** for the true market rate on the
+# MAGIC invoice's currency/date, instead of recomputing the same drift formula
+# MAGIC from scratch. That is what makes the two sides a genuine cross-system
+# MAGIC comparison: the ERP references the real market print (a legitimate
+# MAGIC business lookup) and adds its own small independent operational spread,
+# MAGIC rather than the two systems each deriving a parallel synthetic rate that
+# MAGIC happens to use the same formula.
+
+# COMMAND ----------
+
+# FX currency pairs come from config.yaml `fx_pairs:` (single source of truth).
+pair_df = spark.createDataFrame(FX_PAIRS, ["FROM_CURRENCY","TO_CURRENCY","base_rate"])
+fx = (pair_df.crossJoin(spark.range(0, FX_DAYS).withColumnRenamed("id","d"))
+    .withColumn("CONVERSION_DATE", F.date_add(F.lit("2018-01-01"), F.col("d").cast("int")))
+    # deterministic random-walk-ish daily drift (±1.5%) -- the ONE true daily
+    # market movement; the ERP side never recomputes this, it looks it up.
+    .withColumn("_drift", (F.abs(F.hash(F.col("FROM_CURRENCY"),F.col("d"))) % 300 - 150)/10000.0)
+    .withColumn("CONVERSION_RATE", F.round(F.col("base_rate") * (1 + F.col("_drift")),6))
+    .withColumn("CONVERSION_TYPE", F.lit("Corporate"))
+    .withColumn("SOURCE", F.lit("Refinitiv")))
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## 4 · Salesforce source  (`salesforce_source`)
 # MAGIC Real Salesforce object + field API names, including the CPQ managed-package
 # MAGIC (`SBQQ__…`) objects. `Account` is the CRM view of the golden customer; the CPQ quote
@@ -554,6 +583,8 @@ circuits = (spark.table(f"{CATALOG}.tmf_resource.logical_resource")
 contract_lkp = spark.table(f"{CATALOG}.{SCHEMA_SFDC}.contract").select(
     F.col("Id").alias("Contract__c"), "AccountId")
 
+# Quantity varies per line (1-4 circuits bundled under one line item) so
+# contract-price exposure is genuinely quantity-aware, not a Quantity=1 no-op.
 cli = (contract_lkp
     .withColumn("k", F.explode(F.sequence(F.lit(1), F.lit(LINES_PER_CONTRACT))))
     .withColumn("lseq", dkey(F.col("Contract__c"), F.col("k")))
@@ -562,57 +593,72 @@ cli = (contract_lkp
     .join(prod_df.select(F.col("Id").alias("Product2Id"),"ProductCode","list_mrr","prod_idx"),
           (F.abs(F.hash(F.col("lseq"),F.lit(3))) % N_PRODUCTS) == F.col("prod_idx"), "left")
     .withColumn("Id", sf_id("a0L", F.col("lseq")))
-    .withColumn("Quantity", F.lit(1))
-    # contracted price = list * negotiated factor (natural discounting, tier-driven)
-    .withColumn("_disc", F.round(rand_of(F.col("lseq"))("d") * 0.35, 3))   # 0-35% discount
-    .withColumn("Discount__c", F.col("_disc") * 100)
-    .withColumn("UnitPrice", F.round(F.col("list_mrr") * (1 - F.col("_disc")), 2))
+    .withColumn("Quantity", (F.abs(F.hash(F.col("lseq"), F.lit(31))) % 4 + 1).cast("int"))
+    # Negotiated discount fraction: a STABLE BUSINESS PARAMETER (the deal term
+    # both the contract and the billing system are supposed to have on file),
+    # deterministically derived from the line's own business key. Sharing this
+    # derivation is not "copying an observation" -- it is the one documented
+    # contract term each system independently looks up.
+    .withColumn("_negotiated_disc", F.round(rand_of(F.col("lseq"))("d") * 0.35, 3))   # 0-35% discount
+    .withColumn("Discount__c", F.col("_negotiated_disc") * 100)
+    .withColumn("UnitPrice", F.round(F.col("list_mrr") * (1 - F.col("_negotiated_disc")), 2))
     .withColumn("TotalPrice", F.col("UnitPrice") * F.col("Quantity"))
     .withColumn("Billing_Frequency__c", F.lit("Monthly")))
 
-# --- LEAKAGE GROUND TRUTH (metadata only, NOT read by the reconciliation check) -
-# `leakage_flag` marks which lines carry a seeded billing-side price drift, for
-# `known_leakage_flag` in the gold register. UnitPrice itself is NEVER mutated —
-# it stays the true negotiated contracted price. The actual divergence is
-# injected independently into oracle_erp_source.ra_billed_circuit_rates (below),
-# so silver_contract_price_reconciliation detects it by comparing two
-# independently-generated cross-system values, not by reading this flag.
+# ---- Independent ERP-side "billed" circuit rate extract ---------------------
+# INDEPENDENCE: the ERP billing engine independently re-derives the unit price
+# from the SAME stable business parameters (list_mrr, the negotiated discount
+# fraction) rather than reading contract_line_item.UnitPrice -- no compared
+# observation is copied across systems. The billing-defect signal is drawn
+# with its OWN salt ("billed_leak"/"billed_drift"), entirely independent of
+# any Salesforce-side leakage flag or formula; on rows where this independent
+# draw does not fire, BILLED_UNIT_PRICE lands on the same negotiated price by
+# construction (both sides correctly reflect the one documented deal), which
+# is what makes CHK-0 (no false positives on a cleanly-reconciling circuit)
+# hold without ever reading cli.UnitPrice or cli.leakage_flag as an input.
+#
+# Computed here as columns on the SAME row-aligned `cli` frame (keyed by the
+# line's own `lseq`) rather than via a join back to billed_rates_out, since a
+# join on (Contract__c, Service_Circuit_Id__c) would not be guaranteed 1:1 --
+# two lines on the same contract can independently hash to the same circuit.
 cli = (cli
-    .withColumn("_leak", rand_of(F.col("lseq"))("leak") < LEAKAGE_RATE)
-    .withColumn("leakage_flag", F.when(F.col("_leak"), F.lit("price_mismatch")).otherwise(F.lit(None))))
+    .withColumn("_billed_leak", rand_of(F.col("lseq"))("billed_leak") < LEAKAGE_RATE)
+    .withColumn("_billed_drift_pct", F.round(rand_of(F.col("lseq"))("billed_drift") * 0.15 + 0.10, 3))  # 10-25%
+    .withColumn("_billed_unit_price",
+        F.when(F.col("_billed_leak"),
+               F.round(F.col("list_mrr") * (1 - F.col("_negotiated_disc")) * (1 + F.col("_billed_drift_pct")), 2))
+         .otherwise(F.round(F.col("list_mrr") * (1 - F.col("_negotiated_disc")), 2)))
+    .withColumn("_billed_total_amount", F.col("_billed_unit_price") * F.col("Quantity")))
+
+billed_rates_out = cli.select(
+    F.col("Service_Circuit_Id__c").alias("SERVICE_CIRCUIT_ID"),
+    F.col("Contract__c").alias("SOURCE_CONTRACT_ID"),
+    F.col("_billed_unit_price").alias("BILLED_UNIT_PRICE"),
+    F.col("_billed_total_amount").alias("BILLED_TOTAL_AMOUNT"),
+    F.lit("Oracle ERP").alias("SOURCE_SYSTEM"))
+
+# --- LEAKAGE GROUND TRUTH (metadata only, NOT read by the reconciliation check) -
+# `leakage_flag` records whether the two INDEPENDENTLY-generated prices above
+# actually ended up diverging -- it is derived AFTER both sides exist, purely
+# as informational ground truth for `known_leakage_flag` downstream. It is
+# not an input to either side's generation and the reconciliation SQL does
+# not read it (verified by reconciliation/validation/check_source_independence.py).
+cli = cli.withColumn(
+    "leakage_flag",
+    F.when(F.round(F.col("UnitPrice"), 2) != F.round(F.col("_billed_unit_price"), 2), F.lit("price_mismatch"))
+     .otherwise(F.lit(None))
+)
 
 cli_out = cli.select("Id","Contract__c","AccountId","Product2Id","ProductCode","Service_Circuit_Id__c",
     "Quantity","UnitPrice","TotalPrice","Discount__c","Billing_Frequency__c","bandwidth_mbps","leakage_flag")
 write_table(cli_out, SCHEMA_SFDC, "contract_line_item",
-    "Salesforce custom object Contract_Line_Item__c. One row per contracted circuit/service; UnitPrice is the negotiated source-of-truth MRR, never mutated by leakage injection. `leakage_flag` is ground-truth metadata only (not read by the reconciliation check itself) — the actual billing-side divergence lives independently in oracle_erp_source.ra_billed_circuit_rates.",
+    "Salesforce custom object Contract_Line_Item__c. One row per contracted circuit/service; UnitPrice is the negotiated source-of-truth MRR, never mutated by leakage injection. `leakage_flag` is ground-truth metadata only (not read by the reconciliation check itself) -- derived after the fact from whether the independently-generated oracle_erp_source.ra_billed_circuit_rates actually diverged.",
     {"Id":"Contract line Id (keyPrefix a0L).","Contract__c":"FK to contract.Id.",
      "Service_Circuit_Id__c":"MDM crosswalk to tmf_resource.logical_resource.logical_resource_id (the circuit).",
+     "Quantity":"Circuit count on this line (1-4); contract-price exposure is Quantity-aware (TotalPrice, not just UnitPrice).",
      "UnitPrice":"Negotiated monthly price (source of truth for contract-price reconciliation). Never mutated by leakage seeding.",
      "Discount__c":"Negotiated discount percent off list.",
      "leakage_flag":"DEMO ONLY ground truth: seeded exception marker (price_mismatch) or null. Not read by the reconciliation SQL, which detects the mismatch independently from billed rates."})
-
-# ---- Independent ERP-side "billed" circuit rate extract ---------------------
-# A real cross-system reconciliation needs the billed amount to come from a
-# system OTHER than the contract itself. This mirrors contract_line_item's
-# circuits with an ERP-billed rate that is correlated to the negotiated price
-# (so cleanly-reconciling circuits match exactly, satisfying CHK-0) but
-# deterministically drifts for leakage-injected circuits — the injected drift
-# is the only source of divergence, so the reconciliation SQL's own arithmetic
-# comparison (contracted vs billed) is what detects it, independent of any flag.
-# Computed here (needs `cli`); written to oracle_erp_source in section 5 below,
-# once that schema exists.
-billed_rates_out = (cli
-    .withColumn("_drift_pct", F.round(rand_of(F.col("lseq"))("drift") * 0.15 + 0.10, 3))  # 10-25%
-    .withColumn("BILLED_UNIT_PRICE",
-        F.when(F.col("leakage_flag") == "price_mismatch",
-               F.round(F.col("UnitPrice") * (1 + F.col("_drift_pct")), 2))
-         .otherwise(F.col("UnitPrice")))
-    .withColumn("BILLED_TOTAL_AMOUNT", F.col("BILLED_UNIT_PRICE") * F.col("Quantity"))
-    .withColumn("SOURCE_SYSTEM", F.lit("Oracle ERP"))
-    .select(
-        F.col("Service_Circuit_Id__c").alias("SERVICE_CIRCUIT_ID"),
-        F.col("Contract__c").alias("SOURCE_CONTRACT_ID"),
-        "BILLED_UNIT_PRICE", "BILLED_TOTAL_AMOUNT", "SOURCE_SYSTEM"))
 
 # ---- Opportunity (pipeline; Q4-seasonal close dates) ------------------------
 opp = (acct_lkp
@@ -763,14 +809,31 @@ write_table(billed_rates_out, SCHEMA_ERP, "ra_billed_circuit_rates",
 # restricted to the currency pairs Refinitiv actually quotes (config.yaml
 # `fx_pairs:`) — customers outside that set invoice in USD. This gives FX
 # validation meaningful non-USD transactions to check, instead of an all-USD book.
+#
+# INDEPENDENCE (APPLIED_EXCHANGE_RATE vs gl_daily_rates.CONVERSION_RATE):
+#   The ERP does NOT recompute the market rate from a parallel formula. It
+#   JOINS to the actual `fx` DataFrame (§3b, the same rows written to
+#   refinitiv_fx_source.gl_daily_rates in §6) for that currency/day's real
+#   market print -- a legitimate cross-system lookup, not a copied
+#   observation, exactly like a real billing system would call out to a
+#   market-data feed. On top of that real market print, the ERP applies its
+#   own small independent operational spread (a corporate-rate markup vs
+#   mid-market, its own salt "erp_spread") and its own independently-drawn
+#   leakage bias (salts "fx_leak"/"fx_bias", unrelated to
+#   contract_line_item.leakage_flag or any other check's leakage signal). The
+#   small spread alone stays far under the 1% detection threshold on
+#   non-leakage invoices (satisfying CHK-0); only the independent leakage
+#   draw pushes an invoice's applied rate far enough from market to flag.
 _fx_currencies = [p[0] for p in FX_PAIRS if p[0] != "USD"]
 _fx_currency_expr = F.array(*[F.lit(c) for c in _fx_currencies]) if _fx_currencies else F.array()
-_fx_base_rate_map = F.create_map(*sum(
-    [[F.lit(frm), F.lit(base)] for frm, _, base in FX_PAIRS if frm != "USD"], []))
 cust_currency = spark.table(f"{CATALOG}.tmf_customer.customer").select(
     F.col("customer_id").alias("_ccid"),
     F.when(F.array_contains(_fx_currency_expr, F.col("billing_currency")), F.col("billing_currency"))
      .otherwise(F.lit("USD")).alias("INVOICE_CURRENCY_CODE"))
+market_rate_lookup = fx.select(
+    F.col("FROM_CURRENCY").alias("_fx_currency"),
+    F.col("CONVERSION_DATE").alias("_fx_date"),
+    F.col("CONVERSION_RATE").alias("_market_rate"))
 
 trx = (bill.select("bill_id","customer_id","total_amount","tax_amount",
                    "billing_period_start_date","billing_period_end_date","date","due_date",
@@ -783,18 +846,16 @@ trx = (bill.select("bill_id","customer_id","total_amount","tax_amount",
     .withColumn("BILL_TO_CUSTOMER_ID", F.col("customer_id") + F.lit(PK_START_OFFSET))
     .withColumn("CUST_TRX_TYPE", F.lit("INV"))
     .withColumn("COMPLETE_FLAG", F.lit("Y"))
-    # APPLIED_EXCHANGE_RATE: the rate billing actually used to convert this
-    # invoice to USD functional currency. Reconstructed with the SAME
-    # base-rate + daily-drift formula gl_daily_rates uses below (so a clean
-    # invoice's applied rate equals the Refinitiv market rate for that
-    # currency/day exactly), then a deterministic bias is layered on only for
-    # leakage-seeded invoices. The bias is the sole source of divergence, so
-    # silver_fx_rate_validation compares two independently-derived rates
-    # rather than reading a ground-truth flag.
-    .withColumn("_days_since_epoch", F.datediff(F.to_date("date"), F.lit("2018-01-01")))
-    .withColumn("_base_rate", F.coalesce(_fx_base_rate_map[F.col("INVOICE_CURRENCY_CODE")], F.lit(1.0)))
-    .withColumn("_market_drift",
-        (F.abs(F.hash(F.col("INVOICE_CURRENCY_CODE"), F.col("_days_since_epoch"))) % 300 - 150) / 10000.0)
+    # Real cross-system lookup: the actual Refinitiv print for this currency/day.
+    .join(market_rate_lookup,
+          (F.col("INVOICE_CURRENCY_CODE") == market_rate_lookup._fx_currency)
+          & (F.to_date("date") == market_rate_lookup._fx_date), "left")
+    # Independent operational spread: ERP's own small markup vs mid-market
+    # (its own salt "erp_spread"), ±0.2% -- well under the 1% threshold.
+    .withColumn("_erp_spread",
+        (F.abs(F.hash(F.col("bill_id"), F.lit("erp_spread"))) % 40 - 20) / 10000.0)
+    # Independent leakage draw: its own salts ("fx_leak"/"fx_bias"), unrelated
+    # to contract_line_item.leakage_flag or any other check's leakage signal.
     .withColumn("_fx_leak", rand_of(F.col("bill_id"))("fxleak") < LEAKAGE_RATE)
     .withColumn("_fx_bias_pct", F.round((rand_of(F.col("bill_id"))("fxbias") * 0.06) + 0.02, 4))  # 2-8%
     .withColumn("_fx_bias_signed",
@@ -803,7 +864,7 @@ trx = (bill.select("bill_id","customer_id","total_amount","tax_amount",
     .withColumn("APPLIED_EXCHANGE_RATE",
         F.when(F.col("INVOICE_CURRENCY_CODE") == "USD", F.lit(1.0))
          .otherwise(F.round(
-             F.col("_base_rate") * (1 + F.col("_market_drift"))
+             F.coalesce(F.col("_market_rate"), F.lit(1.0)) * (1 + F.col("_erp_spread"))
              * (1 + F.when(F.col("_fx_leak"), F.col("_fx_bias_signed")).otherwise(F.lit(0.0))), 6))))
 write_table(trx.select("CUSTOMER_TRX_ID","TRX_NUMBER","TRX_DATE","BILL_TO_CUSTOMER_ID",
         "INVOICE_CURRENCY_CODE","CUST_TRX_TYPE","COMPLETE_FLAG","APPLIED_EXCHANGE_RATE",
@@ -814,7 +875,7 @@ write_table(trx.select("CUSTOMER_TRX_ID","TRX_NUMBER","TRX_DATE","BILL_TO_CUSTOM
     {"CUSTOMER_TRX_ID":"Receivables transaction id (PK).","TRX_NUMBER":"Human-readable invoice number.",
      "TRX_DATE":"Invoice date.","BILL_TO_CUSTOMER_ID":"FK to hz_cust_accounts.CUST_ACCOUNT_ID.",
      "INVOICE_CURRENCY_CODE":"Invoice currency (customer billing_currency, restricted to Refinitiv-quoted pairs; else USD).",
-     "APPLIED_EXCHANGE_RATE":"Rate the billing system actually applied to convert this invoice to USD. Reconciled against refinitiv_fx_source.gl_daily_rates by silver_fx_rate_validation; diverges only where FX leakage was seeded.",
+     "APPLIED_EXCHANGE_RATE":"Rate the billing system actually applied to convert this invoice to USD -- looked up from the real Refinitiv market print plus ERP's own small spread. Reconciled against refinitiv_fx_source.gl_daily_rates by silver_fx_rate_validation; diverges materially only where FX leakage was seeded.",
      "INVOICE_AMOUNT":"Invoice total (matches tmf bill.total_amount).","TMF_BILL_ID":"Crosswalk to tmf_customer.bill.bill_id."})
 
 # ---- RA_CUSTOMER_TRX_LINES_ALL : invoice lines -------------------------------
@@ -998,15 +1059,9 @@ write_table(budget.select("BUDGET_ID","PERIOD_NAME","ACCOUNT","BUDGET_AMOUNT"),
 
 make_schema(SCHEMA_FX, "Refinitiv / LSEG market-data source: daily FX conversion rates used for multi-currency partner settlement and GL translation (Oracle GL_DAILY_RATES shape).")
 
-# FX currency pairs come from config.yaml `fx_pairs:` (single source of truth).
-pair_df = spark.createDataFrame(FX_PAIRS, ["FROM_CURRENCY","TO_CURRENCY","base_rate"])
-fx = (pair_df.crossJoin(spark.range(0, FX_DAYS).withColumnRenamed("id","d"))
-    .withColumn("CONVERSION_DATE", F.date_add(F.lit("2018-01-01"), F.col("d").cast("int")))
-    # deterministic random-walk-ish daily drift (±1.5%)
-    .withColumn("_drift", (F.abs(F.hash(F.col("FROM_CURRENCY"),F.col("d"))) % 300 - 150)/10000.0)
-    .withColumn("CONVERSION_RATE", F.round(F.col("base_rate") * (1 + F.col("_drift")),6))
-    .withColumn("CONVERSION_TYPE", F.lit("Corporate"))
-    .withColumn("SOURCE", F.lit("Refinitiv")))
+# `fx` was computed in §3b (before the ERP section) so ra_customer_trx_all's
+# APPLIED_EXCHANGE_RATE could join to it directly rather than recomputing the
+# same drift formula. Written here, unchanged.
 write_table(fx.select("FROM_CURRENCY","TO_CURRENCY","CONVERSION_DATE","CONVERSION_RATE","CONVERSION_TYPE","SOURCE"),
     SCHEMA_FX, "gl_daily_rates",
     "Refinitiv-sourced daily FX rates (Oracle GL_DAILY_RATES shape). One row per currency pair per day, 2018-2025, with realistic daily drift.",
