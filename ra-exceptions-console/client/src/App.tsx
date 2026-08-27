@@ -1,7 +1,18 @@
 import { createBrowserRouter, RouterProvider, NavLink, Outlet, useLocation } from 'react-router';
 import { useState } from 'react';
 import { Button, Sheet, SheetContent } from '@databricks/appkit-ui/react';
-import { LayoutGrid, ListChecks, Briefcase, Menu, Moon, Sun, Activity, SearchCheck, Zap, Network } from 'lucide-react';
+import {
+  LayoutGrid,
+  ListChecks,
+  Briefcase,
+  Menu,
+  Moon,
+  Sun,
+  Activity,
+  SearchCheck,
+  Zap,
+  Waypoints,
+} from 'lucide-react';
 import { OverviewPage } from './pages/OverviewPage';
 import { QueuePage } from './pages/QueuePage';
 import { CasesPage } from './pages/CasesPage';
@@ -14,8 +25,9 @@ const NAV = [
   { to: '/', label: 'Overview', icon: LayoutGrid, end: true },
   { to: '/queue', label: 'Exception queue', icon: ListChecks, end: false },
   { to: '/cases', label: 'My cases', icon: Briefcase, end: false },
-  { to: '/architecture', label: 'Architecture', icon: Network, end: false },
 ];
+
+const SECONDARY_NAV = [{ to: '/architecture', label: 'Architecture', icon: Waypoints, end: false }];
 
 const TITLES: Record<string, { title: string; sub: string }> = {
   '/': { title: 'Overview', sub: 'Revenue leakage across all reconciliation checks' },
@@ -65,6 +77,16 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         <div className="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-muted-foreground/60">
           <Zap className="h-4 w-4 shrink-0" /> Anomaly models
         </div>
+      </nav>
+
+      <nav className="flex flex-col gap-0.5">
+        <div className="px-2.5 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Learn</div>
+        {SECONDARY_NAV.map(({ to, label, icon: Icon, end }) => (
+          <NavLink key={to} to={to} end={end} className={navItemClass} onClick={onNavigate}>
+            <Icon className="h-4 w-4 shrink-0" />
+            {label}
+          </NavLink>
+        ))}
       </nav>
 
       <div className="mt-auto flex items-center gap-2.5 border-t border-sidebar-border pt-3">

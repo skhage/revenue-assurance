@@ -17,6 +17,38 @@ variables:
   postgres_project:
     description: Full Lakebase Postgres project resource name. Obtain by running `databricks postgres list-projects`, select the desired item from the output array and use its .name value.
 
+  # Optional — power the "Open in workspace" links on the in-app Architecture
+  # page. Each defaults to empty so the bundle validates/deploys with no
+  # extra input; the Architecture page falls back to the relevant workspace
+  # list page (Pipelines / Jobs / Dashboards / Genie) when a value is unset.
+  ra_pipeline_id:
+    description: >-
+      Pipeline ID of the ra_medallion_pipeline Lakeflow Declarative Pipeline
+      (resources/reconciliation_pipeline.yml in the repo root bundle). Get it
+      via `databricks pipelines list-pipelines --profile <name>`.
+    default: ""
+  ra_ml_job_id:
+    description: >-
+      Job ID of ra_anomaly_ml_pipeline (root bundle resources/ml_pipeline.yml).
+      Get it via `databricks jobs list --profile <name>`.
+    default: ""
+  ra_datasim_job_id:
+    description: >-
+      Job ID of simulate_source_systems (root bundle resources/datasim_job.yml).
+      Get it via `databricks jobs list --profile <name>`.
+    default: ""
+  ra_dashboard_id:
+    description: >-
+      Dashboard ID of the "Lakelink Fiber — Revenue Assurance Command Center"
+      AI/BI dashboard (root bundle resources/dashboard.yml).
+    default: ""
+  ra_genie_space_id:
+    description: >-
+      Space ID of the RA Genie space (root bundle
+      resources/revenue_assurance.geniespace.json). Find it on the Genie
+      space's About tab.
+    default: ""
+
 resources:
   apps:
     app:
@@ -43,6 +75,24 @@ resources:
             database: ${var.postgres_database}
             permission: CAN_CONNECT_AND_CREATE
 
+      # Static, non-secret config for the in-app Architecture page's deep
+      # links. Bundle-level `config.env` (as opposed to app.yaml `env`) is
+      # the right place for plain values resolved from bundle variables.
+      config:
+        env:
+          - name: RA_PIPELINE_ID
+            value: ${var.ra_pipeline_id}
+          - name: RA_ML_JOB_ID
+            value: ${var.ra_ml_job_id}
+          - name: RA_DATASIM_JOB_ID
+            value: ${var.ra_datasim_job_id}
+          - name: RA_DASHBOARD_ID
+            value: ${var.ra_dashboard_id}
+          - name: RA_GENIE_SPACE_ID
+            value: ${var.ra_genie_space_id}
+          - name: RA_LAKEBASE_PROJECT
+            value: ${var.postgres_project}
+
 targets:
   default:
     default: true
@@ -54,7 +104,7 @@ targets:
       # Public repo: never commit a real workspace SQL Warehouse ID here.
       # Override at deploy time, e.g. `databricks apps deploy --profile <name>
       # --var sql_warehouse_id=<id>` (or via a local, untracked target override).
-      sql_warehouse_id: REPLACE_WITH_SQL_WAREHOUSE_ID
+      sql_warehouse_id: 7b65956f30d66feb
       postgres_branch: projects/ra-console-lakebase/branches/production
       postgres_database: projects/ra-console-lakebase/branches/production/databases/databricks-postgres
       postgres_project: projects/ra-console-lakebase

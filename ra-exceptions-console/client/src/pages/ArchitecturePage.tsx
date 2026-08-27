@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button, Card, CardContent } from '@databricks/appkit-ui/react';
 import {
   AppWindow,
@@ -18,14 +18,27 @@ import {
   MapPin,
   type LucideIcon,
 } from 'lucide-react';
+import { WorkspaceLinkButton } from '../components/WorkspaceLinkButton';
+import {
+  architectureApi,
+  type ArchitectureConfig,
+  exploreDataUrl,
+  pipelineUrl,
+  jobUrl,
+  genieUrl,
+  mlflowExperimentUrl,
+  lakebaseUrl,
+} from '../lib/architecture';
 
 /**
  * Architecture tab.
  *
  * Recreates the Databricks Data + AI Platform layered diagram, but every tile is a
  * real component of THIS demo (per demo-artifacts/05-repository-blueprint.md). On top
- * of the static map sits a guided clickthrough that walks the request path:
+ * of the layered map sits a guided clickthrough that walks the request path:
  *   App → Genie One → Genie Agent → SDP → MLOps → Unity Catalog → Data.
+ * Each tour step carries "Open in workspace" deep links built from real bundle config
+ * (see lib/architecture.ts + server/routes/architecture.ts).
  */
 
 const BRAND = '#FF3621'; // Databricks coral
@@ -99,15 +112,22 @@ const INFRA_CHIPS = [
   'mdm_source',
 ];
 
+interface StepLink {
+  label: string;
+  build: (cfg: ArchitectureConfig) => string | null;
+}
+
 interface TourStep {
   node: NodeId;
   kicker: string;
   title: string;
   body: string;
   artifact: string;
+  links: StepLink[];
 }
 
 // The requested clickthrough: App → Genie One → Genie Agent → SDP → MLOps → UC → Data.
+// Each step links into the real workspace resource it maps to.
 const TOUR: TourStep[] = [
   {
     node: 'app',
@@ -115,6 +135,10 @@ const TOUR: TourStep[] = [
     title: 'RA Exceptions Console',
     body: 'The AppKit app an analyst uses to triage leakage and work cases. It reads analytics through the SQL warehouse and writes case state back to Lakebase Postgres.',
     artifact: 'ra-exceptions-console · reads gold_* / silver_*, writes ra.cases · ra.case_notes',
+    links: [
+      { label: 'Explore RA schema', build: (cfg) => exploreDataUrl(cfg) },
+      { label: 'Case store (Lakebase)', build: (cfg) => lakebaseUrl(cfg) },
+    ],
   },
   {
     node: 'genie-one',
@@ -122,6 +146,7 @@ const TOUR: TourStep[] = [
     title: 'Genie One',
     body: 'The org-wide AI coworker. A business user asks “where are we leaking revenue this quarter?” in plain language; Genie One routes it through the Genie Ontology to the right governed data.',
     artifact: 'Genie One · natural-language entry point across all domains',
+    links: [{ label: 'Open Genie', build: (cfg) => genieUrl(cfg) }],
   },
   {
     node: 'genie-agent',
@@ -129,6 +154,7 @@ const TOUR: TourStep[] = [
     title: 'RA Genie Agent',
     body: 'A curated Genie Space scoped to revenue assurance. It is grounded on the RA metric views and business glossary, so answers use the same KPI definitions the pipelines compute.',
     artifact: 'Genie Space · grounded on revenue_assurance metric views + glossary',
+    links: [{ label: 'Open RA Genie space', build: (cfg) => genieUrl(cfg) }],
   },
   {
     node: 'sdp',
@@ -136,6 +162,10 @@ const TOUR: TourStep[] = [
     title: 'Reconciliation Pipelines (SDP)',
     body: 'Lakeflow Spark Declarative Pipelines run the seven silver reconciliation checks (one per check_type) and roll them into four gold views the app and Genie read.',
     artifact: 'silver_reconciliation · gold_leakage_summary · gold_reconciliation_scorecard',
+    links: [
+      { label: 'Open pipeline', build: (cfg) => pipelineUrl(cfg) },
+      { label: 'Explore gold views', build: (cfg) => exploreDataUrl(cfg) },
+    ],
   },
   {
     node: 'mlops',
@@ -143,6 +173,10 @@ const TOUR: TourStep[] = [
     title: 'Anomaly Detection & Forecast',
     body: 'An MLflow anomaly model scores exceptions and ai_forecast projects expected revenue, surfacing leakage that fixed rules miss. Models are registered and governed in Unity Catalog.',
     artifact: 'gold_anomaly_scores · gold_revenue_forecast_anomalies',
+    links: [
+      { label: 'ML job', build: (cfg) => jobUrl(cfg, cfg.mlJobId) },
+      { label: 'MLflow experiments', build: (cfg) => mlflowExperimentUrl(cfg) },
+    ],
   },
   {
     node: 'uc',
@@ -150,6 +184,7 @@ const TOUR: TourStep[] = [
     title: 'Unity Catalog',
     body: 'Every table, view, model, and metric is governed here. Metric Views define KPIs with synonyms, the domain tag maps resources to Sales/Ops/Finance, and the glossary reconciles the terms each team uses differently.',
     artifact: 'Metric Views · domain tag matrix · business glossary · access + lineage',
+    links: [{ label: 'Open Catalog Explorer', build: (cfg) => exploreDataUrl(cfg) }],
   },
   {
     node: 'lakehouse',
@@ -157,6 +192,10 @@ const TOUR: TourStep[] = [
     title: 'cdm_tmforum + source systems',
     body: 'The pre-populated TM Forum SID catalog (resource, service, product, customer, business partner) plus the simulated upstream sources. This golden data is what every layer above reconciles against.',
     artifact: 'cdm_tmforum.tmf_* (read-only) · *_source schemas · revenue_assurance',
+    links: [
+      { label: 'Explore cdm_tmforum', build: (cfg) => exploreDataUrl(cfg, cfg.catalog) },
+      { label: 'Data-sim job', build: (cfg) => jobUrl(cfg, cfg.datasimJobId) },
+    ],
   },
 ];
 
@@ -229,6 +268,25 @@ function NodeTile({
 export function ArchitecturePage() {
   // -1 = tour not started (show full map, no dimming)
   const [step, setStep] = useState(-1);
+  const [cfg, setCfg] = useState<ArchitectureConfig | null>(null);
+
+  // Workspace config powers the "Open in workspace" deep links. Optional — if it
+  // fails to load, WorkspaceLinkButton renders disabled with a tooltip.
+  useEffect(() => {
+    let alive = true;
+    architectureApi
+      .config()
+      .then((c) => {
+        if (alive) setCfg(c);
+      })
+      .catch(() => {
+        /* leave cfg null → links disabled */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const touring = step >= 0;
   const current = touring ? TOUR[step] : null;
   const activeNode = current?.node ?? null;
@@ -340,6 +398,14 @@ export function ArchitecturePage() {
                   <code className="block break-words text-xs text-foreground">{current.artifact}</code>
                 </div>
 
+                {current.links.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {current.links.map((l) => (
+                      <WorkspaceLinkButton key={l.label} label={l.label} href={cfg ? l.build(cfg) : null} />
+                    ))}
+                  </div>
+                )}
+
                 {/* Flow breadcrumb */}
                 <div className="mt-auto flex flex-wrap items-center gap-1 pt-2">
                   {TOUR.map((t, i) => (
@@ -369,7 +435,8 @@ export function ArchitecturePage() {
                 <div className="text-sm font-medium text-foreground">Follow the request path</div>
                 <p className="max-w-xs text-sm text-muted-foreground">
                   Start the guided tour to trace a business question from this app down through Genie, the pipelines,
-                  and Unity Catalog to the underlying data — or click any numbered tile.
+                  and Unity Catalog to the underlying data — each step links into the live workspace. Or click any
+                  numbered tile.
                 </p>
                 <Button size="sm" variant="outline" onClick={start}>
                   Start guided tour
