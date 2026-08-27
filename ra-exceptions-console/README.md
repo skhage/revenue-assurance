@@ -94,9 +94,9 @@ The app will be available at the URL shown in the console output.
 
 Lakebase tables `ra.cases` and `ra.case_notes` are the source of truth for status, assignment, and notes. Every mutation uses an optimistic `version` check, commits status-plus-note work in one Postgres transaction, and writes an event to `ra.workflow_outbox`.
 
-The app drains the outbox after each write and every 30 seconds into `cdm_tmforum.revenue_assurance.workflow_case_state`. The `gold_exception_workflow` view is the only warehouse-facing exception register used by the dashboard and Genie. The app service principal therefore needs `USE CATALOG`, `USE SCHEMA`, `SELECT`, and `CREATE TABLE` on `cdm_tmforum.revenue_assurance`.
+The app drains the outbox after each write and every 30 seconds into `cdm_tmforum.revenue_assurance.workflow_case_state`. A recurring anti-entropy pass compares every Lakebase case version with that Delta table and reopens snapshots that are missing or stale, including after deployments and upgrades. The `gold_exception_workflow` view is the only warehouse-facing exception register used by the dashboard and Genie. The app service principal therefore needs `USE CATALOG`, `USE SCHEMA`, `SELECT`, and `CREATE TABLE` on `cdm_tmforum.revenue_assurance`.
 
-`GET /api/workflow/health` returns HTTP 503 while projection setup is unavailable or repeatedly failing. Lakebase writes remain committed and queued for retry. At startup, unique legacy identity matches migrate transactionally and are recorded in `ra.case_identity_aliases`; ambiguous or missing matches remain visible with `identity_status = 'orphaned'` for review.
+`GET /api/workflow/health` returns a Lakebase-backed monotonic revision plus initialization, flush, and reconciliation timestamps/results, and returns HTTP 503 while any projection component is unhealthy. Open clients poll that revision every five seconds so workflow changes made in another browser or session refresh Overview, queue, and case surfaces. Initialization self-retries, Lakebase writes remain committed and queued for projection retry, and all timers stop cleanly on service shutdown. At startup, unique legacy identity matches migrate transactionally and are recorded in `ra.case_identity_aliases`; ambiguous or missing matches remain visible with `identity_status = 'orphaned'` for review.
 
 ### Build
 

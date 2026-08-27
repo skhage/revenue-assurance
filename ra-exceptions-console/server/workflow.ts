@@ -1,4 +1,5 @@
 import { sql } from '@databricks/appkit';
+import { createHash } from 'node:crypto';
 
 export const STATUSES = ['New', 'Investigating', 'Recovering', 'Recovered', 'WrittenOff'] as const;
 export type Status = (typeof STATUSES)[number];
@@ -18,8 +19,14 @@ export function hasVersionConflict(expectedVersion: number, currentVersion: unkn
 export const WORKFLOW_TABLE = 'cdm_tmforum.revenue_assurance.workflow_case_state';
 export const EXCEPTION_VIEW = 'cdm_tmforum.revenue_assurance.gold_exception_workflow';
 
-export const CANONICAL_EXCEPTION_ID_SQL = `md5(concat_ws('|', check_type, coalesce(reference_id, ''),
-  coalesce(cast(customer_id AS string), ''), cast(amount_at_risk AS string)))`;
+// The only fields that may ever feed the canonical exception id: which check
+// flagged it, which source system/table it came from, and that source's own
+// immutable record key. Mutable/derived values (amount_at_risk, customer_id,
+// account_name) must never appear here — they can be corrected or re-scored
+// without the exception's identity changing underneath an open case.
+export const CANONICAL_EXCEPTION_ID_FIELDS = ['check_type', 'source_table', 'reference_id'] as const;
+
+export const CANONICAL_EXCEPTION_ID_SQL = `md5(concat_ws('|', check_type, source_table, coalesce(reference_id, '')))`;
 
 export const CREATE_WORKFLOW_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS ${WORKFLOW_TABLE} (
@@ -76,6 +83,20 @@ function textValue(value: unknown) {
     : '';
 }
 
+/**
+ * JS mirror of CANONICAL_EXCEPTION_ID_SQL — md5(concat_ws('|', check_type, source_table, coalesce(reference_id, ''))).
+ * Spark's concat_ws skips NULL arguments entirely (not just empty-strings them), so a
+ * missing check_type/source_table drops out of the joined string rather than becoming ''.
+ * reference_id is coalesced to '' in the SQL, so it is always kept.
+ */
+export function canonicalExceptionId(record: { check_type?: unknown; source_table?: unknown; reference_id?: unknown }) {
+  const parts = [record.check_type, record.source_table]
+    .filter((value) => value !== null && value !== undefined)
+    .map((value) => textValue(value));
+  parts.push(textValue(record.reference_id ?? ''));
+  return createHash('md5').update(parts.join('|')).digest('hex');
+}
+
 export async function ensureWorkflowSchema(lakebase: LakebaseClient) {
   await lakebase.query('CREATE SCHEMA IF NOT EXISTS ra');
   await lakebase.query(`
@@ -84,6 +105,7 @@ export async function ensureWorkflowSchema(lakebase: LakebaseClient) {
       reference_id TEXT,
       account_name TEXT,
       check_type TEXT,
+      source_table TEXT,
       severity TEXT,
       amount_at_risk DOUBLE PRECISION,
       status TEXT NOT NULL DEFAULT 'New' CHECK (status IN ('New','Investigating','Recovering','Recovered','WrittenOff')),
@@ -97,6 +119,20 @@ export async function ensureWorkflowSchema(lakebase: LakebaseClient) {
   await lakebase.query('ALTER TABLE ra.cases ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0');
   await lakebase.query(
     "ALTER TABLE ra.cases ADD COLUMN IF NOT EXISTS identity_status TEXT NOT NULL DEFAULT 'canonical'"
+  );
+  // source_table is part of the immutable identity triple (check_type, source_table, reference_id).
+  // Rows created before this column existed have it NULL; reconcileCaseIdentities falls back to a
+  // check_type+reference_id match for those instead of the direct canonical-hash comparison.
+  await lakebase.query('ALTER TABLE ra.cases ADD COLUMN IF NOT EXISTS source_table TEXT');
+  await lakebase.query(`
+    CREATE TABLE IF NOT EXISTS ra.workflow_runtime_state (
+      singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+      revision BIGINT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await lakebase.query(
+    'INSERT INTO ra.workflow_runtime_state(singleton) VALUES(TRUE) ON CONFLICT(singleton) DO NOTHING'
   );
   await lakebase.query(`
     CREATE TABLE IF NOT EXISTS ra.case_notes (
@@ -136,30 +172,62 @@ export async function ensureWorkflowSchema(lakebase: LakebaseClient) {
 interface IdentityRecord {
   exception_id: string;
   reference_id?: unknown;
-  account_name?: unknown;
   check_type?: unknown;
-  amount_at_risk?: unknown;
+  source_table?: unknown;
 }
 
-export function identityMatchKey(record: IdentityRecord) {
-  return [record.reference_id, record.account_name, record.check_type]
-    .map((value) => textValue(value).trim().toLowerCase())
-    .join('|');
+function hasSourceTable(record: IdentityRecord) {
+  return record.source_table != null && textValue(record.source_table).trim() !== '';
+}
+
+/**
+ * Fallback match key for legacy Lakebase rows created before source_table was captured
+ * (so the direct canonical-hash comparison isn't possible for them yet). Built only from
+ * immutable fields — check_type and the source system's own reference_id — never
+ * amount_at_risk, account_name, or any other value that can drift after a case is opened.
+ */
+export function identityMatchKey(record: { reference_id?: unknown; check_type?: unknown }) {
+  return [record.check_type, record.reference_id].map((value) => textValue(value).trim().toLowerCase()).join('|');
+}
+
+export async function bumpWorkflowRevision(client: {
+  query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
+}) {
+  const { rows } = await client.query(
+    'UPDATE ra.workflow_runtime_state SET revision=revision+1, updated_at=NOW() WHERE singleton=TRUE RETURNING revision'
+  );
+  return Number(rows[0]?.revision ?? 0);
 }
 
 export function planIdentityReconciliation(cases: IdentityRecord[], canonicalRows: IdentityRecord[]) {
   const canonicalIds = new Set(canonicalRows.map((row) => row.exception_id));
   const casesById = new Set(cases.map((row) => row.exception_id));
-  const matches = new Map<string, string[]>();
+  const fallbackMatches = new Map<string, string[]>();
   for (const row of canonicalRows) {
     const key = identityMatchKey(row);
-    matches.set(key, [...(matches.get(key) ?? []), row.exception_id]);
+    fallbackMatches.set(key, [...(fallbackMatches.get(key) ?? []), row.exception_id]);
   }
   const migrations: { legacyId: string; canonicalId: string }[] = [];
   const orphaned: string[] = [];
   for (const row of cases) {
     if (canonicalIds.has(row.exception_id)) continue;
-    const candidates = matches.get(identityMatchKey(row)) ?? [];
+
+    if (hasSourceTable(row)) {
+      // Immutable identity is fully known — the canonical id is a pure function of it, so
+      // recomputing and comparing is exact. No ambiguity is possible: two different source
+      // rows never legitimately share (check_type, source_table, reference_id).
+      const computed = canonicalExceptionId(row);
+      if (canonicalIds.has(computed) && !casesById.has(computed)) {
+        migrations.push({ legacyId: row.exception_id, canonicalId: computed });
+      } else {
+        orphaned.push(row.exception_id);
+      }
+      continue;
+    }
+
+    // Pre-migration legacy row with no source_table on file: best-effort match on the
+    // remaining immutable fields. Ambiguous or unmatched rows are orphaned, never guessed.
+    const candidates = fallbackMatches.get(identityMatchKey(row)) ?? [];
     if (candidates.length === 1 && !casesById.has(candidates[0]))
       migrations.push({ legacyId: row.exception_id, canonicalId: candidates[0] });
     else orphaned.push(row.exception_id);
@@ -169,36 +237,35 @@ export function planIdentityReconciliation(cases: IdentityRecord[], canonicalRow
 
 export async function reconcileCaseIdentities(analytics: AnalyticsClient, lakebase: LakebaseClient) {
   const { rows: cases } = await lakebase.query(
-    'SELECT exception_id, reference_id, account_name, check_type, amount_at_risk FROM ra.cases'
+    'SELECT exception_id, reference_id, check_type, source_table FROM ra.cases'
   );
-  if (cases.length === 0) return { migrations: 0, orphaned: 0 };
+  if (cases.length === 0) return { migrations: 0, orphaned: 0, backfilled: 0 };
   const warehouse = await analytics.query(
-    `SELECT exception_id, reference_id, account_name, check_type, amount_at_risk FROM ${EXCEPTION_VIEW}`
+    `SELECT exception_id, reference_id, check_type, source_table FROM ${EXCEPTION_VIEW}`
   );
   const canonicalRows = (warehouse.data_array ?? []).map((row) => ({
     exception_id: String(row[0]),
     reference_id: row[1],
-    account_name: row[2],
-    check_type: row[3],
-    amount_at_risk: row[4],
+    check_type: row[2],
+    source_table: row[3],
   }));
   const caseRecords: IdentityRecord[] = cases
     .filter((row) => typeof row.exception_id === 'string')
     .map((row) => ({
       exception_id: row.exception_id as string,
       reference_id: row.reference_id,
-      account_name: row.account_name,
       check_type: row.check_type,
-      amount_at_risk: row.amount_at_risk,
+      source_table: row.source_table,
     }));
   const plan = planIdentityReconciliation(caseRecords, canonicalRows);
   for (const migration of plan.migrations) {
+    const canonicalSourceTable = canonicalRows.find((row) => row.exception_id === migration.canonicalId)?.source_table;
     await withTransaction(lakebase, async (client) => {
       await client.query(
-        `INSERT INTO ra.cases (exception_id,reference_id,account_name,check_type,severity,amount_at_risk,status,assignee,version,identity_status,created_at,updated_at)
-         SELECT $2,reference_id,account_name,check_type,severity,amount_at_risk,status,assignee,version+1,'canonical',created_at,NOW()
+        `INSERT INTO ra.cases (exception_id,reference_id,account_name,check_type,severity,amount_at_risk,status,assignee,version,identity_status,source_table,created_at,updated_at)
+         SELECT $2,reference_id,account_name,check_type,severity,amount_at_risk,status,assignee,version+1,'canonical',COALESCE(source_table,$3),created_at,NOW()
          FROM ra.cases WHERE exception_id=$1`,
-        [migration.legacyId, migration.canonicalId]
+        [migration.legacyId, migration.canonicalId, canonicalSourceTable ?? null]
       );
       await client.query('UPDATE ra.case_notes SET exception_id=$2 WHERE exception_id=$1', [
         migration.legacyId,
@@ -210,17 +277,65 @@ export async function reconcileCaseIdentities(analytics: AnalyticsClient, lakeba
         [migration.legacyId, migration.canonicalId]
       );
       await enqueueSnapshot(client, migration.canonicalId);
+      await bumpWorkflowRevision(client);
     });
     await analytics.query(`DELETE FROM ${WORKFLOW_TABLE} WHERE exception_id = :legacy_id`, {
       legacy_id: sql.string(migration.legacyId),
     });
   }
   if (plan.orphaned.length) {
-    await lakebase.query("UPDATE ra.cases SET identity_status='orphaned' WHERE exception_id = ANY($1::text[])", [
-      plan.orphaned,
-    ]);
+    await withTransaction(lakebase, async (client) => {
+      const result = await client.query(
+        "UPDATE ra.cases SET identity_status='orphaned' WHERE exception_id = ANY($1::text[]) AND identity_status <> 'orphaned' RETURNING exception_id",
+        [plan.orphaned]
+      );
+      if (result.rows.length) await bumpWorkflowRevision(client);
+    });
   }
-  return { migrations: plan.migrations.length, orphaned: plan.orphaned.length };
+  const missingSources = canonicalRows.filter((canonical) => {
+    const current = caseRecords.find((row) => row.exception_id === canonical.exception_id);
+    return current && !hasSourceTable(current) && hasSourceTable(canonical);
+  });
+  if (missingSources.length) {
+    await withTransaction(lakebase, async (client) => {
+      for (const row of missingSources)
+        await client.query(
+          "UPDATE ra.cases SET source_table=$2, identity_status='canonical' WHERE exception_id=$1 AND (source_table IS NULL OR btrim(source_table)='')",
+          [row.exception_id, textValue(row.source_table)]
+        );
+    });
+  }
+  const backfilled = await backfillProjection(analytics, lakebase);
+  return { migrations: plan.migrations.length, orphaned: plan.orphaned.length, backfilled };
+}
+
+/**
+ * Anti-entropy pass: compares each already-canonical Lakebase case's version against the
+ * Delta projection's version and re-queues a snapshot for anything missing or stale. This is
+ * what guarantees a fresh deployment (or one that skipped flushes) eventually converges —
+ * unlike the outbox-driven flush, this does not depend on an exception_id having *changed*.
+ */
+export async function backfillProjection(
+  analytics: AnalyticsClient,
+  lakebase: LakebaseClient
+) {
+  const projected = await analytics.query(`SELECT exception_id, version FROM ${WORKFLOW_TABLE}`);
+  const projectedVersion = new Map<string, number>();
+  for (const row of projected.data_array ?? []) projectedVersion.set(String(row[0]), Number(row[1] ?? 0));
+
+  const { rows: currentCases } = await lakebase.query('SELECT exception_id, version FROM ra.cases');
+  const stale = currentCases.filter((row) => {
+    const id = String(row.exception_id);
+    const liveVersion = Number(row.version ?? 0);
+    const projectedAt = projectedVersion.get(id);
+    return projectedAt === undefined || projectedAt < liveVersion;
+  });
+  if (stale.length === 0) return 0;
+
+  await withTransaction(lakebase, async (client) => {
+    for (const row of stale) await enqueueSnapshot(client, String(row.exception_id));
+  });
+  return stale.length;
 }
 
 export async function enqueueSnapshot(
@@ -237,7 +352,10 @@ export async function enqueueSnapshot(
        SELECT body, author FROM ra.case_notes WHERE exception_id = c.exception_id ORDER BY created_at DESC, id DESC LIMIT 1
      ) n ON TRUE
      WHERE c.exception_id = $1
-     ON CONFLICT (exception_id, version) DO NOTHING`,
+     ON CONFLICT (exception_id, version) DO UPDATE SET
+       status=EXCLUDED.status, assignee=EXCLUDED.assignee, latest_note=EXCLUDED.latest_note,
+       latest_note_author=EXCLUDED.latest_note_author, note_count=EXCLUDED.note_count,
+       updated_at=EXCLUDED.updated_at, projected_at=NULL, attempts=0, last_error=NULL`,
     [exceptionId]
   );
 }
@@ -261,47 +379,114 @@ export async function withTransaction<T>(
 }
 
 export const RECONCILIATION_INTERVAL_MS = 5 * 60 * 1000;
+export const INIT_RETRY_INTERVAL_MS = 30 * 1000;
+export const FLUSH_INTERVAL_MS = 30 * 1000;
 
 export function createProjection(analytics: AnalyticsClient, lakebase: LakebaseClient) {
   let running: Promise<void> | null = null;
-  let reconciling: Promise<{ migrations: number; orphaned: number }> | null = null;
+  let initializing: Promise<void> | null = null;
+  let reconciling: Promise<{ migrations: number; orphaned: number; backfilled: number }> | null = null;
   let ready = false;
-  let lastError: string | null = null;
+  let stopped = false;
+  let initializationError: string | null = null;
+  let lastFlushError: string | null = null;
+  let lastReconciliationError: string | null = null;
+  let lastFlushAt: Date | null = null;
+  let lastFlushAttemptAt: Date | null = null;
+  let lastFlushResult: { processed: number; succeeded: number; failed: number } | null = null;
+  let lastReconciliationAt: Date | null = null;
+  let lastReconciliationAttemptAt: Date | null = null;
+  let lastReconciliationResult: { migrations: number; orphaned: number; backfilled: number } | null = null;
   let reconciliationTimer: ReturnType<typeof setInterval> | null = null;
+  let flushTimer: ReturnType<typeof setInterval> | null = null;
+  let initRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
   async function runReconciliation() {
     if (reconciling) return reconciling;
-    reconciling = reconcileCaseIdentities(analytics, lakebase).finally(() => {
-      reconciling = null;
-    });
+    lastReconciliationAttemptAt = new Date();
+    reconciling = reconcileCaseIdentities(analytics, lakebase)
+      .then((result) => {
+        lastReconciliationAt = new Date();
+        lastReconciliationResult = result;
+        lastReconciliationError = null;
+        return result;
+      })
+      .catch((error) => {
+        lastReconciliationError = error instanceof Error ? error.message : String(error);
+        throw error;
+      })
+      .finally(() => {
+        reconciling = null;
+      });
     return reconciling;
   }
 
-  async function initialize() {
-    await ensureWorkflowSchema(lakebase);
-    try {
-      await analytics.query(CREATE_WORKFLOW_TABLE_SQL);
-      await analytics.query(CREATE_EXCEPTION_VIEW_SQL);
-      const reconciliation = await runReconciliation();
-      ready = true;
-      lastError = null;
-      console.log('[workflow-projection] ready:', reconciliation);
-      reconciliationTimer = setInterval(() => {
-        runReconciliation().catch((error) => {
-          lastError = error instanceof Error ? error.message : String(error);
-          console.error('[workflow-projection] scheduled reconciliation failed:', error);
-        });
-      }, RECONCILIATION_INTERVAL_MS);
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
-      console.error('[workflow-projection] initialization failed; Lakebase writes remain queued:', error);
-    }
+  function scheduleReconciliationTimer() {
+    if (reconciliationTimer) return;
+    reconciliationTimer = setInterval(() => {
+      runReconciliation().catch((error) => {
+        console.error('[workflow-projection] scheduled reconciliation failed:', error);
+      });
+    }, RECONCILIATION_INTERVAL_MS);
+    reconciliationTimer.unref?.();
+  }
+
+  function scheduleFlushTimer() {
+    if (flushTimer) return;
+    flushTimer = setInterval(() => {
+      flush().catch((error) => {
+        console.error('[workflow-projection] scheduled flush failed:', error);
+      });
+    }, FLUSH_INTERVAL_MS);
+    flushTimer.unref?.();
+  }
+
+  // Idempotent setup (CREATE TABLE/VIEW IF NOT EXISTS, plus reconciliation, which is itself
+  // safe to re-run) means a failed attempt can simply be retried on a timer rather than
+  // requiring a process restart. Once ready, the retry loop stops scheduling itself.
+  function initialize() {
+    if (stopped || ready) return Promise.resolve();
+    if (initializing) return initializing;
+    initializing = (async () => {
+      try {
+        await ensureWorkflowSchema(lakebase);
+        await analytics.query(CREATE_WORKFLOW_TABLE_SQL);
+        await analytics.query(CREATE_EXCEPTION_VIEW_SQL);
+        const reconciliation = await runReconciliation();
+        await flush();
+        ready = true;
+        initializationError = null;
+        if (initRetryTimer) {
+          clearTimeout(initRetryTimer);
+          initRetryTimer = null;
+        }
+        console.log('[workflow-projection] ready:', reconciliation);
+        scheduleReconciliationTimer();
+        scheduleFlushTimer();
+      } catch (error) {
+        ready = false;
+        initializationError = error instanceof Error ? error.message : String(error);
+        console.error('[workflow-projection] initialization failed; retrying:', error);
+        if (!stopped && !initRetryTimer) {
+          initRetryTimer = setTimeout(() => {
+            initRetryTimer = null;
+            void initialize();
+          }, INIT_RETRY_INTERVAL_MS);
+          initRetryTimer.unref?.();
+        }
+      }
+    })().finally(() => {
+      initializing = null;
+    });
+    return initializing;
   }
 
   async function flushInternal() {
+    lastFlushAttemptAt = new Date();
     const { rows } = await lakebase.query(
       `SELECT * FROM ra.workflow_outbox WHERE projected_at IS NULL ORDER BY id LIMIT 100`
     );
+    const result = { processed: rows.length, succeeded: 0, failed: 0 };
     for (const row of rows) {
       try {
         const params: Record<string, SqlParam> = {
@@ -334,8 +519,10 @@ export function createProjection(analytics: AnalyticsClient, lakebase: LakebaseC
         await lakebase.query('UPDATE ra.workflow_outbox SET projected_at = NOW(), last_error = NULL WHERE id = $1', [
           row.id,
         ]);
+        result.succeeded += 1;
       } catch (error) {
-        lastError = error instanceof Error ? error.message : String(error);
+        result.failed += 1;
+        lastFlushError = error instanceof Error ? error.message : String(error);
         await lakebase.query('UPDATE ra.workflow_outbox SET attempts = attempts + 1, last_error = $2 WHERE id = $1', [
           row.id,
           error instanceof Error ? error.message.slice(0, 2000) : String(error).slice(0, 2000),
@@ -343,30 +530,77 @@ export function createProjection(analytics: AnalyticsClient, lakebase: LakebaseC
         console.error('[workflow-projection] event failed:', row.id, error);
       }
     }
+    lastFlushAt = new Date();
+    lastFlushResult = result;
+    if (result.failed === 0) lastFlushError = null;
   }
 
   function flush() {
-    if (!running) running = flushInternal().finally(() => (running = null));
+    if (!running)
+      running = flushInternal()
+        .catch((error) => {
+          lastFlushError = error instanceof Error ? error.message : String(error);
+          throw error;
+        })
+        .finally(() => (running = null));
     return running;
   }
 
   async function health() {
-    const { rows } = await lakebase.query(
-      'SELECT COUNT(*)::int pending, COALESCE(MAX(attempts),0)::int max_attempts FROM ra.workflow_outbox WHERE projected_at IS NULL'
-    );
+    let storageError: string | null = null;
+    let pending = 0;
+    let maxAttempts = 0;
+    let revision = 0;
+    let revisionUpdatedAt: unknown = null;
+    try {
+      const { rows } = await lakebase.query(
+        `SELECT
+          (SELECT COUNT(*)::int FROM ra.workflow_outbox WHERE projected_at IS NULL) pending,
+          (SELECT COALESCE(MAX(attempts),0)::int FROM ra.workflow_outbox WHERE projected_at IS NULL) max_attempts,
+          revision, updated_at
+         FROM ra.workflow_runtime_state WHERE singleton=TRUE`
+      );
+      pending = Number(rows[0]?.pending ?? 0);
+      maxAttempts = Number(rows[0]?.max_attempts ?? 0);
+      revision = Number(rows[0]?.revision ?? 0);
+      revisionUpdatedAt = rows[0]?.updated_at ?? null;
+    } catch (error) {
+      storageError = error instanceof Error ? error.message : String(error);
+    }
     return {
       ready,
-      lastError,
-      pending: Number(rows[0]?.pending ?? 0),
-      maxAttempts: Number(rows[0]?.max_attempts ?? 0),
+      lastError: initializationError ?? lastReconciliationError ?? lastFlushError ?? storageError,
+      initializationError,
+      lastReconciliationError,
+      lastFlushError,
+      pending,
+      maxAttempts,
+      revision,
+      revisionUpdatedAt,
       reconciling: reconciling !== null,
+      initializing: initializing !== null,
+      lastFlushAt,
+      lastFlushAttemptAt,
+      lastFlushResult,
+      lastReconciliationAt,
+      lastReconciliationAttemptAt,
+      lastReconciliationResult,
     };
   }
 
   function stop() {
+    stopped = true;
     if (reconciliationTimer) {
       clearInterval(reconciliationTimer);
       reconciliationTimer = null;
+    }
+    if (flushTimer) {
+      clearInterval(flushTimer);
+      flushTimer = null;
+    }
+    if (initRetryTimer) {
+      clearTimeout(initRetryTimer);
+      initRetryTimer = null;
     }
   }
 

@@ -8,6 +8,7 @@ export interface CaseRow {
   reference_id: string | null;
   account_name: string | null;
   check_type: string | null;
+  source_table: string | null;
   severity: string | null;
   amount_at_risk: number | null;
   status: Status;
@@ -35,6 +36,7 @@ export interface ExceptionMeta {
   reference_id?: string | null;
   account_name?: string | null;
   check_type?: string | null;
+  source_table?: string | null;
   severity?: string | null;
   amount_at_risk?: number | null;
 }

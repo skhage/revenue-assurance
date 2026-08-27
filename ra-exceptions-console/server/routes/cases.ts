@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import type { Application, Request, Response } from 'express';
 import {
+  bumpWorkflowRevision,
+  canonicalExceptionId,
   enqueueSnapshot,
-  ensureWorkflowSchema,
   hasVersionConflict,
   STATUSES,
   TRANSITIONS,
@@ -21,6 +22,7 @@ const ExceptionMeta = z.object({
   reference_id: z.string().max(500).nullish(),
   account_name: z.string().max(500).nullish(),
   check_type: z.string().max(200).nullish(),
+  source_table: z.string().trim().min(1).max(500).nullish(),
   severity: z.string().max(50).nullish(),
   amount_at_risk: z.number().finite().nullish(),
 });
@@ -40,7 +42,7 @@ async function loadPayload(
 ) {
   const { rows: cases } = await client.query(
     `SELECT exception_id, reference_id, account_name, check_type, severity, amount_at_risk,
-            status, assignee, version, identity_status, created_at, updated_at
+            source_table, status, assignee, version, identity_status, created_at, updated_at
      FROM ra.cases WHERE exception_id = $1`,
     [exceptionId]
   );
@@ -51,19 +53,40 @@ async function loadPayload(
   return { case: cases[0] ?? null, notes };
 }
 
-async function ensureCase(
+export async function ensureCase(
   client: { query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }> },
   exceptionId: string,
   meta?: z.infer<typeof ExceptionMeta>
 ) {
+  const { rows: existing } = await client.query('SELECT exception_id FROM ra.cases WHERE exception_id=$1', [exceptionId]);
+  if (existing[0]) {
+    if (meta?.source_table)
+      await client.query(
+        `UPDATE ra.cases SET
+           source_table=COALESCE(source_table,$2),
+           reference_id=COALESCE(reference_id,$3),
+           check_type=COALESCE(check_type,$4)
+         WHERE exception_id=$1`,
+        [exceptionId, meta.source_table, meta.reference_id ?? null, meta.check_type ?? null]
+      );
+    return;
+  }
+  if (!meta?.check_type || !meta.source_table)
+    throw new Error('Canonical check_type and source_table metadata are required to create a case');
+  if (canonicalExceptionId(meta) !== exceptionId) throw new Error('Case metadata does not match the canonical exception id');
   await client.query(
-    `INSERT INTO ra.cases (exception_id, reference_id, account_name, check_type, severity, amount_at_risk)
-     VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (exception_id) DO NOTHING`,
+    `INSERT INTO ra.cases (exception_id, reference_id, account_name, check_type, source_table, severity, amount_at_risk)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     ON CONFLICT (exception_id) DO UPDATE SET
+       source_table=COALESCE(ra.cases.source_table,EXCLUDED.source_table),
+       reference_id=COALESCE(ra.cases.reference_id,EXCLUDED.reference_id),
+       check_type=COALESCE(ra.cases.check_type,EXCLUDED.check_type)`,
     [
       exceptionId,
       meta?.reference_id ?? null,
       meta?.account_name ?? null,
       meta?.check_type ?? null,
+      meta?.source_table ?? null,
       meta?.severity ?? null,
       meta?.amount_at_risk ?? null,
     ]
@@ -79,8 +102,11 @@ function conflict(res: Response, current: Record<string, unknown> | null | undef
   });
 }
 
-export async function setupCaseRoutes(appkit: AppKitWithLakebase, onMutation: () => Promise<void>) {
-  await ensureWorkflowSchema(appkit.lakebase);
+export function setupCaseRoutes(appkit: AppKitWithLakebase, onMutation: () => Promise<void>) {
+  function triggerProjection() {
+    void onMutation().catch((error) => console.error('[cases] projection flush failed:', error));
+  }
+
   appkit.server.extend((app) => {
     app.get('/api/whoami', (req, res) => res.json({ user: currentUser(req) }));
     app.get('/api/cases/stats', async (_req, res) => {
@@ -98,7 +124,7 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase, onMutation: ()
       try {
         const mine = req.query.mine === '1';
         const { rows } = await appkit.lakebase.query(
-          `SELECT exception_id, reference_id, account_name, check_type, severity, amount_at_risk, status, assignee, version, identity_status, updated_at
+          `SELECT exception_id, reference_id, account_name, check_type, source_table, severity, amount_at_risk, status, assignee, version, identity_status, updated_at
            FROM ra.cases ${mine ? 'WHERE assignee = $1' : ''} ORDER BY updated_at DESC LIMIT 200`,
           mine ? [currentUser(req)] : []
         );
@@ -135,11 +161,12 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase, onMutation: ()
           );
           if (!updated.rows[0]) return { conflict: (await loadPayload(client, id.data)).case };
           await enqueueSnapshot(client, id.data);
+          await bumpWorkflowRevision(client);
           return { payload: await loadPayload(client, id.data) };
         });
         if ('conflict' in result) return void conflict(res, result.conflict);
         res.json(result.payload);
-        void onMutation();
+        triggerProjection();
       } catch (error) {
         console.error('[cases] assign failed:', error);
         res.status(500).json({ error: 'Failed to assign case' });
@@ -176,13 +203,14 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase, onMutation: ()
               body.data.note,
             ]);
           await enqueueSnapshot(client, id.data);
+          await bumpWorkflowRevision(client);
           return { payload: await loadPayload(client, id.data) };
         });
         if ('conflict' in result) return void conflict(res, result.conflict);
         if ('validation' in result)
           return void res.status(409).json({ error: result.validation, code: 'INVALID_TRANSITION' });
         res.json(result.payload);
-        void onMutation();
+        triggerProjection();
       } catch (error) {
         console.error('[cases] status failed:', error);
         res.status(500).json({ error: 'Failed to change status; no changes were committed' });
@@ -208,11 +236,12 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase, onMutation: ()
             body.data.body,
           ]);
           await enqueueSnapshot(client, id.data);
+          await bumpWorkflowRevision(client);
           return { payload: await loadPayload(client, id.data) };
         });
         if ('conflict' in result) return void conflict(res, result.conflict);
         res.json(result.payload);
-        void onMutation();
+        triggerProjection();
       } catch (error) {
         console.error('[cases] note failed:', error);
         res.status(500).json({ error: 'Failed to add note; no changes were committed' });

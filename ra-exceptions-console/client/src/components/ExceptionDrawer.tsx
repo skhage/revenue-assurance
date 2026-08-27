@@ -65,6 +65,7 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
         reference_id: exception.reference_id,
         account_name: exception.account_name,
         check_type: exception.check_type,
+        source_table: exception.source_table,
         severity: exception.severity,
         amount_at_risk: exception.amount_at_risk,
       }

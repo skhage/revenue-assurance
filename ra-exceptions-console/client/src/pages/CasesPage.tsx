@@ -27,7 +27,7 @@ function toExceptionRow(c: CaseRow): ExceptionRow {
     severity: c.severity ?? 'LOW',
     amount_at_risk: c.amount_at_risk ?? 0,
     detection_method: '',
-    source_table: '',
+    source_table: c.source_table ?? '',
     customer_id: 0,
     known_leakage_flag: false,
     status: c.status,

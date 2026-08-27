@@ -1,6 +1,11 @@
 import {
   CANONICAL_EXCEPTION_ID_SQL,
+  FLUSH_INTERVAL_MS,
+  INIT_RETRY_INTERVAL_MS,
   RECONCILIATION_INTERVAL_MS,
+  backfillProjection,
+  bumpWorkflowRevision,
+  canonicalExceptionId,
   createProjection,
   hasVersionConflict,
   identityMatchKey,
@@ -66,13 +71,33 @@ describe('workflow transactions', () => {
     expect(fake.statements).toEqual(['BEGIN', 'work', 'ROLLBACK']);
     expect(fake.wasReleased()).toBe(true);
   });
+
+  it('increments the shared workflow revision atomically', async () => {
+    const statements: string[] = [];
+    const revision = await bumpWorkflowRevision({
+      query(text: string) {
+        statements.push(text);
+        return Promise.resolve({ rows: [{ revision: 7 }] });
+      },
+    });
+    expect(revision).toBe(7);
+    expect(statements[0]).toContain('revision=revision+1');
+  });
 });
 
 describe('canonical identity reconciliation', () => {
-  it('defines the hash once and migrates uniquely matched legacy rows', () => {
-    expect(CANONICAL_EXCEPTION_ID_SQL.match(/md5/g)).toHaveLength(1);
+  it('keeps exact JS and SQL parity for the immutable identity triple', () => {
+    expect(CANONICAL_EXCEPTION_ID_SQL).toBe(
+      "md5(concat_ws('|', check_type, source_table, coalesce(reference_id, '')))"
+    );
+    expect(
+      canonicalExceptionId({ check_type: 'PRICE', source_table: 'billing.invoice', reference_id: 'INV-1' })
+    ).toBe('236c2537fdee486ab0f97da1f00cb448');
+  });
+
+  it('migrates uniquely matched legacy rows without using mutable fields', () => {
     const metadata = { reference_id: 'INV-1', account_name: 'Acme', check_type: 'PRICE', amount_at_risk: 12.5 };
-    expect(identityMatchKey(metadata as never)).toBe('inv-1|acme|price');
+    expect(identityMatchKey(metadata)).toBe('price|inv-1');
     expect(
       planIdentityReconciliation(
         [{ exception_id: 'legacy', ...metadata }],
@@ -103,9 +128,54 @@ describe('canonical identity reconciliation', () => {
 
   it('identity key excludes volatile financial fields', () => {
     const base = { reference_id: 'X', account_name: 'Y', check_type: 'Z' };
-    expect(identityMatchKey({ exception_id: '1', ...base, amount_at_risk: 100 })).toBe(
-      identityMatchKey({ exception_id: '2', ...base, amount_at_risk: 999 })
-    );
+    const lowRisk = { ...base, source_table: 'invoice', amount_at_risk: 100 };
+    const highRisk = { ...base, source_table: 'invoice', amount_at_risk: 999 };
+    expect(identityMatchKey(base)).toBe(identityMatchKey({ ...base }));
+    expect(canonicalExceptionId(lowRisk)).toBe(canonicalExceptionId(highRisk));
+  });
+});
+
+describe('projection anti-entropy', () => {
+  it('requeues every case missing from or newer than the Delta workflow table', async () => {
+    const queued: string[] = [];
+    const analytics: AnalyticsClient = {
+      query() {
+        return Promise.resolve({ data_array: [['fresh', 2], ['stale', 1]] });
+      },
+    };
+    const lakebase: LakebaseClient = {
+      query(text: string) {
+        if (text === 'SELECT exception_id, version FROM ra.cases')
+          return Promise.resolve({
+            rows: [
+              { exception_id: 'missing', version: 0 },
+              { exception_id: 'stale', version: 3 },
+              { exception_id: 'fresh', version: 2 },
+            ],
+          });
+        return Promise.resolve({ rows: [] });
+      },
+      pool: {
+        connect: () =>
+          Promise.resolve({
+            query(text: string, params?: unknown[]) {
+              if (text.includes('INSERT INTO ra.workflow_outbox')) queued.push(String(params?.[0]));
+              return Promise.resolve({ rows: [] });
+            },
+            release() {},
+          }),
+      },
+    };
+    await expect(backfillProjection(analytics, lakebase)).resolves.toBe(2);
+    expect(queued).toEqual(['missing', 'stale']);
+  });
+
+  it('reopens a previously projected outbox version for repair', async () => {
+    const fake = fakeLakebase();
+    const { enqueueSnapshot } = await import('./workflow');
+    await enqueueSnapshot(fake.lakebase, 'case-id');
+    expect(fake.statements.join('\n')).toContain('projected_at=NULL');
+    expect(fake.statements.join('\n')).toContain('attempts=0');
   });
 });
 
@@ -218,16 +288,21 @@ describe('flushInternal SQL injection prevention', () => {
 });
 
 describe('recurrent reconciliation', () => {
-  beforeEach(() => { vi.useFakeTimers(); });
-  afterEach(() => { vi.useRealTimers(); });
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
 
   function lakebaseWithCases(): LakebaseClient {
     return {
       query(text: string) {
         if (text.includes('FROM ra.cases'))
           return Promise.resolve({ rows: [{ exception_id: 'x', reference_id: 'r', account_name: 'a', check_type: 't', amount_at_risk: 1 }] });
-        if (text.includes('COUNT(*)'))
-          return Promise.resolve({ rows: [{ pending: 0, max_attempts: 0 }] });
+        if (text.includes('FROM ra.workflow_runtime_state'))
+          return Promise.resolve({ rows: [{ pending: 0, max_attempts: 0, revision: 4, updated_at: 'now' }] });
         return Promise.resolve({ rows: [] });
       },
       pool: { connect: () => Promise.resolve({ query: () => Promise.resolve({ rows: [] }), release: () => {} }) },
@@ -238,7 +313,7 @@ describe('recurrent reconciliation', () => {
     let reconcileCount = 0;
     const analytics: AnalyticsClient = {
       query(text: string) {
-        if (text.startsWith('SELECT exception_id')) reconcileCount++;
+        if (text.includes(`FROM cdm_tmforum.revenue_assurance.gold_exception_workflow`)) reconcileCount++;
         return Promise.resolve({ data_array: [] });
       },
     };
@@ -256,7 +331,7 @@ describe('recurrent reconciliation', () => {
     let callCount = 0;
     const slowAnalytics: AnalyticsClient = {
       query(text: string) {
-        if (text.startsWith('SELECT exception_id')) {
+        if (text.includes(`FROM cdm_tmforum.revenue_assurance.gold_exception_workflow`)) {
           callCount++;
           return new Promise((resolve) => {
             resolveReconcile = () => resolve({ data_array: [] });
@@ -281,7 +356,7 @@ describe('recurrent reconciliation', () => {
     let queryCount = 0;
     const failingAnalytics: AnalyticsClient = {
       query(text: string) {
-        if (text.startsWith('SELECT exception_id')) {
+        if (text.includes(`FROM cdm_tmforum.revenue_assurance.gold_exception_workflow`)) {
           queryCount++;
           if (queryCount > 1) return Promise.reject(new Error('warehouse timeout'));
         }
@@ -289,8 +364,8 @@ describe('recurrent reconciliation', () => {
       },
     };
     const lakebase = lakebaseWithCases();
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const consoleLSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
     const projection = createProjection(failingAnalytics, lakebase);
     await projection.initialize();
     expect(queryCount).toBe(1);
@@ -299,26 +374,63 @@ describe('recurrent reconciliation', () => {
     expect(health.lastError).toContain('warehouse timeout');
     expect(health.ready).toBe(true);
     projection.stop();
-    consoleSpy.mockRestore();
-    consoleLSpy.mockRestore();
   });
 
-  it('stop() clears the reconciliation timer', async () => {
-    let reconcileCount = 0;
+  it('retries initialization and reports recovered health', async () => {
+    let setupAttempts = 0;
     const analytics: AnalyticsClient = {
       query(text: string) {
-        if (text.startsWith('SELECT exception_id')) reconcileCount++;
+        if (text.includes('CREATE TABLE')) {
+          setupAttempts += 1;
+          if (setupAttempts === 1) return Promise.reject(new Error('warehouse unavailable'));
+        }
         return Promise.resolve({ data_array: [] });
       },
     };
     const lakebase = lakebaseWithCases();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const projection = createProjection(analytics, lakebase);
+    await projection.initialize();
+    expect((await projection.health()).ready).toBe(false);
+    await vi.advanceTimersByTimeAsync(INIT_RETRY_INTERVAL_MS);
+    const health = await projection.health();
+    expect(setupAttempts).toBe(2);
+    expect(health.ready).toBe(true);
+    expect(health.lastFlushAt).toBeInstanceOf(Date);
+    expect(health.lastFlushAttemptAt).toBeInstanceOf(Date);
+    expect(health.lastReconciliationAt).toBeInstanceOf(Date);
+    expect(health.lastReconciliationAttemptAt).toBeInstanceOf(Date);
+    expect(health.revision).toBe(4);
+    projection.stop();
+  });
+
+  it('stop() clears initialization, flush, and reconciliation timers', async () => {
+    let reconcileCount = 0;
+    let flushCount = 0;
+    const analytics: AnalyticsClient = {
+      query(text: string) {
+        if (text.includes(`FROM cdm_tmforum.revenue_assurance.gold_exception_workflow`)) reconcileCount++;
+        return Promise.resolve({ data_array: [] });
+      },
+    };
+    const base = lakebaseWithCases();
+    const lakebase: LakebaseClient = {
+      ...base,
+      query(text: string, params?: unknown[]) {
+        if (text.includes('workflow_outbox WHERE projected_at IS NULL ORDER BY')) flushCount++;
+        return base.query(text, params);
+      },
+    };
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const projection = createProjection(analytics, lakebase);
     await projection.initialize();
     expect(reconcileCount).toBe(1);
+    expect(flushCount).toBe(1);
     projection.stop();
-    await vi.advanceTimersByTimeAsync(RECONCILIATION_INTERVAL_MS * 3);
+    await vi.advanceTimersByTimeAsync(Math.max(RECONCILIATION_INTERVAL_MS, FLUSH_INTERVAL_MS) * 3);
     expect(reconcileCount).toBe(1);
+    expect(flushCount).toBe(1);
     consoleSpy.mockRestore();
   });
 });
