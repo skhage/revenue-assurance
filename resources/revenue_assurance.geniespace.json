@@ -25,6 +25,12 @@
         "question": [
           "How do actual revenue, forecast revenue, and budget compare by month?"
         ]
+      },
+      {
+        "id": "10000000000000000000000000000005",
+        "question": [
+          "Which recovered or written-off cases changed most recently, and what was the latest note?"
+        ]
       }
     ]
   },
@@ -34,7 +40,7 @@
         "identifier": "cdm_tmforum.revenue_assurance.gold_anomaly_scores"
       },
       {
-        "identifier": "cdm_tmforum.revenue_assurance.gold_leakage_summary"
+        "identifier": "cdm_tmforum.revenue_assurance.gold_exception_workflow"
       },
       {
         "identifier": "cdm_tmforum.revenue_assurance.gold_reconciliation_scorecard"
@@ -59,7 +65,8 @@
         ],
         "sql": [
           "SELECT check_type, COUNT(*) AS exception_count, SUM(amount_at_risk) AS amount_at_risk\n",
-          "FROM cdm_tmforum.revenue_assurance.gold_leakage_summary\n",
+          "FROM cdm_tmforum.revenue_assurance.gold_exception_workflow\n",
+          "WHERE status NOT IN ('Recovered', 'WrittenOff')\n",
           "GROUP BY check_type\n",
           "ORDER BY amount_at_risk DESC"
         ]
@@ -98,18 +105,31 @@
           "FROM cdm_tmforum.revenue_assurance.gold_revenue_forecast_anomalies\n",
           "ORDER BY revenue_month"
         ]
+      },
+      {
+        "id": "20000000000000000000000000000005",
+        "question": [
+          "Which recovered or written-off cases changed most recently, and what was the latest note?"
+        ],
+        "sql": [
+          "SELECT exception_id, reference_id, account_name, status, assignee, latest_note, latest_note_author, case_updated_at\n",
+          "FROM cdm_tmforum.revenue_assurance.gold_exception_workflow\n",
+          "WHERE status IN ('Recovered', 'WrittenOff')\n",
+          "ORDER BY case_updated_at DESC\n",
+          "LIMIT 25"
+        ]
       }
     ],
     "text_instructions": [
       {
         "id": "30000000000000000000000000000001",
         "content": [
-          "Use cdm_tmforum.revenue_assurance.gold_leakage_summary as the unified exception register. amount_at_risk is the detected financial exposure, check_type is the reconciliation root cause, severity is HIGH or MEDIUM, and known_leakage_flag identifies seeded ground-truth leakage.\n",
+          "Use cdm_tmforum.revenue_assurance.gold_exception_workflow as the canonical exception register. It combines detected leakage with Lakebase-projected status, assignee, version, and latest-note state. Exclude Recovered and WrittenOff for open-work KPIs; include them when asked about recovery history.\n",
           "Use cdm_tmforum.revenue_assurance.gold_reconciliation_scorecard for customer-level health and component scores. Lower composite_health_score indicates higher reconciliation risk.\n",
           "Use cdm_tmforum.revenue_assurance.gold_anomaly_scores for ML prioritization. The table is supplied by the separate ML workstream; prioritize lower anomaly_rank and HIGH review_priority when available.\n",
           "Use cdm_tmforum.revenue_assurance.gold_revenue_forecast_anomalies for monthly actual, forecast, confidence-bound, budget, and anomaly questions.\n",
           "Use the silver_doc_intelligence tables only for contract or invoice document-extraction evidence.\n",
-          "Do not invent case status or assignee values: operational case state lives in Lakebase Postgres ra.cases and is not available in these Unity Catalog tables. Always use proper three-level Unity Catalog names in generated SQL."
+          "For every case status, assignment, note, open-queue, or recovery question use cdm_tmforum.revenue_assurance.gold_exception_workflow; never infer workflow state from gold_leakage_summary. Always use proper three-level Unity Catalog names in generated SQL.\n"
         ]
       }
     ]

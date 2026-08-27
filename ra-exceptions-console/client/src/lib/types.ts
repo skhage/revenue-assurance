@@ -1,4 +1,4 @@
-// Row shape returned by exceptions_list.sql (kept in sync with the query).
+// Row shape returned by the canonical workflow queue API.
 export interface ExceptionRow {
   exception_id: string;
   reference_id: string;
@@ -12,6 +12,13 @@ export interface ExceptionRow {
   known_leakage_flag: boolean;
   status: string;
   assignee: string | null;
+  case_version: number;
+}
+
+export interface RootCauseSummary {
+  check_type: string;
+  exception_count: number;
+  amount_at_risk: number;
 }
 
 export interface KpiSummary {

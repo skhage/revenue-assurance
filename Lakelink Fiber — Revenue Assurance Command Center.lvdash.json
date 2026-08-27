@@ -21,17 +21,26 @@
     },
     {
       "name": "gold_leakage_summary",
-      "displayName": "Gold Leakage Summary",
+      "displayName": "Canonical Open Exception Workflow",
       "queryLines": [
         "SELECT\n",
+        "  exception_id,\n",
         "  check_type,\n",
         "  severity,\n",
         "  customer_id,\n",
         "  account_name,\n",
         "  amount_at_risk,\n",
-        "  known_leakage_flag\n",
+        "  known_leakage_flag,\n",
+        "  status,\n",
+        "  assignee,\n",
+        "  case_version,\n",
+        "  latest_note,\n",
+        "  latest_note_author,\n",
+        "  note_count,\n",
+        "  case_updated_at\n",
         "FROM\n",
-        "  cdm_tmforum.revenue_assurance.gold_leakage_summary"
+        "  cdm_tmforum.revenue_assurance.gold_exception_workflow\n",
+        "WHERE status NOT IN ('Recovered', 'WrittenOff')"
       ]
     },
     {
@@ -458,14 +467,10 @@
                   "cubeGroupingSets": {
                     "sets": [
                       {
-                        "fieldNames": [
-                          "check_type"
-                        ]
+                        "fieldNames": ["check_type"]
                       },
                       {
-                        "fieldNames": [
-                          "severity"
-                        ]
+                        "fieldNames": ["severity"]
                       }
                     ]
                   },
@@ -856,11 +861,7 @@
                 "showTitle": true
               },
               "mark": {
-                "colors": [
-                  "#0B3D5C",
-                  "#FF6A3D",
-                  "#6b7280"
-                ]
+                "colors": ["#0B3D5C", "#FF6A3D", "#6b7280"]
               },
               "widgetType": "scatter",
               "encodings": {
@@ -1195,11 +1196,7 @@
                 "showTitle": true
               },
               "mark": {
-                "colors": [
-                  "#0B3D5C",
-                  "#FF6A3D",
-                  "#6b7280"
-                ]
+                "colors": ["#0B3D5C", "#FF6A3D", "#6b7280"]
               },
               "widgetType": "line",
               "encodings": {

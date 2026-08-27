@@ -1,4 +1,4 @@
-import type { ExceptionRow, KpiSummary } from './types';
+import type { ExceptionRow, KpiSummary, RootCauseSummary } from './types';
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -22,4 +22,6 @@ export const analyticsApi = {
     return fetch(`/api/analytics/exceptions?${query}`, { signal }).then((res) => json<ExceptionRow[]>(res));
   },
   kpis: (signal?: AbortSignal) => fetch('/api/analytics/kpis', { signal }).then((res) => json<KpiSummary>(res)),
+  rootCauses: (signal?: AbortSignal) =>
+    fetch('/api/analytics/root-causes', { signal }).then((res) => json<RootCauseSummary[]>(res)),
 };

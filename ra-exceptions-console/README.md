@@ -3,6 +3,7 @@
 A Databricks App powered by [AppKit](https://developers.databricks.com/docs/appkit/v0/), featuring React, TypeScript, and Tailwind CSS.
 
 **Enabled plugins:**
+
 - **Analytics** -- SQL query execution against Databricks SQL Warehouses
 - **Lakebase** -- Fully managed Postgres database for transactional (OLTP) workloads on Databricks
 - **Server** -- Express HTTP server with static file serving and Vite dev mode
@@ -88,6 +89,14 @@ npm run dev
 ```
 
 The app will be available at the URL shown in the console output.
+
+### Canonical Workflow State
+
+Lakebase tables `ra.cases` and `ra.case_notes` are the source of truth for status, assignment, and notes. Every mutation uses an optimistic `version` check, commits status-plus-note work in one Postgres transaction, and writes an event to `ra.workflow_outbox`.
+
+The app drains the outbox after each write and every 30 seconds into `cdm_tmforum.revenue_assurance.workflow_case_state`. The `gold_exception_workflow` view is the only warehouse-facing exception register used by the dashboard and Genie. The app service principal therefore needs `USE CATALOG`, `USE SCHEMA`, `SELECT`, and `CREATE TABLE` on `cdm_tmforum.revenue_assurance`.
+
+`GET /api/workflow/health` returns HTTP 503 while projection setup is unavailable or repeatedly failing. Lakebase writes remain committed and queued for retry. At startup, unique legacy identity matches migrate transactionally and are recorded in `ra.case_identity_aliases`; ambiguous or missing matches remain visible with `identity_status = 'orphaned'` for review.
 
 ### Build
 

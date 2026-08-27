@@ -21,9 +21,10 @@ import { sql } from '@databricks/appkit-ui/js';
 import { useEffect, useState } from 'react';
 import { SeverityBadge, StatusChip } from './badges';
 import { usd, num, checkLabel, accountLabel, detectionLabel } from '../lib/format';
-import { casesApi, NEXT_STATUS, type CasePayload, type Status, type ExceptionMeta } from '../lib/cases';
+import { CasesApiError, casesApi, NEXT_STATUS, type CasePayload, type Status, type ExceptionMeta } from '../lib/cases';
 import { useWhoAmI } from '../lib/whoami';
 import type { ExceptionRow } from '../lib/types';
+import { publishWorkflowInvalidation, useWorkflowRevision } from '../lib/workflowInvalidation';
 
 function KV({ k, v }: { k: string; v: React.ReactNode }) {
   return (
@@ -35,9 +36,7 @@ function KV({ k, v }: { k: string; v: React.ReactNode }) {
 }
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{children}</div>
-  );
+  return <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{children}</div>;
 }
 
 interface Props {
@@ -48,6 +47,7 @@ interface Props {
 }
 
 export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }: Props) {
+  const workflowRevision = useWorkflowRevision();
   const me = useWhoAmI();
   const { data, loading, error } = useAnalyticsQuery('exception_detail', {
     exception_id: sql.string(exception?.exception_id ?? ''),
@@ -80,20 +80,28 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
       .then(setPayload)
       .catch((e) => setActionError(e instanceof Error ? e.message : 'Failed to load case'))
       .finally(() => setCaseLoading(false));
-  }, [exception, open]);
+  }, [exception, open, workflowRevision]);
 
   const status: Status = payload.case?.status ?? 'New';
   const nextStates = NEXT_STATUS[status];
   const terminal = nextStates.length === 0 && payload.case != null;
 
   async function run(fn: () => Promise<CasePayload>) {
+    if (!exception) return;
+    const exceptionId = exception.exception_id;
     setBusy(true);
     setActionError(null);
     try {
       setPayload(await fn());
+      publishWorkflowInvalidation();
       onCaseChange?.();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : 'Action failed');
+      if (e instanceof CasesApiError && e.code === 'VERSION_CONFLICT') {
+        setPayload(await casesApi.get(exceptionId));
+        setActionError(`${e.message} The latest case state is now loaded.`);
+      } else {
+        setActionError(e instanceof Error ? e.message : 'Action failed');
+      }
     } finally {
       setBusy(false);
     }
@@ -105,7 +113,9 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="flex w-full flex-col gap-0 overflow-y-auto p-0 sm:max-w-md">
         <SheetHeader className="border-b p-5">
-          <div className="text-xs font-mono text-muted-foreground">{exception.reference_id || exception.exception_id.slice(0, 10)}</div>
+          <div className="text-xs font-mono text-muted-foreground">
+            {exception.reference_id || exception.exception_id.slice(0, 10)}
+          </div>
           <SheetTitle className="flex items-start justify-between gap-3">
             <span className="text-base">{accountLabel(exception.account_name)}</span>
             <SeverityBadge severity={exception.severity} />
@@ -185,7 +195,9 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
                       variant="outline"
                       size="sm"
                       disabled={busy || payload.case?.assignee === me}
-                      onClick={() => void run(() => casesApi.assign(exception.exception_id, me, meta))}
+                      onClick={() =>
+                        void run(() => casesApi.assign(exception.exception_id, me, payload.case?.version ?? 0, meta))
+                      }
                     >
                       {payload.case?.assignee === me ? 'Assigned to you' : 'Assign to me'}
                     </Button>
@@ -194,7 +206,13 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
                       disabled={busy || nextStates.length === 0}
                       onValueChange={(v) =>
                         void run(() =>
-                          casesApi.changeStatus(exception.exception_id, v as Status, note.trim() || undefined, meta),
+                          casesApi.changeStatus(
+                            exception.exception_id,
+                            v as Status,
+                            note.trim() || undefined,
+                            payload.case?.version ?? 0,
+                            meta
+                          )
                         )
                       }
                     >
@@ -246,7 +264,12 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
                   disabled={busy || !note.trim()}
                   onClick={() =>
                     void run(async () => {
-                      const p = await casesApi.addNote(exception.exception_id, note.trim(), meta);
+                      const p = await casesApi.addNote(
+                        exception.exception_id,
+                        note.trim(),
+                        payload.case?.version ?? 0,
+                        meta
+                      );
                       setNote('');
                       return p;
                     })

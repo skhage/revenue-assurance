@@ -1,5 +1,5 @@
 -- Single exception + the customer's reconciliation scorecard, for the detail drawer.
--- Keyed by the synthesized exception_id (must match exceptions_list.sql).
+-- Keyed by the canonical exception identity from gold_exception_workflow.
 -- @param exception_id STRING = 0
 SELECT
   s.exception_id,
@@ -23,12 +23,7 @@ SELECT
   sc.doc_consistency_score,
   sc.total_exceptions AS customer_total_exceptions,
   sc.total_amount_at_risk AS customer_total_at_risk
-FROM (
-  SELECT *,
-    md5(concat_ws('|', check_type, coalesce(reference_id, ''),
-         coalesce(cast(customer_id AS string), ''), cast(amount_at_risk AS string))) AS exception_id
-  FROM cdm_tmforum.revenue_assurance.gold_leakage_summary
-) s
+FROM cdm_tmforum.revenue_assurance.gold_exception_workflow s
 LEFT JOIN cdm_tmforum.revenue_assurance.gold_reconciliation_scorecard sc
   ON sc.customer_id = s.customer_id
 WHERE s.exception_id = :exception_id

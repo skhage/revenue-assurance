@@ -15,6 +15,7 @@ import { ExceptionDrawer } from '../components/ExceptionDrawer';
 import { usd, checkLabel, accountLabel } from '../lib/format';
 import { casesApi, type CaseRow } from '../lib/cases';
 import type { ExceptionRow } from '../lib/types';
+import { useWorkflowRevision } from '../lib/workflowInvalidation';
 
 // A worked case carries enough to open the drawer; the detail query refills the rest.
 function toExceptionRow(c: CaseRow): ExceptionRow {
@@ -31,10 +32,12 @@ function toExceptionRow(c: CaseRow): ExceptionRow {
     known_leakage_flag: false,
     status: c.status,
     assignee: c.assignee,
+    case_version: c.version,
   };
 }
 
 export function CasesPage() {
+  const workflowRevision = useWorkflowRevision();
   const [mine, setMine] = useState(true);
   const [rows, setRows] = useState<CaseRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -56,7 +59,7 @@ export function CasesPage() {
     })();
   }, [mine]);
 
-  useEffect(() => refresh(), [refresh]);
+  useEffect(() => refresh(), [refresh, workflowRevision]);
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-4">

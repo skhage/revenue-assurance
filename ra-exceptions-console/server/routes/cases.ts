@@ -1,301 +1,221 @@
-// Case-management routes backed by Lakebase (Postgres).
-//
-// The read side (the exception register, KPIs, scorecard) lives in Delta and is
-// served by the analytics plugin. Mutable *case* state — who owns an exception,
-// where it is in the recovery lifecycle, and the investigation notes — lives here
-// in Lakebase, keyed by the synthesized exception_id from exceptions_list.sql.
-//
-// Cases are created lazily: an exception has no Postgres row until an analyst
-// first acts on it, at which point the client sends the exception's metadata
-// (from the queue row) so we can persist a self-contained case.
-
 import { z } from 'zod';
-import type { Application, Request } from 'express';
+import type { Application, Request, Response } from 'express';
+import {
+  enqueueSnapshot,
+  ensureWorkflowSchema,
+  hasVersionConflict,
+  STATUSES,
+  TRANSITIONS,
+  withTransaction,
+  type LakebaseClient,
+  type Status,
+} from '../workflow';
 
 interface AppKitWithLakebase {
-  lakebase: {
-    query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
-  };
-  server: {
-    extend(fn: (app: Application) => void): void;
-  };
+  lakebase: LakebaseClient;
+  server: { extend(fn: (app: Application) => void): void };
 }
 
-// ---------------------------------------------------------------------------
-// Case lifecycle — mirrors demo-artifacts/07-ui-specs.md §5
-// ---------------------------------------------------------------------------
-const STATUSES = ['New', 'Investigating', 'Recovering', 'Recovered', 'WrittenOff'] as const;
-type Status = (typeof STATUSES)[number];
-
-const TRANSITIONS: Record<Status, Status[]> = {
-  New: ['Investigating', 'WrittenOff'],
-  Investigating: ['Recovering', 'WrittenOff'],
-  Recovering: ['Recovered', 'WrittenOff'],
-  Recovered: [],
-  WrittenOff: [],
-};
-
-// ---------------------------------------------------------------------------
-// Schema bootstrap
-// ---------------------------------------------------------------------------
-const CREATE_SCHEMA_SQL = `CREATE SCHEMA IF NOT EXISTS ra`;
-
-const CREATE_CASES_SQL = `
-  CREATE TABLE IF NOT EXISTS ra.cases (
-    exception_id    TEXT PRIMARY KEY,
-    reference_id    TEXT,
-    account_name    TEXT,
-    check_type      TEXT,
-    severity        TEXT,
-    amount_at_risk  DOUBLE PRECISION,
-    status          TEXT NOT NULL DEFAULT 'New',
-    assignee        TEXT,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  )
-`;
-
-const CREATE_NOTES_SQL = `
-  CREATE TABLE IF NOT EXISTS ra.case_notes (
-    id            SERIAL PRIMARY KEY,
-    exception_id  TEXT NOT NULL REFERENCES ra.cases(exception_id) ON DELETE CASCADE,
-    author        TEXT,
-    body          TEXT NOT NULL,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  )
-`;
-
-// ---------------------------------------------------------------------------
-// Request shapes
-// ---------------------------------------------------------------------------
+const ExceptionId = z.string().regex(/^[a-f0-9]{32}$/);
 const ExceptionMeta = z.object({
-  reference_id: z.string().nullish(),
-  account_name: z.string().nullish(),
-  check_type: z.string().nullish(),
-  severity: z.string().nullish(),
-  amount_at_risk: z.number().nullish(),
+  reference_id: z.string().max(500).nullish(),
+  account_name: z.string().max(500).nullish(),
+  check_type: z.string().max(200).nullish(),
+  severity: z.string().max(50).nullish(),
+  amount_at_risk: z.number().finite().nullish(),
 });
-
-const AssignBody = z.object({
-  assignee: z.string().min(1),
-  meta: ExceptionMeta.optional(),
-});
-
-const StatusBody = z.object({
-  status: z.enum(STATUSES),
-  note: z.string().optional(),
-  meta: ExceptionMeta.optional(),
-});
-
-const NoteBody = z.object({
-  body: z.string().min(1),
-  meta: ExceptionMeta.optional(),
-});
+const MutationBase = z.object({ expectedVersion: z.number().int().min(0), meta: ExceptionMeta.optional() });
+const AssignBody = MutationBase.extend({ assignee: z.string().email().max(320) });
+const StatusBody = MutationBase.extend({ status: z.enum(STATUSES), note: z.string().trim().max(10_000).optional() });
+const NoteBody = MutationBase.extend({ body: z.string().trim().min(1).max(10_000) });
 
 function currentUser(req: Request): string {
   const email = req.header('x-forwarded-email') || req.header('x-forwarded-user');
-  return email && email.trim().length > 0 ? email : 'analyst@demo';
+  return email && email.trim() ? email.trim() : 'analyst@demo';
 }
 
-export async function setupCaseRoutes(appkit: AppKitWithLakebase) {
-  try {
-    await appkit.lakebase.query(CREATE_SCHEMA_SQL);
-    await appkit.lakebase.query(CREATE_CASES_SQL);
-    await appkit.lakebase.query(CREATE_NOTES_SQL);
-    console.log('[cases] schema ra ready (ra.cases, ra.case_notes)');
-  } catch (err) {
-    console.warn('[cases] schema setup failed:', (err as Error).message);
-    console.warn('[cases] routes registered but may error until the app is deployed (SP owns schema ra)');
-  }
+async function loadPayload(
+  client: { query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }> },
+  exceptionId: string
+) {
+  const { rows: cases } = await client.query(
+    `SELECT exception_id, reference_id, account_name, check_type, severity, amount_at_risk,
+            status, assignee, version, identity_status, created_at, updated_at
+     FROM ra.cases WHERE exception_id = $1`,
+    [exceptionId]
+  );
+  const { rows: notes } = await client.query(
+    'SELECT id, author, body, created_at FROM ra.case_notes WHERE exception_id = $1 ORDER BY created_at DESC, id DESC',
+    [exceptionId]
+  );
+  return { case: cases[0] ?? null, notes };
+}
 
-  // Ensure a case row exists; create it from client-supplied exception metadata.
-  async function ensureCase(exceptionId: string, meta?: z.infer<typeof ExceptionMeta>) {
-    await appkit.lakebase.query(
-      `INSERT INTO ra.cases (exception_id, reference_id, account_name, check_type, severity, amount_at_risk)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (exception_id) DO NOTHING`,
-      [
-        exceptionId,
-        meta?.reference_id ?? null,
-        meta?.account_name ?? null,
-        meta?.check_type ?? null,
-        meta?.severity ?? null,
-        meta?.amount_at_risk ?? null,
-      ],
-    );
-  }
+async function ensureCase(
+  client: { query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }> },
+  exceptionId: string,
+  meta?: z.infer<typeof ExceptionMeta>
+) {
+  await client.query(
+    `INSERT INTO ra.cases (exception_id, reference_id, account_name, check_type, severity, amount_at_risk)
+     VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (exception_id) DO NOTHING`,
+    [
+      exceptionId,
+      meta?.reference_id ?? null,
+      meta?.account_name ?? null,
+      meta?.check_type ?? null,
+      meta?.severity ?? null,
+      meta?.amount_at_risk ?? null,
+    ]
+  );
+}
 
-  async function loadCase(exceptionId: string) {
-    const { rows } = await appkit.lakebase.query(
-      `SELECT exception_id, reference_id, account_name, check_type, severity, amount_at_risk,
-              status, assignee, created_at, updated_at
-       FROM ra.cases WHERE exception_id = $1`,
-      [exceptionId],
-    );
-    return rows[0] ?? null;
-  }
+function conflict(res: Response, current: Record<string, unknown> | null | undefined) {
+  res.status(409).json({
+    error: 'This case changed in another tab or session. Refresh and retry your action.',
+    code: 'VERSION_CONFLICT',
+    currentVersion: Number(current?.version ?? 0),
+    current,
+  });
+}
 
-  async function loadNotes(exceptionId: string) {
-    const { rows } = await appkit.lakebase.query(
-      `SELECT id, author, body, created_at FROM ra.case_notes
-       WHERE exception_id = $1 ORDER BY created_at DESC`,
-      [exceptionId],
-    );
-    return rows;
-  }
-
+export async function setupCaseRoutes(appkit: AppKitWithLakebase, onMutation: () => Promise<void>) {
+  await ensureWorkflowSchema(appkit.lakebase);
   appkit.server.extend((app) => {
-    // Signed-in identity (real headers on Databricks Apps; fallback locally).
-    app.get('/api/whoami', (req, res) => {
-      res.json({ user: currentUser(req) });
-    });
-
-    // Case counts by lifecycle status — for the Overview "case progress" strip.
+    app.get('/api/whoami', (req, res) => res.json({ user: currentUser(req) }));
     app.get('/api/cases/stats', async (_req, res) => {
       try {
-        const { rows } = await appkit.lakebase.query(
-          `SELECT status, COUNT(*)::int AS n FROM ra.cases GROUP BY status`,
-        );
-        const stats: Record<string, number> = Object.fromEntries(STATUSES.map((s) => [s, 0]));
-        for (const r of rows) stats[r.status as string] = r.n as number;
+        const { rows } = await appkit.lakebase.query('SELECT status, COUNT(*)::int n FROM ra.cases GROUP BY status');
+        const stats = Object.fromEntries(STATUSES.map((status) => [status, 0]));
+        for (const row of rows) stats[String(row.status)] = Number(row.n);
         res.json(stats);
-      } catch (err) {
-        console.error('[cases] stats failed:', err);
+      } catch (error) {
+        console.error('[cases] stats failed:', error);
         res.status(500).json({ error: 'Failed to load case stats' });
       }
     });
-
-    // Worked cases, newest first. ?mine=1 restricts to the signed-in analyst.
     app.get('/api/cases', async (req, res) => {
       try {
         const mine = req.query.mine === '1';
-        const params: unknown[] = [];
-        let where = '';
-        if (mine) {
-          where = 'WHERE assignee = $1';
-          params.push(currentUser(req));
-        }
         const { rows } = await appkit.lakebase.query(
-          `SELECT exception_id, reference_id, account_name, check_type, severity, amount_at_risk,
-                  status, assignee, updated_at
-           FROM ra.cases ${where}
-           ORDER BY updated_at DESC
-           LIMIT 200`,
-          params,
+          `SELECT exception_id, reference_id, account_name, check_type, severity, amount_at_risk, status, assignee, version, identity_status, updated_at
+           FROM ra.cases ${mine ? 'WHERE assignee = $1' : ''} ORDER BY updated_at DESC LIMIT 200`,
+          mine ? [currentUser(req)] : []
         );
         res.json(rows);
-      } catch (err) {
-        console.error('[cases] list failed:', err);
+      } catch (error) {
+        console.error('[cases] list failed:', error);
         res.status(500).json({ error: 'Failed to load cases' });
       }
     });
-
-    // One case + its notes. Returns { case: null } if never worked.
     app.get('/api/cases/:exceptionId', async (req, res) => {
+      if (!ExceptionId.safeParse(req.params.exceptionId).success)
+        return void res.status(400).json({ error: 'Invalid exception id' });
       try {
-        const row = await loadCase(req.params.exceptionId);
-        if (!row) {
-          res.json({ case: null, notes: [] });
-          return;
-        }
-        res.json({ case: row, notes: await loadNotes(req.params.exceptionId) });
-      } catch (err) {
-        console.error('[cases] get failed:', err);
+        res.json(await loadPayload(appkit.lakebase, req.params.exceptionId));
+      } catch (error) {
+        console.error('[cases] get failed:', error);
         res.status(500).json({ error: 'Failed to load case' });
       }
     });
 
-    // Assign the exception to the signed-in analyst (or a named assignee).
     app.post('/api/cases/:exceptionId/assign', async (req, res) => {
+      const id = ExceptionId.safeParse(req.params.exceptionId);
+      const body = AssignBody.safeParse(req.body);
+      if (!id.success || !body.success)
+        return void res.status(400).json({ error: 'Valid exception id, assignee, and expectedVersion are required' });
+      if (body.data.assignee !== currentUser(req))
+        return void res.status(403).json({ error: 'You may only assign a case to your signed-in identity' });
       try {
-        const parsed = AssignBody.safeParse(req.body);
-        if (!parsed.success) {
-          res.status(400).json({ error: 'assignee is required' });
-          return;
-        }
-        const { exceptionId } = req.params;
-        await ensureCase(exceptionId, parsed.data.meta);
-        await appkit.lakebase.query(
-          `UPDATE ra.cases SET assignee = $2, updated_at = NOW() WHERE exception_id = $1`,
-          [exceptionId, parsed.data.assignee],
-        );
-        res.json({ case: await loadCase(exceptionId), notes: await loadNotes(exceptionId) });
-      } catch (err) {
-        console.error('[cases] assign failed:', err);
+        const result = await withTransaction(appkit.lakebase, async (client) => {
+          await ensureCase(client, id.data, body.data.meta);
+          const updated = await client.query(
+            'UPDATE ra.cases SET assignee=$2, version=version+1, updated_at=NOW() WHERE exception_id=$1 AND version=$3 RETURNING *',
+            [id.data, body.data.assignee, body.data.expectedVersion]
+          );
+          if (!updated.rows[0]) return { conflict: (await loadPayload(client, id.data)).case };
+          await enqueueSnapshot(client, id.data);
+          return { payload: await loadPayload(client, id.data) };
+        });
+        if ('conflict' in result) return void conflict(res, result.conflict);
+        res.json(result.payload);
+        void onMutation();
+      } catch (error) {
+        console.error('[cases] assign failed:', error);
         res.status(500).json({ error: 'Failed to assign case' });
       }
     });
 
-    // Change lifecycle status, guarded by the allowed-transition table.
     app.post('/api/cases/:exceptionId/status', async (req, res) => {
+      const id = ExceptionId.safeParse(req.params.exceptionId);
+      const body = StatusBody.safeParse(req.body);
+      if (!id.success || !body.success)
+        return void res.status(400).json({ error: 'Valid status and expectedVersion are required' });
       try {
-        const parsed = StatusBody.safeParse(req.body);
-        if (!parsed.success) {
-          res.status(400).json({ error: 'valid status is required' });
-          return;
-        }
-        const { exceptionId } = req.params;
-        const { status: next, note, meta } = parsed.data;
-
-        await ensureCase(exceptionId, meta);
-        const existing = await loadCase(exceptionId);
-        const from = (existing?.status as Status) ?? 'New';
-
-        if (from !== next && !TRANSITIONS[from].includes(next)) {
-          res.status(409).json({
-            error: `Cannot move a case from ${from} to ${next}.`,
-            allowed: TRANSITIONS[from],
-          });
-          return;
-        }
-        if (next === 'Investigating' && !existing?.assignee) {
-          res.status(409).json({ error: 'Assign the case before investigating.' });
-          return;
-        }
-        if (next === 'WrittenOff' && !note?.trim()) {
-          res.status(409).json({ error: 'Add a reason before writing off.' });
-          return;
-        }
-
-        await appkit.lakebase.query(
-          `UPDATE ra.cases SET status = $2, updated_at = NOW() WHERE exception_id = $1`,
-          [exceptionId, next],
-        );
-        if (note?.trim()) {
-          await appkit.lakebase.query(
-            `INSERT INTO ra.case_notes (exception_id, author, body) VALUES ($1, $2, $3)`,
-            [exceptionId, currentUser(req), note.trim()],
+        const result = await withTransaction(appkit.lakebase, async (client) => {
+          await ensureCase(client, id.data, body.data.meta);
+          const current = (await loadPayload(client, id.data)).case;
+          if (!current) throw new Error('Case creation failed');
+          if (hasVersionConflict(body.data.expectedVersion, current.version)) return { conflict: current };
+          const from = String(current.status) as Status;
+          if (from !== body.data.status && !TRANSITIONS[from].includes(body.data.status))
+            return { validation: `Cannot move a case from ${from} to ${body.data.status}.` };
+          if (body.data.status === 'Investigating' && !current.assignee)
+            return { validation: 'Assign the case before investigating.' };
+          if (body.data.status === 'WrittenOff' && !body.data.note)
+            return { validation: 'Add a reason before writing off.' };
+          const updated = await client.query(
+            'UPDATE ra.cases SET status=$2, version=version+1, updated_at=NOW() WHERE exception_id=$1 AND version=$3 RETURNING *',
+            [id.data, body.data.status, body.data.expectedVersion]
           );
-        }
-        res.json({ case: await loadCase(exceptionId), notes: await loadNotes(exceptionId) });
-      } catch (err) {
-        console.error('[cases] status failed:', err);
-        res.status(500).json({ error: 'Failed to change status' });
+          if (!updated.rows[0]) return { conflict: (await loadPayload(client, id.data)).case };
+          if (body.data.note)
+            await client.query('INSERT INTO ra.case_notes(exception_id,author,body) VALUES($1,$2,$3)', [
+              id.data,
+              currentUser(req),
+              body.data.note,
+            ]);
+          await enqueueSnapshot(client, id.data);
+          return { payload: await loadPayload(client, id.data) };
+        });
+        if ('conflict' in result) return void conflict(res, result.conflict);
+        if ('validation' in result)
+          return void res.status(409).json({ error: result.validation, code: 'INVALID_TRANSITION' });
+        res.json(result.payload);
+        void onMutation();
+      } catch (error) {
+        console.error('[cases] status failed:', error);
+        res.status(500).json({ error: 'Failed to change status; no changes were committed' });
       }
     });
 
-    // Append an investigation note.
     app.post('/api/cases/:exceptionId/notes', async (req, res) => {
+      const id = ExceptionId.safeParse(req.params.exceptionId);
+      const body = NoteBody.safeParse(req.body);
+      if (!id.success || !body.success)
+        return void res.status(400).json({ error: 'Valid note and expectedVersion are required' });
       try {
-        const parsed = NoteBody.safeParse(req.body);
-        if (!parsed.success) {
-          res.status(400).json({ error: 'note body is required' });
-          return;
-        }
-        const { exceptionId } = req.params;
-        await ensureCase(exceptionId, parsed.data.meta);
-        await appkit.lakebase.query(
-          `INSERT INTO ra.case_notes (exception_id, author, body) VALUES ($1, $2, $3)`,
-          [exceptionId, currentUser(req), parsed.data.body.trim()],
-        );
-        await appkit.lakebase.query(
-          `UPDATE ra.cases SET updated_at = NOW() WHERE exception_id = $1`,
-          [exceptionId],
-        );
-        res.json({ case: await loadCase(exceptionId), notes: await loadNotes(exceptionId) });
-      } catch (err) {
-        console.error('[cases] note failed:', err);
-        res.status(500).json({ error: 'Failed to add note' });
+        const result = await withTransaction(appkit.lakebase, async (client) => {
+          await ensureCase(client, id.data, body.data.meta);
+          const updated = await client.query(
+            'UPDATE ra.cases SET version=version+1, updated_at=NOW() WHERE exception_id=$1 AND version=$2 RETURNING *',
+            [id.data, body.data.expectedVersion]
+          );
+          if (!updated.rows[0]) return { conflict: (await loadPayload(client, id.data)).case };
+          await client.query('INSERT INTO ra.case_notes(exception_id,author,body) VALUES($1,$2,$3)', [
+            id.data,
+            currentUser(req),
+            body.data.body,
+          ]);
+          await enqueueSnapshot(client, id.data);
+          return { payload: await loadPayload(client, id.data) };
+        });
+        if ('conflict' in result) return void conflict(res, result.conflict);
+        res.json(result.payload);
+        void onMutation();
+      } catch (error) {
+        console.error('[cases] note failed:', error);
+        res.status(500).json({ error: 'Failed to add note; no changes were committed' });
       }
     });
   });

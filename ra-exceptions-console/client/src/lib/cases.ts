@@ -12,6 +12,8 @@ export interface CaseRow {
   amount_at_risk: number | null;
   status: Status;
   assignee: string | null;
+  version: number;
+  identity_status: string;
   created_at?: string;
   updated_at?: string;
 }
@@ -39,38 +41,53 @@ export interface ExceptionMeta {
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error || res.statusText);
+    const body = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      code?: string;
+      currentVersion?: number;
+    };
+    throw new CasesApiError(body.error || res.statusText, body.code, body.currentVersion);
   }
   return res.json() as Promise<T>;
+}
+
+export class CasesApiError extends Error {
+  readonly code?: string;
+  readonly currentVersion?: number;
+
+  constructor(message: string, code?: string, currentVersion?: number) {
+    super(message);
+    this.name = 'CasesApiError';
+    this.code = code;
+    this.currentVersion = currentVersion;
+  }
 }
 
 export const casesApi = {
   whoami: () => fetch('/api/whoami').then((r) => json<{ user: string }>(r)),
   stats: () => fetch('/api/cases/stats').then((r) => json<Record<Status, number>>(r)),
-  list: (mine = false) =>
-    fetch(`/api/cases${mine ? '?mine=1' : ''}`).then((r) => json<CaseRow[]>(r)),
+  list: (mine = false) => fetch(`/api/cases${mine ? '?mine=1' : ''}`).then((r) => json<CaseRow[]>(r)),
   get: (id: string) => fetch(`/api/cases/${id}`).then((r) => json<CasePayload>(r)),
 
-  assign: (id: string, assignee: string, meta: ExceptionMeta) =>
+  assign: (id: string, assignee: string, expectedVersion: number, meta: ExceptionMeta) =>
     fetch(`/api/cases/${id}/assign`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ assignee, meta }),
+      body: JSON.stringify({ assignee, expectedVersion, meta }),
     }).then((r) => json<CasePayload>(r)),
 
-  changeStatus: (id: string, status: Status, note: string | undefined, meta: ExceptionMeta) =>
+  changeStatus: (id: string, status: Status, note: string | undefined, expectedVersion: number, meta: ExceptionMeta) =>
     fetch(`/api/cases/${id}/status`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status, note, meta }),
+      body: JSON.stringify({ status, note, expectedVersion, meta }),
     }).then((r) => json<CasePayload>(r)),
 
-  addNote: (id: string, body: string, meta: ExceptionMeta) =>
+  addNote: (id: string, body: string, expectedVersion: number, meta: ExceptionMeta) =>
     fetch(`/api/cases/${id}/notes`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ body, meta }),
+      body: JSON.stringify({ body, expectedVersion, meta }),
     }).then((r) => json<CasePayload>(r)),
 };
 

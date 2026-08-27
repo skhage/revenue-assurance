@@ -49,7 +49,7 @@ const STAGES: Stage[] = [
     title: '2. Reconciliation pipeline',
     tagline: 'ra_medallion_pipeline → 7 silver checks + 4 gold materialized views',
     explanation:
-      'A Lakeflow Declarative Pipeline runs seven independent silver checks — contract price, unauthorized discount, expired quote, AR collection risk, revenue-recognition timing, and two AI-powered document-intelligence checks that read contract/invoice PDFs with ai_parse_document + ai_extract. All seven union into gold_leakage_summary, the single leakage register everything else in this app reads from, alongside gold_reconciliation_scorecard for customer health.',
+      'A Lakeflow Declarative Pipeline runs seven independent silver checks — contract price, unauthorized discount, expired quote, AR collection risk, revenue-recognition timing, and two AI-powered document-intelligence checks that read contract/invoice PDFs with ai_parse_document + ai_extract. All seven union into gold_leakage_summary; the app adds canonical Lakebase workflow state through gold_exception_workflow, alongside gold_reconciliation_scorecard for customer health.',
     links: (cfg) => [
       { label: 'Open ra_medallion_pipeline', href: pipelineUrl(cfg) },
       { label: 'Browse revenue_assurance schema', href: exploreDataUrl(cfg) },

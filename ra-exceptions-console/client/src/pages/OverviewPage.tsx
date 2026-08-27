@@ -1,5 +1,4 @@
 import {
-  useAnalyticsQuery,
   BarChart,
   Card,
   CardContent,
@@ -12,17 +11,17 @@ import {
   TabsContent,
   Skeleton,
 } from '@databricks/appkit-ui/react';
-import { sql } from '@databricks/appkit-ui/js';
 import { useEffect, useState } from 'react';
 import { KpiTile } from '../components/KpiTile';
 import { analyticsApi } from '../lib/analytics';
 import { usdCompact, num, numCompact, checkLabel } from '../lib/format';
 import { casesApi, STATUSES, type Status } from '../lib/cases';
-import type { KpiSummary } from '../lib/types';
+import type { KpiSummary, RootCauseSummary } from '../lib/types';
+import { useWorkflowRevision } from '../lib/workflowInvalidation';
 
 const SOURCE = 'cdm_tmforum.revenue_assurance';
 
-function CaseProgress() {
+function CaseProgress({ revision }: { revision: number }) {
   const [stats, setStats] = useState<Record<Status, number> | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
@@ -30,7 +29,7 @@ function CaseProgress() {
       .stats()
       .then(setStats)
       .catch(() => setFailed(true));
-  }, []);
+  }, [revision]);
   const worked = stats ? Object.values(stats).reduce((a, b) => a + b, 0) : 0;
   return (
     <Card className="shadow-sm">
@@ -61,9 +60,12 @@ function CaseProgress() {
 }
 
 export function OverviewPage() {
+  const workflowRevision = useWorkflowRevision();
   const [kpi, setKpi] = useState<KpiSummary | null>(null);
   const [kpiLoading, setKpiLoading] = useState(true);
   const [kpiError, setKpiError] = useState(false);
+  const [breakdown, setBreakdown] = useState<RootCauseSummary[]>([]);
+  const [breakdownError, setBreakdownError] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -77,10 +79,18 @@ export function OverviewPage() {
         if (!controller.signal.aborted) setKpiLoading(false);
       });
     return () => controller.abort();
-  }, []);
+  }, [workflowRevision]);
 
-  const breakdown = useAnalyticsQuery('rootcause_breakdown', { severity: sql.string('ALL') });
-  const chartData = (breakdown.data ?? []).map((r) => ({
+  useEffect(() => {
+    const controller = new AbortController();
+    analyticsApi
+      .rootCauses(controller.signal)
+      .then(setBreakdown)
+      .catch(() => setBreakdownError(true));
+    return () => controller.abort();
+  }, [workflowRevision]);
+
+  const chartData = breakdown.map((r) => ({
     check: checkLabel(r.check_type),
     'Amount at risk': r.amount_at_risk,
     'Exception count': r.exception_count,
@@ -120,20 +130,20 @@ export function OverviewPage() {
         />
       </div>
 
-      <CaseProgress />
+      <CaseProgress revision={workflowRevision} />
 
       {/* Root-cause breakdown */}
       <Card className="shadow-sm">
         <CardHeader className="pb-2">
           <CardTitle>Leakage by reconciliation check</CardTitle>
-          <CardDescription>Where detected revenue leakage concentrates · {SOURCE}.gold_leakage_summary</CardDescription>
+          <CardDescription>Open leakage by canonical Lakebase workflow state</CardDescription>
         </CardHeader>
         <CardContent>
-          {breakdown.loading && <Skeleton className="h-72 w-full" />}
-          {breakdown.error && (
+          {breakdown.length === 0 && !breakdownError && <Skeleton className="h-72 w-full" />}
+          {breakdownError && (
             <div className="text-sm text-destructive">Couldn’t load the breakdown from the warehouse.</div>
           )}
-          {!breakdown.loading && !breakdown.error && (
+          {breakdown.length > 0 && !breakdownError && (
             <Tabs defaultValue="amount">
               <TabsList>
                 <TabsTrigger value="amount">By $ at risk</TabsTrigger>

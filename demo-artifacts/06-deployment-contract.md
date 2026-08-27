@@ -1,6 +1,7 @@
 # RA Demo — Deployment Contract
 
 > **Scrutiny summary**
+> - ✅ **2026-08-27:** Added the Lakebase transactional outbox → Delta `workflow_case_state` projection, canonical `gold_exception_workflow` consumer view, required app-SP `CREATE TABLE` grant, and projection health/retry behavior for dashboard and Genie consistency.
 > - ✅ **2026-08-26:** Aligned to the **built** system. Single new schema `cdm_tmforum.revenue_assurance` (not a `ra_silver`/`ra_gold` split); the reconciliation layer is **materialized views** defined in `reconciliation/transformations/*.sql`, not a dim/fact Lakeflow pipeline. The **RA Exceptions Console** is a **Databricks AppKit** app (React/TypeScript) with its own `databricks.yml`, deployed via `databricks apps deploy --profile <name>`; it reads analytics via a SQL warehouse and writes case state to **Lakebase Postgres** (project `ra-console-lakebase`, schema `ra`). Grants, teardown, and the deploy sequence updated accordingly.
 > - **Cloud/workspace:** deploy to the real `demo-workspace` via the `demo` CLI profile; the workspace **host is never hardcoded** — it resolves from the profile (`--profile <name>`). Rogers is narrative reference only; confirm cloud at deploy time.
 > - **Catalog:** use the existing, pre-populated `cdm_tmforum` catalog (100K+ rows, 2018–2025 billing). Build only new schemas within it; `tmf_*` are read-only. ❌ Original invented a `lumen_ra` catalog + `ra_silver`/`ra_gold` split.
@@ -67,16 +68,17 @@ Least-privilege, reproducible as SQL grants (not click-configured).
 | `ra_engineers` (Priya) | `ALL PRIVILEGES` | `cdm_tmforum.revenue_assurance`, `*_source` |
 | `ra_analysts` (Marcus) | `USE SCHEMA`, `SELECT` | `cdm_tmforum.revenue_assurance` |
 | `ra_execs` (Dana) | `USE SCHEMA`, `SELECT` | `cdm_tmforum.revenue_assurance` (gold MVs) |
-| **App service principal** | `USE CATALOG` on `cdm_tmforum`; `USE SCHEMA` + `SELECT` on `cdm_tmforum.revenue_assurance` | required for the app **and** for the platform-side build (AppKit re-runs typegen/`DESCRIBE QUERY` as the SP) |
+| **App service principal** | `USE CATALOG` on `cdm_tmforum`; `USE SCHEMA` + `SELECT` + `CREATE TABLE` on `cdm_tmforum.revenue_assurance` | required for app reads/typegen and for the Lakebase outbox projection table + canonical workflow view |
 
 ```sql
 -- app SP grants (SP = the service_principal_client_id from `databricks apps get`)
 GRANT USE CATALOG ON CATALOG cdm_tmforum                        TO `<app-sp-client-id>`;
 GRANT USE SCHEMA  ON SCHEMA  cdm_tmforum.revenue_assurance       TO `<app-sp-client-id>`;
 GRANT SELECT      ON SCHEMA  cdm_tmforum.revenue_assurance       TO `<app-sp-client-id>`;
+GRANT CREATE TABLE ON SCHEMA cdm_tmforum.revenue_assurance       TO `<app-sp-client-id>`;
 ```
 
-> Case-management **writes** do not need a UC grant — they go to **Lakebase Postgres**, where the app SP owns the `ra` schema it creates on first run.
+> Case-management writes commit to **Lakebase Postgres** first. The app SP then drains `ra.workflow_outbox` into Delta `workflow_case_state` and maintains `gold_exception_workflow` for dashboard/Genie reads. If projection fails, writes remain queued and `/api/workflow/health` returns 503 until retries succeed.
 
 **PII masking (governance proof):** apply a UC column mask to a name column in the RA layer — e.g. `revenue_assurance.gold_reconciliation_scorecard.account_name` — so principals outside `ra_engineers` see a masked value. The demo shows a masked vs. unmasked query. (`tmf_*` stays untouched.)
 

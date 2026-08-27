@@ -83,8 +83,10 @@ artifacts and are the single source of truth for the rewrite.
   materialized `service_instance` identity bridge (and, older still, a `lumen_ra` catalog). The real
   build uses the **single `revenue_assurance` schema** and the table names above; checks join the
   `*_source` systems to `tmf_*` directly rather than through a materialized bridge.
-  **Case-management state is not a Delta table** — it lives in **Lakebase Postgres** (schema `ra`:
-  `ra.cases`, `ra.case_notes`), owned by the RA Exceptions Console app (see §4 and artifact 07).
+  **Canonical case-management state lives in Lakebase Postgres** (schema `ra`: `ra.cases`,
+  `ra.case_notes`), owned by the RA Exceptions Console app. A retryable outbox projects current state
+  to Delta `workflow_case_state`; warehouse consumers use `gold_exception_workflow`, never the
+  projection as a write authority (see §4 and artifacts 06–07).
 
 ### 3. Source systems are simulated separately (already specced)
 A generator notebook (`simulate_source_systems`) lands raw upstream systems, keyed to the
@@ -117,7 +119,8 @@ exception register that backs the queue and KPIs (~48K rows, ~$601M at risk; col
   the **seven silver checks above → `gold_leakage_summary`**, leaning on document-intelligence (AI)
   plus AR-aging, FX, and rev-rec timing rather than the network-provisioning checks. The native
   `tmf_enterprise.revenue_assurance_violation` / `ra_trouble_ticket` tables remain available as
-  context, but the app's **case state lives in Lakebase** (schema `ra`), not a Delta `exception_case`.
+  context, but the app's **case state authority lives in Lakebase** (schema `ra`), not a writable
+  Delta `exception_case`; Delta receives a read-only workflow projection for dashboard and Genie.
 
 ### 5. Numbers — use real, not invented
 - ❌ Original: "~2,000 customers, ~25,000 circuits, ~2.25M usage rows, ~910 exceptions,
@@ -137,7 +140,8 @@ exception register that backs the queue and KPIs (~48K rows, ~$601M at risk; col
   "the demo FEVM workspace (confirm cloud at deploy time)."
 - IaC via **Databricks Asset Bundles** in the `revenue-assurance` repo is still correct; the
   **RA Exceptions Console** app is built on **AppKit** (React/TypeScript) — reads via a SQL warehouse
-  over `revenue_assurance.gold_*`, writes case state to **Lakebase**. Teardown drops only the **new**
+  over `gold_exception_workflow`, writes canonical case state to **Lakebase**, and projects it through
+  a transactional outbox to Delta for dashboard/Genie consumers. Teardown drops only the **new**
   `revenue_assurance`/`*_source` schemas, the Lakebase project (`ra` schema), the app, and jobs —
   never `tmf_*`.
 

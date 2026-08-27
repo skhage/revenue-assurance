@@ -1,5 +1,4 @@
 import {
-  useAnalyticsQuery,
   Card,
   Input,
   Button,
@@ -16,18 +15,19 @@ import {
   TableHead,
   TableCell,
 } from '@databricks/appkit-ui/react';
-import { sql } from '@databricks/appkit-ui/js';
 import { useEffect, useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import { SeverityBadge, StatusChip } from '../components/badges';
 import { ExceptionDrawer } from '../components/ExceptionDrawer';
 import { analyticsApi } from '../lib/analytics';
 import { usd, numCompact, checkLabel, accountLabel } from '../lib/format';
-import type { ExceptionRow } from '../lib/types';
+import type { ExceptionRow, RootCauseSummary } from '../lib/types';
+import { useWorkflowRevision } from '../lib/workflowInvalidation';
 
 const PAGE_SIZE = 25;
 
 export function QueuePage() {
+  const workflowRevision = useWorkflowRevision();
   const [checkType, setCheckType] = useState('ALL');
   const [severity, setSeverity] = useState('ALL');
   const [searchInput, setSearchInput] = useState('');
@@ -37,6 +37,7 @@ export function QueuePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [chips, setChips] = useState<RootCauseSummary[]>([]);
 
   const [selected, setSelected] = useState<ExceptionRow | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -52,7 +53,14 @@ export function QueuePage() {
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  const chips = useAnalyticsQuery('rootcause_breakdown', { severity: sql.string('ALL') });
+  useEffect(() => {
+    const controller = new AbortController();
+    analyticsApi
+      .rootCauses(controller.signal)
+      .then(setChips)
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [workflowRevision, refreshKey]);
 
   // Filter setters that also reset paging (avoids a setState-in-effect).
   const pickCheck = (v: string) => {
@@ -94,7 +102,7 @@ export function QueuePage() {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [filters, refreshKey]);
+  }, [filters, refreshKey, workflowRevision]);
 
   function openRow(row: ExceptionRow) {
     setSelected(row);
@@ -118,7 +126,7 @@ export function QueuePage() {
         >
           All checks
         </button>
-        {(chips.data ?? []).map((c) => (
+        {chips.map((c) => (
           <button
             key={c.check_type}
             type="button"
