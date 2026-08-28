@@ -69,9 +69,9 @@ const SOURCE_LABELS: Record<string, string> = {
 };
 
 export function sourceLabel(table: string | null | undefined): string {
-  if (!table) return 'Unknown';
+  if (!table) return 'Unknown source system';
   const schema = table.split('.')[0];
-  return SOURCE_LABELS[schema] ?? table;
+  return SOURCE_LABELS[schema] ?? 'Other source system';
 }
 
 /** Compact person initials for avatars, e.g. "stephen.hage@x" → "SH". */

@@ -13,11 +13,12 @@ export function LoadingRegion({ children, label = 'Loading' }: { children: React
 interface ErrorRegionProps {
   message: ReactNode;
   onRetry?: () => void;
+  retryLabel?: string;
   className?: string;
 }
 
 /** Announced error state with an actionable retry path, instead of an inert dead end. */
-export function ErrorRegion({ message, onRetry, className }: ErrorRegionProps) {
+export function ErrorRegion({ message, onRetry, retryLabel = 'Retry', className }: ErrorRegionProps) {
   return (
     <div
       role="alert"
@@ -26,7 +27,7 @@ export function ErrorRegion({ message, onRetry, className }: ErrorRegionProps) {
       <span>{message}</span>
       {onRetry && (
         <Button variant="outline" size="sm" onClick={onRetry}>
-          Retry
+          {retryLabel}
         </Button>
       )}
     </div>

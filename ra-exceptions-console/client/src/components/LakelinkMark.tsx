@@ -2,15 +2,21 @@
 // client/public/favicon.svg, recolored to currentColor so it renders
 // correctly on top of any token-driven background (e.g. bg-brand) in both
 // light and dark mode, instead of the SVG's own hardcoded coral hex fills.
-export function LakelinkMark({ className }: { className?: string }) {
+//
+// Decorative by default (aria-hidden) since every usage today places it
+// next to visible "Lakelink Fiber" text — announcing both would duplicate
+// the name for screen-reader users. Pass decorative={false} for a
+// standalone usage with no adjacent text label.
+export function LakelinkMark({ className, decorative = true }: { className?: string; decorative?: boolean }) {
   return (
     <svg
       viewBox="0 0 512 512"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
-      role="img"
-      aria-label="Lakelink Fiber"
+      role={decorative ? undefined : 'img'}
+      aria-hidden={decorative ? true : undefined}
+      aria-label={decorative ? undefined : 'Lakelink Fiber'}
     >
       <path d="M64 64H224V224H64V64Z" fill="currentColor" opacity="0.55" />
       <path

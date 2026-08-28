@@ -77,6 +77,14 @@ function RootCauseBreakdown({ onRetry }: { onRetry: () => void }) {
   if (breakdown.error) {
     return <ErrorRegion message="Couldn't load the breakdown from the warehouse." onRetry={onRetry} className="p-0" />;
   }
+  if (chartData.length === 0) {
+    return (
+      <div className="p-10 text-center">
+        <div className="text-sm font-medium text-foreground">No leakage detected</div>
+        <div className="mt-1 text-sm text-muted-foreground">No reconciliation checks have flagged leakage yet.</div>
+      </div>
+    );
+  }
   return (
     <Tabs defaultValue="amount">
       <TabsList>
@@ -144,6 +152,15 @@ export function OverviewPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
+      {kpiError && (
+        <ErrorRegion
+          message="Couldn't load overview metrics right now."
+          onRetry={retryKpis}
+          retryLabel="Retry overview metrics"
+          className="p-4"
+        />
+      )}
+
       {/* KPI row */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <KpiTile
@@ -152,15 +169,13 @@ export function OverviewPage() {
           sublabel="Across all reconciliation checks"
           loading={kpiLoading}
           error={kpiError}
-          onRetry={retryKpis}
         />
         <KpiTile
           label="Open exceptions"
           value={numCompact(kpi?.open_exceptions)}
-          sublabel="Detected across 7 reconciliation checks"
+          sublabel="Detected across all reconciliation checks"
           loading={kpiLoading}
           error={kpiError}
-          onRetry={retryKpis}
         />
         <KpiTile
           label="High-severity"
@@ -168,7 +183,6 @@ export function OverviewPage() {
           sublabel="Prioritized for triage"
           loading={kpiLoading}
           error={kpiError}
-          onRetry={retryKpis}
         />
         <KpiTile
           label="Accounts affected"
@@ -176,7 +190,6 @@ export function OverviewPage() {
           sublabel="Distinct customers"
           loading={kpiLoading}
           error={kpiError}
-          onRetry={retryKpis}
         />
       </div>
 

@@ -22,6 +22,7 @@ import { Search } from 'lucide-react';
 import { SeverityBadge, StatusChip } from '../components/badges';
 import { ExceptionDrawer } from '../components/ExceptionDrawer';
 import { ToggleChip } from '../components/ToggleChip';
+import { RowActionButton } from '../components/RowActionButton';
 import { LoadingRegion, ErrorRegion } from '../components/StatusRegion';
 import { analyticsApi } from '../lib/analytics';
 import { usd, numCompact, checkLabel, accountLabel } from '../lib/format';
@@ -186,19 +187,16 @@ export function QueuePage() {
                 {rows.map((row) => (
                   <TableRow
                     key={row.exception_id}
-                    onClick={() => openRow(row)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        openRow(row);
-                      }
-                    }}
-                    tabIndex={0}
-                    aria-label={`Open exception ${row.reference_id || row.exception_id}`}
-                    className="cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                     data-state={selected?.exception_id === row.exception_id ? 'selected' : undefined}
                   >
-                    <TableCell className="font-mono text-xs">{row.reference_id || '—'}</TableCell>
+                    <TableCell className="font-mono text-xs">
+                      <RowActionButton
+                        onClick={() => openRow(row)}
+                        label={`Open exception ${row.reference_id || row.exception_id}`}
+                      >
+                        {row.reference_id || '—'}
+                      </RowActionButton>
+                    </TableCell>
                     <TableCell className="max-w-48 truncate">{accountLabel(row.account_name)}</TableCell>
                     <TableCell className="text-muted-foreground">{checkLabel(row.check_type)}</TableCell>
                     <TableCell>

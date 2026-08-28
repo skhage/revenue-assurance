@@ -5,7 +5,7 @@
     "target": "ES2022",
     "useDefineForClassFields": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom"],
+    "types": ["vite/client"],
 
     /* Bundler mode */
     "allowImportingTsExtensions": true,
@@ -24,5 +24,6 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["client/src", "shared/appkit-types"]
+  "include": ["client/src", "shared/appkit-types"],
+  "exclude": ["client/src/**/*.test.ts", "client/src/**/*.test.tsx", "client/src/test-setup.ts"]
 }

@@ -20,7 +20,7 @@ import {
 import { sql } from '@databricks/appkit-ui/js';
 import { useEffect, useState } from 'react';
 import { SeverityBadge, StatusChip } from './badges';
-import { LoadingRegion } from './StatusRegion';
+import { LoadingRegion, ErrorRegion } from './StatusRegion';
 import { usd, num, checkLabel, accountLabel, detectionLabel, sourceLabel } from '../lib/format';
 import { casesApi, NEXT_STATUS, type CasePayload, type Status, type ExceptionMeta } from '../lib/cases';
 import { useWhoAmI } from '../lib/whoami';
@@ -39,6 +39,41 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   return <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{children}</div>;
 }
 
+function CustomerScorecard({ exceptionId, onRetry }: { exceptionId: string; onRetry: () => void }) {
+  const { data, loading, error } = useAnalyticsQuery('exception_detail', {
+    exception_id: sql.string(exceptionId),
+  });
+  const detail = data?.[0];
+
+  if (loading) {
+    return (
+      <LoadingRegion label="Loading scorecard">
+        <Skeleton className="h-20 w-full" />
+      </LoadingRegion>
+    );
+  }
+  if (error) {
+    return <ErrorRegion message="Couldn't load scorecard." onRetry={onRetry} className="p-0" />;
+  }
+  if (!detail?.risk_tier) {
+    return (
+      <div role="status" className="text-sm text-muted-foreground">
+        No scorecard — this exception isn’t attributed to a scored customer.
+      </div>
+    );
+  }
+  return (
+    <>
+      <KV k="Risk tier" v={detail.risk_tier} />
+      <KV k="Health score" v={`${Math.round(detail.composite_health_score ?? 0)} / 100`} />
+      <KV k="ARPU tier" v={detail.arpu_tier ?? '—'} />
+      <KV k="Billing currency" v={detail.billing_currency ?? '—'} />
+      <KV k="Customer exceptions" v={num(detail.customer_total_exceptions)} />
+      <KV k="Customer $ at risk" v={usd(detail.customer_total_at_risk)} />
+    </>
+  );
+}
+
 interface Props {
   exception: ExceptionRow | null;
   open: boolean;
@@ -48,10 +83,7 @@ interface Props {
 
 export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }: Props) {
   const me = useWhoAmI();
-  const { data, loading, error } = useAnalyticsQuery('exception_detail', {
-    exception_id: sql.string(exception?.exception_id ?? ''),
-  });
-  const detail = exception ? data?.[0] : undefined;
+  const [scorecardRefreshKey, setScorecardRefreshKey] = useState(0);
 
   const [payload, setPayload] = useState<CasePayload>({ case: null, notes: [] });
   const [caseLoading, setCaseLoading] = useState(false);
@@ -73,6 +105,7 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
     if (!exception || !open) return;
     setActionError(null);
     setNote('');
+    setScorecardRefreshKey(0);
     setCaseLoading(true);
     casesApi
       .get(exception.exception_id)
@@ -123,14 +156,7 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
             <SectionTitle>Detection</SectionTitle>
             <KV k="Check" v={checkLabel(exception.check_type)} />
             <KV k="Method" v={detectionLabel(exception.detection_method)} />
-            <KV
-              k="Source system"
-              v={
-                <span className="text-xs" title={exception.source_table}>
-                  {sourceLabel(exception.source_table)}
-                </span>
-              }
-            />
+            <KV k="Source system" v={<span className="text-xs">{sourceLabel(exception.source_table)}</span>} />
             <KV k="Known leakage" v={exception.known_leakage_flag ? 'Yes (ground truth)' : 'Model-flagged'} />
             <KV k="Customer ID" v={exception.customer_id ? num(exception.customer_id) : '—'} />
           </div>
@@ -140,31 +166,11 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
           {/* Customer scorecard evidence */}
           <div className="flex flex-col gap-2.5">
             <SectionTitle>Customer reconciliation scorecard</SectionTitle>
-            {loading && (
-              <LoadingRegion label="Loading scorecard">
-                <Skeleton className="h-20 w-full" />
-              </LoadingRegion>
-            )}
-            {error && (
-              <div role="alert" className="text-sm text-destructive">
-                Couldn’t load scorecard.
-              </div>
-            )}
-            {!loading && !error && detail?.risk_tier && (
-              <>
-                <KV k="Risk tier" v={detail.risk_tier} />
-                <KV k="Health score" v={`${Math.round(detail.composite_health_score ?? 0)} / 100`} />
-                <KV k="ARPU tier" v={detail.arpu_tier ?? '—'} />
-                <KV k="Billing currency" v={detail.billing_currency ?? '—'} />
-                <KV k="Customer exceptions" v={num(detail.customer_total_exceptions)} />
-                <KV k="Customer $ at risk" v={usd(detail.customer_total_at_risk)} />
-              </>
-            )}
-            {!loading && !error && !detail?.risk_tier && (
-              <div className="text-sm text-muted-foreground">
-                No scorecard — this exception isn’t attributed to a scored customer.
-              </div>
-            )}
+            <CustomerScorecard
+              key={scorecardRefreshKey}
+              exceptionId={exception.exception_id}
+              onRetry={() => setScorecardRefreshKey((k) => k + 1)}
+            />
           </div>
 
           <Separator />

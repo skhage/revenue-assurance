@@ -12,6 +12,7 @@ import {
 import { useCallback, useEffect, useState } from 'react';
 import { SeverityBadge, StatusChip } from '../components/badges';
 import { ExceptionDrawer } from '../components/ExceptionDrawer';
+import { RowActionButton } from '../components/RowActionButton';
 import { LoadingRegion, ErrorRegion } from '../components/StatusRegion';
 import { usd, checkLabel, accountLabel } from '../lib/format';
 import { casesApi, type CaseRow } from '../lib/cases';
@@ -106,24 +107,18 @@ export function CasesPage() {
               </TableHeader>
               <TableBody>
                 {rows.map((c) => (
-                  <TableRow
-                    key={c.exception_id}
-                    tabIndex={0}
-                    aria-label={`Open case ${c.reference_id || c.exception_id}`}
-                    className="cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                    onClick={() => {
-                      setSelected(toExceptionRow(c));
-                      setDrawerOpen(true);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        setSelected(toExceptionRow(c));
-                        setDrawerOpen(true);
-                      }
-                    }}
-                  >
-                    <TableCell className="font-mono text-xs">{c.reference_id || '—'}</TableCell>
+                  <TableRow key={c.exception_id}>
+                    <TableCell className="font-mono text-xs">
+                      <RowActionButton
+                        onClick={() => {
+                          setSelected(toExceptionRow(c));
+                          setDrawerOpen(true);
+                        }}
+                        label={`Open case ${c.reference_id || c.exception_id}`}
+                      >
+                        {c.reference_id || '—'}
+                      </RowActionButton>
+                    </TableCell>
                     <TableCell className="max-w-48 truncate">{accountLabel(c.account_name)}</TableCell>
                     <TableCell className="text-muted-foreground">{checkLabel(c.check_type)}</TableCell>
                     <TableCell>

@@ -6,13 +6,16 @@ describe('sourceLabel', () => {
     expect(sourceLabel('oracle_erp_source.invoices')).toBe('ERP (Oracle)');
   });
 
-  it('falls back to the raw value for unknown schemas', () => {
-    expect(sourceLabel('some_other_schema.table')).toBe('some_other_schema.table');
+  it('never leaks the raw schema.table for unknown sources', () => {
+    const label = sourceLabel('some_other_schema.table');
+    expect(label).toBe('Other source system');
+    expect(label).not.toContain('some_other_schema');
+    expect(label).not.toContain('.');
   });
 
-  it('falls back to Unknown when empty or missing', () => {
-    expect(sourceLabel('')).toBe('Unknown');
-    expect(sourceLabel(null)).toBe('Unknown');
-    expect(sourceLabel(undefined)).toBe('Unknown');
+  it('falls back to a generic label when empty or missing', () => {
+    expect(sourceLabel('')).toBe('Unknown source system');
+    expect(sourceLabel(null)).toBe('Unknown source system');
+    expect(sourceLabel(undefined)).toBe('Unknown source system');
   });
 });
