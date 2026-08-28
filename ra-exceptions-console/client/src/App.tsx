@@ -1,22 +1,12 @@
 import { createBrowserRouter, RouterProvider, NavLink, Outlet, useLocation } from 'react-router';
 import { useState } from 'react';
 import { Button, Sheet, SheetContent } from '@databricks/appkit-ui/react';
-import {
-  LayoutGrid,
-  ListChecks,
-  Briefcase,
-  Menu,
-  Moon,
-  Sun,
-  Activity,
-  SearchCheck,
-  Zap,
-  Waypoints,
-} from 'lucide-react';
+import { LayoutGrid, ListChecks, Briefcase, Menu, Moon, Sun, SearchCheck, Zap, Waypoints } from 'lucide-react';
 import { OverviewPage } from './pages/OverviewPage';
 import { QueuePage } from './pages/QueuePage';
 import { CasesPage } from './pages/CasesPage';
 import { ArchitecturePage } from './pages/ArchitecturePage';
+import { LakelinkMark } from './components/LakelinkMark';
 import { useTheme } from './lib/useTheme';
 import { WhoAmIProvider, useWhoAmI } from './lib/whoami';
 import { initials } from './lib/format';
@@ -49,10 +39,10 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <div className="flex h-full flex-col gap-6">
       <div className="flex items-center gap-2 px-1">
-        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
-          <Activity className="h-4 w-4" />
+        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-brand text-brand-foreground">
+          <LakelinkMark className="h-4 w-4" />
         </div>
-        <span className="text-sm font-semibold text-sidebar-foreground">Ledger RA</span>
+        <span className="text-sm font-semibold text-sidebar-foreground">Lakelink Fiber</span>
       </div>
 
       <nav className="flex flex-col gap-0.5">
@@ -71,10 +61,10 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         <div className="px-2.5 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
           Detection
         </div>
-        <div className="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-muted-foreground/60">
+        <div className="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-muted-foreground">
           <SearchCheck className="h-4 w-4 shrink-0" /> Reconciliation rules
         </div>
-        <div className="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-muted-foreground/60">
+        <div className="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-muted-foreground">
           <Zap className="h-4 w-4 shrink-0" /> Anomaly models
         </div>
       </nav>

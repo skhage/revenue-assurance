@@ -12,6 +12,7 @@ import {
 import { useCallback, useEffect, useState } from 'react';
 import { SeverityBadge, StatusChip } from '../components/badges';
 import { ExceptionDrawer } from '../components/ExceptionDrawer';
+import { LoadingRegion, ErrorRegion } from '../components/StatusRegion';
 import { usd, checkLabel, accountLabel } from '../lib/format';
 import { casesApi, type CaseRow } from '../lib/cases';
 import type { ExceptionRow } from '../lib/types';
@@ -61,23 +62,25 @@ export function CasesPage() {
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-4">
       <div className="flex items-center gap-2">
-        <Button variant={mine ? 'default' : 'outline'} size="sm" onClick={() => setMine(true)}>
+        <Button variant={mine ? 'default' : 'outline'} size="sm" aria-pressed={mine} onClick={() => setMine(true)}>
           My cases
         </Button>
-        <Button variant={!mine ? 'default' : 'outline'} size="sm" onClick={() => setMine(false)}>
+        <Button variant={!mine ? 'default' : 'outline'} size="sm" aria-pressed={!mine} onClick={() => setMine(false)}>
           All worked cases
         </Button>
       </div>
 
       <Card className="overflow-hidden shadow-sm">
         {error ? (
-          <div className="p-6 text-sm text-destructive">{error}</div>
+          <ErrorRegion message="Couldn't load cases right now." onRetry={refresh} />
         ) : loading ? (
-          <div className="flex flex-col gap-2 p-4">
-            {Array.from({ length: 6 }, (_, i) => (
-              <Skeleton key={i} className="h-9 w-full" />
-            ))}
-          </div>
+          <LoadingRegion label="Loading cases">
+            <div className="flex flex-col gap-2 p-4">
+              {Array.from({ length: 6 }, (_, i) => (
+                <Skeleton key={i} className="h-9 w-full" />
+              ))}
+            </div>
+          </LoadingRegion>
         ) : rows.length === 0 ? (
           <div className="p-10 text-center">
             <div className="text-sm font-medium text-foreground">
@@ -88,45 +91,56 @@ export function CasesPage() {
             </div>
           </div>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Reference</TableHead>
-                <TableHead>Account</TableHead>
-                <TableHead>Root cause</TableHead>
-                <TableHead>Severity</TableHead>
-                <TableHead className="text-right">$ at risk</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Owner</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((c) => (
-                <TableRow
-                  key={c.exception_id}
-                  className="cursor-pointer"
-                  onClick={() => {
-                    setSelected(toExceptionRow(c));
-                    setDrawerOpen(true);
-                  }}
-                >
-                  <TableCell className="font-mono text-xs">{c.reference_id || '—'}</TableCell>
-                  <TableCell className="max-w-48 truncate">{accountLabel(c.account_name)}</TableCell>
-                  <TableCell className="text-muted-foreground">{checkLabel(c.check_type)}</TableCell>
-                  <TableCell>
-                    <SeverityBadge severity={c.severity ?? 'LOW'} />
-                  </TableCell>
-                  <TableCell className="text-right font-mono font-semibold tabular-nums text-destructive">
-                    {usd(c.amount_at_risk)}
-                  </TableCell>
-                  <TableCell>
-                    <StatusChip status={c.status} />
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{c.assignee?.split('@')[0] ?? '—'}</TableCell>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Reference</TableHead>
+                  <TableHead>Account</TableHead>
+                  <TableHead>Root cause</TableHead>
+                  <TableHead>Severity</TableHead>
+                  <TableHead className="text-right">$ at risk</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Owner</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {rows.map((c) => (
+                  <TableRow
+                    key={c.exception_id}
+                    tabIndex={0}
+                    aria-label={`Open case ${c.reference_id || c.exception_id}`}
+                    className="cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    onClick={() => {
+                      setSelected(toExceptionRow(c));
+                      setDrawerOpen(true);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setSelected(toExceptionRow(c));
+                        setDrawerOpen(true);
+                      }
+                    }}
+                  >
+                    <TableCell className="font-mono text-xs">{c.reference_id || '—'}</TableCell>
+                    <TableCell className="max-w-48 truncate">{accountLabel(c.account_name)}</TableCell>
+                    <TableCell className="text-muted-foreground">{checkLabel(c.check_type)}</TableCell>
+                    <TableCell>
+                      <SeverityBadge severity={c.severity ?? 'LOW'} />
+                    </TableCell>
+                    <TableCell className="text-right font-mono font-semibold tabular-nums text-destructive">
+                      {usd(c.amount_at_risk)}
+                    </TableCell>
+                    <TableCell>
+                      <StatusChip status={c.status} />
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{c.assignee?.split('@')[0] ?? '—'}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         )}
       </Card>
 

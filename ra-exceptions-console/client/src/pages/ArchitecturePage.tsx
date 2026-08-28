@@ -41,8 +41,6 @@ import {
  * (see lib/architecture.ts + server/routes/architecture.ts).
  */
 
-const BRAND = '#FF3621'; // Databricks coral
-
 type NodeId = 'app' | 'aibi' | 'genie-one' | 'genie-agent' | 'uc' | 'sdp' | 'mlops' | 'lakehouse' | 'lakebase';
 
 interface NodeDef {
@@ -220,27 +218,24 @@ function NodeTile({
   const step = NODE_STEP[node.id];
   const interactive = step !== undefined; // only tour nodes are clickable
   const className = `group relative flex w-full items-center gap-3 rounded-lg border bg-card p-3 text-left transition-all ${
-    active ? 'shadow-md' : 'border-border'
+    active ? 'border-brand shadow-[0_0_0_1px_var(--brand)]' : 'border-border'
   } ${interactive && !active ? 'hover:border-foreground/20 hover:shadow-sm' : ''} ${
     dimmed ? 'opacity-40' : 'opacity-100'
   }`;
-  const style = active ? { borderColor: BRAND, boxShadow: `0 0 0 1px ${BRAND}` } : undefined;
 
   const inner = (
     <>
       {step !== undefined && (
         <span
-          className="absolute -left-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold text-white"
-          style={{ backgroundColor: active ? BRAND : 'var(--muted-foreground, #71717a)' }}
+          className={`absolute -left-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold ${
+            active ? 'bg-brand text-brand-foreground' : 'bg-muted-foreground text-background'
+          }`}
         >
           {step + 1}
         </span>
       )}
-      <span
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md"
-        style={{ backgroundColor: `${BRAND}1a` }}
-      >
-        <Icon className="h-5 w-5" style={{ color: BRAND }} />
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-brand/10">
+        <Icon className="h-5 w-5 text-brand" />
       </span>
       <span className="min-w-0">
         <span className="block truncate text-sm font-semibold text-foreground">{node.title}</span>
@@ -252,14 +247,15 @@ function NodeTile({
   // Non-tour tiles (e.g. AI/BI, Lakebase) are context only — render them static
   // so they don't present a clickable affordance that does nothing.
   if (!interactive) {
-    return (
-      <div className={className} style={style}>
-        {inner}
-      </div>
-    );
+    return <div className={className}>{inner}</div>;
   }
   return (
-    <button type="button" onClick={onClick} aria-pressed={active} className={className} style={style}>
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`${className} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2`}
+    >
       {inner}
     </button>
   );
@@ -322,7 +318,7 @@ export function ArchitecturePage() {
               </Button>
             </>
           ) : (
-            <Button size="sm" onClick={start} style={{ backgroundColor: BRAND }}>
+            <Button size="sm" onClick={start} className="bg-brand text-brand-foreground hover:bg-brand/90">
               <MapPin className="mr-1 h-4 w-4" /> Start guided tour
             </Button>
           )}
@@ -352,7 +348,7 @@ export function ArchitecturePage() {
                 </div>
                 {band.key === 'work' && (
                   <div className="mt-2 flex items-center justify-center gap-2 rounded-md border border-dashed border-border py-1.5 text-xs text-muted-foreground">
-                    <Network className="h-3.5 w-3.5" style={{ color: BRAND }} /> Genie Ontology — shared semantic layer
+                    <Network className="h-3.5 w-3.5 text-brand" /> Genie Ontology — shared semantic layer
                   </div>
                 )}
               </div>
@@ -383,10 +379,7 @@ export function ArchitecturePage() {
           <CardContent className="flex h-full flex-col gap-4 p-5">
             {current ? (
               <>
-                <div
-                  className="inline-flex w-fit items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-white"
-                  style={{ backgroundColor: BRAND }}
-                >
+                <div className="inline-flex w-fit items-center rounded-full bg-brand px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-brand-foreground">
                   {current.kicker}
                 </div>
                 <h3 className="text-xl font-semibold text-foreground">{current.title}</h3>
@@ -413,12 +406,12 @@ export function ArchitecturePage() {
                       key={t.node}
                       type="button"
                       onClick={() => setStep(i)}
-                      className="flex items-center gap-1"
+                      className="flex items-center gap-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                       aria-label={`Go to step ${i + 1}: ${t.title}`}
+                      aria-current={i === step ? 'step' : undefined}
                     >
                       <span
-                        className={`h-2 w-2 rounded-full transition-all ${i === step ? 'w-5' : ''}`}
-                        style={{ backgroundColor: i === step ? BRAND : 'var(--border, #e4e4e7)' }}
+                        className={`h-2 w-2 rounded-full transition-all ${i === step ? 'w-5 bg-brand' : 'bg-border'}`}
                       />
                     </button>
                   ))}
@@ -426,11 +419,8 @@ export function ArchitecturePage() {
               </>
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-                <span
-                  className="flex h-12 w-12 items-center justify-center rounded-xl"
-                  style={{ backgroundColor: `${BRAND}1a` }}
-                >
-                  <MapPin className="h-6 w-6" style={{ color: BRAND }} />
+                <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-brand/10">
+                  <MapPin className="h-6 w-6 text-brand" />
                 </span>
                 <div className="text-sm font-medium text-foreground">Follow the request path</div>
                 <p className="max-w-xs text-sm text-muted-foreground">

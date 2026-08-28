@@ -21,6 +21,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import { SeverityBadge, StatusChip } from '../components/badges';
 import { ExceptionDrawer } from '../components/ExceptionDrawer';
+import { ToggleChip } from '../components/ToggleChip';
+import { LoadingRegion, ErrorRegion } from '../components/StatusRegion';
 import { analyticsApi } from '../lib/analytics';
 import { usd, numCompact, checkLabel, accountLabel } from '../lib/format';
 import type { ExceptionRow } from '../lib/types';
@@ -107,30 +109,13 @@ export function QueuePage() {
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-4">
       {/* Filter bar */}
       <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={() => pickCheck('ALL')}
-          className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-            checkType === 'ALL'
-              ? 'border-transparent bg-primary/10 text-primary'
-              : 'border-border text-muted-foreground hover:bg-muted'
-          }`}
-        >
+        <ToggleChip active={checkType === 'ALL'} onClick={() => pickCheck('ALL')}>
           All checks
-        </button>
+        </ToggleChip>
         {(chips.data ?? []).map((c) => (
-          <button
-            key={c.check_type}
-            type="button"
-            onClick={() => pickCheck(c.check_type)}
-            className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-              checkType === c.check_type
-                ? 'border-transparent bg-primary/10 text-primary'
-                : 'border-border text-muted-foreground hover:bg-muted'
-            }`}
-          >
-            {checkLabel(c.check_type)} <span className="opacity-60">{numCompact(c.exception_count)}</span>
-          </button>
+          <ToggleChip key={c.check_type} active={checkType === c.check_type} onClick={() => pickCheck(c.check_type)}>
+            {checkLabel(c.check_type)} <span className="text-muted-foreground">{numCompact(c.exception_count)}</span>
+          </ToggleChip>
         ))}
 
         <div className="ml-auto flex items-center gap-2">
@@ -160,16 +145,22 @@ export function QueuePage() {
       {/* Table */}
       <Card className="overflow-hidden shadow-sm">
         {error ? (
-          <div className="p-6 text-sm text-destructive">
-            Couldn’t load exceptions from <span className="font-mono">cdm_tmforum.revenue_assurance</span>. Retry the
-            query.
-          </div>
+          <ErrorRegion
+            message="Couldn't load the exception queue right now."
+            onRetry={() => {
+              setLoading(true);
+              setError(null);
+              setRefreshKey((key) => key + 1);
+            }}
+          />
         ) : loading ? (
-          <div className="flex flex-col gap-2 p-4">
-            {Array.from({ length: 8 }, (_, i) => (
-              <Skeleton key={i} className="h-9 w-full" />
-            ))}
-          </div>
+          <LoadingRegion label="Loading exceptions">
+            <div className="flex flex-col gap-2 p-4">
+              {Array.from({ length: 8 }, (_, i) => (
+                <Skeleton key={i} className="h-9 w-full" />
+              ))}
+            </div>
+          </LoadingRegion>
         ) : rows.length === 0 ? (
           <div className="p-10 text-center">
             <div className="text-sm font-medium text-foreground">No matching exceptions</div>
@@ -178,45 +169,55 @@ export function QueuePage() {
             </div>
           </div>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Reference</TableHead>
-                <TableHead>Account</TableHead>
-                <TableHead>Root cause</TableHead>
-                <TableHead>Severity</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Assignee</TableHead>
-                <TableHead className="text-right">$ at risk</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((row) => (
-                <TableRow
-                  key={row.exception_id}
-                  onClick={() => openRow(row)}
-                  className="cursor-pointer"
-                  data-state={selected?.exception_id === row.exception_id ? 'selected' : undefined}
-                >
-                  <TableCell className="font-mono text-xs">{row.reference_id || '—'}</TableCell>
-                  <TableCell className="max-w-48 truncate">{accountLabel(row.account_name)}</TableCell>
-                  <TableCell className="text-muted-foreground">{checkLabel(row.check_type)}</TableCell>
-                  <TableCell>
-                    <SeverityBadge severity={row.severity} />
-                  </TableCell>
-                  <TableCell>
-                    <StatusChip status={row.status} />
-                  </TableCell>
-                  <TableCell className="max-w-40 truncate text-muted-foreground">
-                    {row.assignee?.split('@')[0] ?? 'Unassigned'}
-                  </TableCell>
-                  <TableCell className="text-right font-mono font-semibold tabular-nums text-destructive">
-                    {usd(row.amount_at_risk)}
-                  </TableCell>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Reference</TableHead>
+                  <TableHead>Account</TableHead>
+                  <TableHead>Root cause</TableHead>
+                  <TableHead>Severity</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Assignee</TableHead>
+                  <TableHead className="text-right">$ at risk</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {rows.map((row) => (
+                  <TableRow
+                    key={row.exception_id}
+                    onClick={() => openRow(row)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        openRow(row);
+                      }
+                    }}
+                    tabIndex={0}
+                    aria-label={`Open exception ${row.reference_id || row.exception_id}`}
+                    className="cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    data-state={selected?.exception_id === row.exception_id ? 'selected' : undefined}
+                  >
+                    <TableCell className="font-mono text-xs">{row.reference_id || '—'}</TableCell>
+                    <TableCell className="max-w-48 truncate">{accountLabel(row.account_name)}</TableCell>
+                    <TableCell className="text-muted-foreground">{checkLabel(row.check_type)}</TableCell>
+                    <TableCell>
+                      <SeverityBadge severity={row.severity} />
+                    </TableCell>
+                    <TableCell>
+                      <StatusChip status={row.status} />
+                    </TableCell>
+                    <TableCell className="max-w-40 truncate text-muted-foreground">
+                      {row.assignee?.split('@')[0] ?? 'Unassigned'}
+                    </TableCell>
+                    <TableCell className="text-right font-mono font-semibold tabular-nums text-destructive">
+                      {usd(row.amount_at_risk)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         )}
       </Card>
 

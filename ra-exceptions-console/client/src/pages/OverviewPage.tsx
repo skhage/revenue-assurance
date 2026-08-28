@@ -15,12 +15,11 @@ import {
 import { sql } from '@databricks/appkit-ui/js';
 import { useEffect, useState } from 'react';
 import { KpiTile } from '../components/KpiTile';
+import { LoadingRegion, ErrorRegion } from '../components/StatusRegion';
 import { analyticsApi } from '../lib/analytics';
 import { usdCompact, num, numCompact, checkLabel } from '../lib/format';
 import { casesApi, STATUSES, type Status } from '../lib/cases';
 import type { KpiSummary } from '../lib/types';
-
-const SOURCE = 'cdm_tmforum.revenue_assurance';
 
 function CaseProgress() {
   const [stats, setStats] = useState<Record<Status, number> | null>(null);
@@ -60,16 +59,70 @@ function CaseProgress() {
   );
 }
 
+function RootCauseBreakdown({ onRetry }: { onRetry: () => void }) {
+  const breakdown = useAnalyticsQuery('rootcause_breakdown', { severity: sql.string('ALL') });
+  const chartData = (breakdown.data ?? []).map((r) => ({
+    check: checkLabel(r.check_type),
+    'Amount at risk': r.amount_at_risk,
+    'Exception count': r.exception_count,
+  }));
+
+  if (breakdown.loading) {
+    return (
+      <LoadingRegion label="Loading breakdown">
+        <Skeleton className="h-72 w-full" />
+      </LoadingRegion>
+    );
+  }
+  if (breakdown.error) {
+    return <ErrorRegion message="Couldn't load the breakdown from the warehouse." onRetry={onRetry} className="p-0" />;
+  }
+  return (
+    <Tabs defaultValue="amount">
+      <TabsList>
+        <TabsTrigger value="amount">By $ at risk</TabsTrigger>
+        <TabsTrigger value="count">By exception count</TabsTrigger>
+      </TabsList>
+      <TabsContent value="amount">
+        <BarChart
+          data={chartData}
+          xKey="check"
+          yKey="Amount at risk"
+          orientation="horizontal"
+          colorPalette="sequential"
+          showLegend={false}
+          height={340}
+        />
+      </TabsContent>
+      <TabsContent value="count">
+        <BarChart
+          data={chartData}
+          xKey="check"
+          yKey="Exception count"
+          orientation="horizontal"
+          colorPalette="sequential"
+          showLegend={false}
+          height={340}
+        />
+      </TabsContent>
+    </Tabs>
+  );
+}
+
 export function OverviewPage() {
   const [kpi, setKpi] = useState<KpiSummary | null>(null);
   const [kpiLoading, setKpiLoading] = useState(true);
   const [kpiError, setKpiError] = useState(false);
+  const [kpiRefreshKey, setKpiRefreshKey] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
     analyticsApi
       .kpis(controller.signal)
-      .then(setKpi)
+      .then((next) => {
+        setKpi(next);
+        setKpiError(false);
+      })
       .catch((err) => {
         if (err instanceof Error && err.name !== 'AbortError') setKpiError(true);
       })
@@ -77,14 +130,17 @@ export function OverviewPage() {
         if (!controller.signal.aborted) setKpiLoading(false);
       });
     return () => controller.abort();
-  }, []);
+  }, [kpiRefreshKey]);
 
-  const breakdown = useAnalyticsQuery('rootcause_breakdown', { severity: sql.string('ALL') });
-  const chartData = (breakdown.data ?? []).map((r) => ({
-    check: checkLabel(r.check_type),
-    'Amount at risk': r.amount_at_risk,
-    'Exception count': r.exception_count,
-  }));
+  const retryKpis = () => {
+    setKpiLoading(true);
+    setKpiError(false);
+    setKpiRefreshKey((k) => k + 1);
+  };
+
+  // useAnalyticsQuery has no refetch callback — bump a key to remount the
+  // querying subtree and re-subscribe on retry.
+  const [breakdownRefreshKey, setBreakdownRefreshKey] = useState(0);
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
@@ -96,13 +152,15 @@ export function OverviewPage() {
           sublabel="Across all reconciliation checks"
           loading={kpiLoading}
           error={kpiError}
+          onRetry={retryKpis}
         />
         <KpiTile
           label="Open exceptions"
           value={numCompact(kpi?.open_exceptions)}
-          sublabel={`${SOURCE}`}
+          sublabel="Detected across 7 reconciliation checks"
           loading={kpiLoading}
           error={kpiError}
+          onRetry={retryKpis}
         />
         <KpiTile
           label="High-severity"
@@ -110,6 +168,7 @@ export function OverviewPage() {
           sublabel="Prioritized for triage"
           loading={kpiLoading}
           error={kpiError}
+          onRetry={retryKpis}
         />
         <KpiTile
           label="Accounts affected"
@@ -117,6 +176,7 @@ export function OverviewPage() {
           sublabel="Distinct customers"
           loading={kpiLoading}
           error={kpiError}
+          onRetry={retryKpis}
         />
       </div>
 
@@ -126,43 +186,10 @@ export function OverviewPage() {
       <Card className="shadow-sm">
         <CardHeader className="pb-2">
           <CardTitle>Leakage by reconciliation check</CardTitle>
-          <CardDescription>Where detected revenue leakage concentrates · {SOURCE}.gold_leakage_summary</CardDescription>
+          <CardDescription>Where detected revenue leakage concentrates, by reconciliation check</CardDescription>
         </CardHeader>
         <CardContent>
-          {breakdown.loading && <Skeleton className="h-72 w-full" />}
-          {breakdown.error && (
-            <div className="text-sm text-destructive">Couldn’t load the breakdown from the warehouse.</div>
-          )}
-          {!breakdown.loading && !breakdown.error && (
-            <Tabs defaultValue="amount">
-              <TabsList>
-                <TabsTrigger value="amount">By $ at risk</TabsTrigger>
-                <TabsTrigger value="count">By exception count</TabsTrigger>
-              </TabsList>
-              <TabsContent value="amount">
-                <BarChart
-                  data={chartData}
-                  xKey="check"
-                  yKey="Amount at risk"
-                  orientation="horizontal"
-                  colorPalette="sequential"
-                  showLegend={false}
-                  height={340}
-                />
-              </TabsContent>
-              <TabsContent value="count">
-                <BarChart
-                  data={chartData}
-                  xKey="check"
-                  yKey="Exception count"
-                  orientation="horizontal"
-                  colorPalette="sequential"
-                  showLegend={false}
-                  height={340}
-                />
-              </TabsContent>
-            </Tabs>
-          )}
+          <RootCauseBreakdown key={breakdownRefreshKey} onRetry={() => setBreakdownRefreshKey((k) => k + 1)} />
         </CardContent>
       </Card>
     </div>

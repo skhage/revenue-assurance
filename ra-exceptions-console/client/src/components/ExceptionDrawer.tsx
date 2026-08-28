@@ -20,7 +20,8 @@ import {
 import { sql } from '@databricks/appkit-ui/js';
 import { useEffect, useState } from 'react';
 import { SeverityBadge, StatusChip } from './badges';
-import { usd, num, checkLabel, accountLabel, detectionLabel } from '../lib/format';
+import { LoadingRegion } from './StatusRegion';
+import { usd, num, checkLabel, accountLabel, detectionLabel, sourceLabel } from '../lib/format';
 import { casesApi, NEXT_STATUS, type CasePayload, type Status, type ExceptionMeta } from '../lib/cases';
 import { useWhoAmI } from '../lib/whoami';
 import type { ExceptionRow } from '../lib/types';
@@ -35,9 +36,7 @@ function KV({ k, v }: { k: string; v: React.ReactNode }) {
 }
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{children}</div>
-  );
+  return <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{children}</div>;
 }
 
 interface Props {
@@ -105,7 +104,9 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="flex w-full flex-col gap-0 overflow-y-auto p-0 sm:max-w-md">
         <SheetHeader className="border-b p-5">
-          <div className="text-xs font-mono text-muted-foreground">{exception.reference_id || exception.exception_id.slice(0, 10)}</div>
+          <div className="text-xs font-mono text-muted-foreground">
+            {exception.reference_id || exception.exception_id.slice(0, 10)}
+          </div>
           <SheetTitle className="flex items-start justify-between gap-3">
             <span className="text-base">{accountLabel(exception.account_name)}</span>
             <SeverityBadge severity={exception.severity} />
@@ -122,7 +123,14 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
             <SectionTitle>Detection</SectionTitle>
             <KV k="Check" v={checkLabel(exception.check_type)} />
             <KV k="Method" v={detectionLabel(exception.detection_method)} />
-            <KV k="Source system" v={<span className="font-mono text-xs">{exception.source_table}</span>} />
+            <KV
+              k="Source system"
+              v={
+                <span className="text-xs" title={exception.source_table}>
+                  {sourceLabel(exception.source_table)}
+                </span>
+              }
+            />
             <KV k="Known leakage" v={exception.known_leakage_flag ? 'Yes (ground truth)' : 'Model-flagged'} />
             <KV k="Customer ID" v={exception.customer_id ? num(exception.customer_id) : '—'} />
           </div>
@@ -132,8 +140,16 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
           {/* Customer scorecard evidence */}
           <div className="flex flex-col gap-2.5">
             <SectionTitle>Customer reconciliation scorecard</SectionTitle>
-            {loading && <Skeleton className="h-20 w-full" />}
-            {error && <div className="text-sm text-destructive">Couldn’t load scorecard.</div>}
+            {loading && (
+              <LoadingRegion label="Loading scorecard">
+                <Skeleton className="h-20 w-full" />
+              </LoadingRegion>
+            )}
+            {error && (
+              <div role="alert" className="text-sm text-destructive">
+                Couldn’t load scorecard.
+              </div>
+            )}
             {!loading && !error && detail?.risk_tier && (
               <>
                 <KV k="Risk tier" v={detail.risk_tier} />
@@ -165,7 +181,9 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
             )}
 
             {caseLoading ? (
-              <Skeleton className="h-24 w-full" />
+              <LoadingRegion label="Loading case">
+                <Skeleton className="h-24 w-full" />
+              </LoadingRegion>
             ) : (
               <>
                 <div className="flex items-center justify-between">
@@ -194,7 +212,7 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
                       disabled={busy || nextStates.length === 0}
                       onValueChange={(v) =>
                         void run(() =>
-                          casesApi.changeStatus(exception.exception_id, v as Status, note.trim() || undefined, meta),
+                          casesApi.changeStatus(exception.exception_id, v as Status, note.trim() || undefined, meta)
                         )
                       }
                     >
