@@ -24,5 +24,6 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["client/src", "shared/appkit-types"]
+  "include": ["client/src", "shared/appkit-types"],
+  "exclude": ["client/src/**/*.test.ts", "client/src/**/*.test.tsx", "client/src/test-setup.ts"]
 }

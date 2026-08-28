@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.client.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.test.tsbuildinfo",
+    "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom"],
+    "noEmit": true
+  },
+  "include": ["client/src/**/*.test.ts", "client/src/**/*.test.tsx", "client/src/test-setup.ts", "shared/appkit-types"],
+  "exclude": []
+}

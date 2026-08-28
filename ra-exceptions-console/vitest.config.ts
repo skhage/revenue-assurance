@@ -6,6 +6,7 @@ export default defineConfig({
     passWithNoTests: true,
     globals: true,
     environment: 'node',
+    setupFiles: ['./client/src/test-setup.ts'],
     exclude: ['**/node_modules/**', '**/dist/**', '**/.databricks/**'],
   },
   resolve: {

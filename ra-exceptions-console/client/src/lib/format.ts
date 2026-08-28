@@ -47,10 +47,7 @@ const CHECK_LABELS: Record<string, string> = {
 
 export function checkLabel(check: string | null | undefined): string {
   if (!check) return 'Unknown';
-  return (
-    CHECK_LABELS[check] ??
-    check.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
-  );
+  return CHECK_LABELS[check] ?? check.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 export function accountLabel(name: string | null | undefined): string {
@@ -60,6 +57,21 @@ export function accountLabel(name: string | null | undefined): string {
 export function detectionLabel(method: string | null | undefined): string {
   if (!method) return '—';
   return method === 'ai_extracted' ? 'AI-extracted' : method === 'rule_based' ? 'Rule-based' : method;
+}
+
+// Friendly names for the simulated upstream source systems (schema.table).
+const SOURCE_LABELS: Record<string, string> = {
+  salesforce_source: 'CRM (Salesforce)',
+  oracle_erp_source: 'ERP (Oracle)',
+  refinitiv_fx_source: 'FX rates (Refinitiv)',
+  ironclad_clm_source: 'Contracts (Ironclad CLM)',
+  mdm_source: 'Master data (MDM)',
+};
+
+export function sourceLabel(table: string | null | undefined): string {
+  if (!table) return 'Unknown source system';
+  const schema = table.split('.')[0];
+  return SOURCE_LABELS[schema] ?? 'Other source system';
 }
 
 /** Compact person initials for avatars, e.g. "stephen.hage@x" → "SH". */

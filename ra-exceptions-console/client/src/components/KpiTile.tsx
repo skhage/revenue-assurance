@@ -1,5 +1,6 @@
 import { Card, CardContent, Skeleton } from '@databricks/appkit-ui/react';
 import type { ReactNode } from 'react';
+import { LoadingRegion } from './StatusRegion';
 
 interface KpiTileProps {
   label: string;
@@ -12,6 +13,11 @@ interface KpiTileProps {
 /**
  * Composed KPI tile (AppKit ships no prebuilt KPI card). Big tabular figure,
  * a label, and a source/period sublabel so every number carries provenance.
+ *
+ * On error, renders a quiet, non-alerting "Unavailable" placeholder — the
+ * single group-level failure (with its one retry action) is announced once
+ * by the caller instead of once per tile, so screen-reader users don't hear
+ * the same alert four times.
  */
 export function KpiTile({ label, value, sublabel, loading, error }: KpiTileProps) {
   return (
@@ -19,9 +25,11 @@ export function KpiTile({ label, value, sublabel, loading, error }: KpiTileProps
       <CardContent className="flex flex-col gap-1.5 p-4 md:p-5">
         <span className="text-xs text-muted-foreground">{label}</span>
         {loading ? (
-          <Skeleton className="h-8 w-24" />
+          <LoadingRegion label={`Loading ${label}`}>
+            <Skeleton className="h-8 w-24" />
+          </LoadingRegion>
         ) : error ? (
-          <span className="text-sm text-destructive">Unavailable</span>
+          <span className="text-sm text-muted-foreground">Unavailable</span>
         ) : (
           <span className="font-mono text-2xl font-semibold tabular-nums text-foreground">{value}</span>
         )}
