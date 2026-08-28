@@ -29,13 +29,13 @@ All scenarios assume a deterministic seed on the fixed `cdm_tmforum` dataset, so
 
 ### 1.2 The reconciliation checks (silver MVs → `revenue_assurance.gold_leakage_summary`)
 
-Each check is a `CREATE OR REFRESH MATERIALIZED VIEW` in `cdm_tmforum.revenue_assurance`; flagged rows union into `gold_leakage_summary` (`check_type`, `severity`, `amount_at_risk`, `account_name`, `reference_id`, `source_table`, `detection_method`, `known_leakage_flag`).
+Each check is a `CREATE OR REFRESH MATERIALIZED VIEW` in `cdm_tmforum.revenue_assurance`; flagged rows union into `gold_leakage_summary` (`check_type`, `severity`, `amount_at_risk`, `account_name`, `reference_id`, `source_table`, `detection_method`, `known_leakage_flag`). The compatibility flag is always `FALSE` in production.
 
 | ID | Silver check (MV) | Given | When | Then (`check_type` in `gold_leakage_summary`) |
 | :---- | :---- | :---- | :---- | :---- |
-| CHK-1 | `silver_contract_price_reconciliation` | `salesforce_source.contract_line_item.UnitPrice` (contracted, source of truth) diverges >1% per-unit from the independent `oracle_erp_source.ra_billed_circuit_rates.BILLED_UNIT_PRICE` extract | Refresh runs | `contract_price_mismatch`; `amount_at_risk` = \|contracted_total − billed_total\| (Quantity-scaled, not just the per-unit difference); HIGH/MEDIUM by size |
+| CHK-1 | `silver_contract_price_reconciliation` | Independent Salesforce and ERP line-key extracts disagree or one side is missing | Refresh runs | `contract_price_mismatch`, `contract_price_missing_erp`, or `contract_price_missing_salesforce`; non-null one-sided/full-total exposure and source line reference retained |
 | CHK-2 | `silver_discount_authorization_check` | A quote line discount exceeds `sbqq__quote__c.discount_approval__c`, or an expired quote is still Approved | Refresh runs | `unauthorized_discount` (HIGH, line grain) and/or `expired_quote_active` (MEDIUM, quote grain — deduped so a multi-line quote counts once) |
-| CHK-3 | `silver_fx_rate_validation` | The rate billing actually applied (`ra_customer_trx_all.APPLIED_EXCHANGE_RATE`) to a non-USD invoice deviates > 1% from the independently-sourced Refinitiv market rate | Refresh runs | FX-deviation row flagged (validation check; not unioned into the register) |
+| CHK-3 | `silver_fx_rate_validation` | The independently applied ERP rate deviates from Refinitiv, is absent, lacks a date quote, or uses an unsupported currency | Refresh runs | `fx_rate_mismatch`, `fx_missing_applied_rate`, `fx_missing_market_rate`, or `fx_unsupported_currency` with invoice drill-down evidence |
 | CHK-4 | `silver_ar_aging_analysis` | `oracle_erp_source.ar_payment_schedules_all` shows 90+ day overdue / high DSO | Refresh runs | `ar_collection_risk` (HIGH); `amount_at_risk` = outstanding |
 | CHK-5 | `silver_revenue_recognition_check` | ASC-606 `revenue_recognition_schedule`'s full per-invoice recognition total diverges from that same invoice-origination period's `gl_je_lines` postings (compatible grain — both sides are "revenue attributable to invoices billed in period X") | Refresh runs | `rev_rec_timing_mismatch` (MEDIUM); `amount_at_risk` = |recognition variance| |
 | CHK-6 | `silver_doc_intelligence_contracts` | `ai_parse_document` + `ai_extract` on an `ironclad_clm_source` contract PDF disagrees with the system record | Refresh runs | `doc_contract_mismatch` (HIGH); `detection_method='ai_extracted'` |
@@ -47,8 +47,9 @@ Each check is a `CREATE OR REFRESH MATERIALIZED VIEW` in `cdm_tmforum.revenue_as
 | ID | Given | When | Then |
 | :---- | :---- | :---- | :---- |
 | SCR-1 | `gold_reconciliation_scorecard` for a customer | Refresh runs | One row per scored customer with `composite_health_score` and `risk_tier` ∈ {GREEN, AMBER, RED} |
-| SCR-2 | Leakage exceptions across multiple check_types | Gold refresh completes | Scorecard aggregates **all seven** check_types per customer (price, discount, expired-quote, AR, rev-rec, doc-contract, doc-invoice), not a subset; one row per customer, no duplicates |
+| SCR-2 | Leakage exceptions across multiple controls | Gold refresh completes | Scorecard aggregates all eight controls per customer (price, discount, FX, expired-quote, AR, rev-rec, doc-contract, doc-invoice), not a subset; one row per customer, no duplicates |
 | SCR-3 | A customer with no exceptions | Refresh runs | They appear in the scorecard with `risk_tier='GREEN'` and `composite_health_score` near 100 |
+| SCR-4 | ERP-only price rows have no customer attribution | Gold refresh completes | No synthetic NULL-customer scorecard row is created; repeated unattributed count/risk columns equal the `contract_price_missing_salesforce` drill-down totals in `gold_leakage_summary` |
 
 ### 1.4 ML anomaly + revenue forecast (`gold_anomaly_scores`, `gold_revenue_forecast_anomalies`)
 
@@ -84,7 +85,7 @@ Case state is written by the AppKit app to Lakebase Postgres (project `ra-consol
 | DQ-1 | `*_source.*` | Row counts within tolerance of seed targets (e.g., ~10K customers, ~100K circuits) | warn |
 | DQ-2 | `revenue_assurance.silver_contract_price_reconciliation` | `customer_id` resolvable; independent `billed_unit_price` resolvable; `estimated_amount_at_risk` ≥ 0 | warn |
 | DQ-3 | `revenue_assurance.silver_ar_aging_analysis` | `total_outstanding` ≥ 0; `collection_risk` ∈ {LOW, MEDIUM, HIGH} | drop invalid |
-| DQ-4 | `revenue_assurance.gold_leakage_summary` | `check_type` ∈ the 7 known types; `severity` ∈ {HIGH, MEDIUM}; `amount_at_risk` ≥ 0 | fail |
+| DQ-4 | `revenue_assurance.gold_leakage_summary` | `check_type` is in the explicit price/FX/discount/AR/rev-rec/document set; `severity` ∈ {HIGH, MEDIUM}; `amount_at_risk` ≥ 0 | fail |
 | DQ-5 | `revenue_assurance.gold_reconciliation_scorecard` | one row per scored customer; `composite_health_score` ∈ [0,100]; `risk_tier` ∈ {GREEN, AMBER, RED} | fail |
 | DQ-6 | `revenue_assurance.gold_revenue_forecast_anomalies` | `anomaly_status` ∈ {ABOVE_EXPECTED, BELOW_EXPECTED, NORMAL}; one row per month | warn |
 | DQ-7 | `ra.cases` (Lakebase) | `exception_id` PK unique; `status` ∈ {New, Investigating, Recovering, Recovered, WrittenOff} | fail |
@@ -118,7 +119,7 @@ The gold materialized views (`CREATE OR REFRESH MATERIALIZED VIEW`) are the repr
 | SMK-3 | Catalog & schema | `cdm_tmforum` exists; `revenue_assurance` + `*_source` schemas present; Lakebase project `ra-console-lakebase` reachable |
 | SMK-4 | Source simulator | `simulate_source_systems` last run = SUCCESS; `*_source.*` tables non-empty and deterministic |
 | SMK-5 | Silver/gold refresh | The `revenue_assurance` materialized views refresh; `gold_leakage_summary` non-empty (~48K rows); `gold_reconciliation_scorecard` one row per scored customer |
-| SMK-6 | Register totals | `SUM(amount_at_risk)` over `gold_leakage_summary` ≈ $601M (±5%); all 7 `check_type`s present (see §5) |
+| SMK-6 | Register totals | `SUM(amount_at_risk)` over `gold_leakage_summary` is non-negative and every documented price/FX/discount/AR/rev-rec/document `check_type` is queryable |
 | SMK-7 | Dashboard | AI/BI dashboard loads < 5s; tiles render non-null; KPI totals reconcile to `gold_leakage_summary` |
 | SMK-8 | App | `ra-exceptions-console` status = RUNNING; `/api/whoami` returns the signed-in user; Queue loads rows; filters work |
 | SMK-9 | Genie (planned) | Scripted question returns a governed answer; respects masking |

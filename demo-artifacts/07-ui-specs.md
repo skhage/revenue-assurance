@@ -147,7 +147,7 @@ Shows one violation, the identity-resolution evidence, and the case action bar.
 | Detection evidence | Per-check detail from source: e.g. for `contract_price_mismatch`: `salesforce_source.contract_line_item.UnitPrice` vs `tmf_customer.bill` actual charged; for `ar_collection_risk`: `oracle_erp_source.ar_payment_schedules_all` DSO/aging; for `doc_invoice_mismatch`: `ai_parse_document` parsed vs system-of-record from `oracle_erp_source.ra_customer_trx_all` |
 | Customer / Account context | `tmf_customer.customer` + `salesforce_source.account` (joined via `TMF_Customer_Id__c`); `account_name` masked by UC column policy |
 | Reference business object | `gold_leakage_summary.reference_id` (contract #, quote id, invoice #, DSO period, GL period, or PDF doc reference) + `source_table` pointer |
-| Known leakage indicator | `gold_leakage_summary.known_leakage_flag` (TRUE for seeded/ground-truth exceptions) |
+| Known leakage indicator | `gold_leakage_summary.known_leakage_flag` (compatibility field; always FALSE in production) |
 | Case block | Lakebase `ra.cases` row (status, assignee, created_at, updated_at); `ra.case_notes` append-only notes timeline |
 
 Evidence panel is **violation-type aware** — e.g. Contract-price mismatch shows committed amount vs billed amount side by side; Usage–billing variance shows usage series vs flat billing.

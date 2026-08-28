@@ -149,6 +149,51 @@ scorecard_uniqueness_check AS (
     'row_count = count(distinct customer_id)' AS expected_condition
   FROM scorecard_counts
 ),
+scorecard_unattributed_totals AS (
+  SELECT
+    COUNT(*) AS scorecard_rows,
+    MIN(unattributed_missing_salesforce_exceptions) AS min_exception_count,
+    MAX(unattributed_missing_salesforce_exceptions) AS max_exception_count,
+    MIN(unattributed_missing_salesforce_amount_at_risk) AS min_risk_amount,
+    MAX(unattributed_missing_salesforce_amount_at_risk) AS max_risk_amount,
+    (
+      SELECT COUNT(*)
+      FROM gold_leakage_summary
+      WHERE check_type = 'contract_price_missing_salesforce' AND customer_id IS NULL
+    ) AS leakage_exception_count,
+    (
+      SELECT COALESCE(SUM(amount_at_risk), 0)
+      FROM gold_leakage_summary
+      WHERE check_type = 'contract_price_missing_salesforce' AND customer_id IS NULL
+    ) AS leakage_risk_amount
+  FROM gold_reconciliation_scorecard
+),
+scorecard_unattributed_check AS (
+  SELECT
+    'DQ-5' AS check_type,
+    'gold_reconciliation_scorecard' AS dataset,
+    'dq5_unattributed_missing_salesforce_totals_match_gold_drilldown' AS expectation_name,
+    CAST(NULL AS STRING) AS update_id,
+    CAST(NULL AS TIMESTAMP) AS observed_at,
+    scorecard_rows AS observed_records,
+    CASE WHEN min_exception_count = max_exception_count
+           AND min_risk_amount = max_risk_amount
+           AND max_exception_count = leakage_exception_count
+           AND ABS(max_risk_amount - leakage_risk_amount) < 0.01
+      THEN scorecard_rows ELSE 0 END AS passed_records,
+    CASE WHEN min_exception_count = max_exception_count
+           AND min_risk_amount = max_risk_amount
+           AND max_exception_count = leakage_exception_count
+           AND ABS(max_risk_amount - leakage_risk_amount) < 0.01
+      THEN 0 ELSE scorecard_rows END AS failed_records,
+    CASE WHEN min_exception_count = max_exception_count
+           AND min_risk_amount = max_risk_amount
+           AND max_exception_count = leakage_exception_count
+           AND ABS(max_risk_amount - leakage_risk_amount) < 0.01
+      THEN 'GREEN' ELSE 'RED' END AS status,
+    'scorecard unattributed totals are constant and equal gold_leakage_summary drill-down totals' AS expected_condition
+  FROM scorecard_unattributed_totals
+),
 -- DQ-2 (set-level half): SOURCE_LINE_ITEM_ID must be a genuine primary key on
 -- ra_billed_circuit_rates, or the 1:1 join in silver_contract_price_reconciliation
 -- degrades back into a many-to-many fan-out. Row-level EXPECT clauses cannot
@@ -173,32 +218,50 @@ billed_rate_key_uniqueness_check AS (
     'row_count = count(distinct SOURCE_LINE_ITEM_ID)' AS expected_condition
   FROM billed_rate_key_counts
 ),
--- DQ-2 (set-level half): silver_contract_price_reconciliation must emit
--- exactly one row per contract line -- the row-level line_item_match_count
--- expectation catches a fan-out that DOES happen, but this independently
--- proves the silver MV's total row count equals contract_line_item's row
--- count (i.e. the join dropped nothing AND duplicated nothing).
+-- DQ-2 (set-level half): silver_contract_price_reconciliation is a FULL
+-- OUTER JOIN, so its row count is NOT simply contract_line_item's row
+-- count -- it is contract_line_item's count PLUS the ERP-only
+-- (MISSING_SALESFORCE) rows that have no matching contract line at all.
+-- The prior version asserted observed_records = contract_line_item_count,
+-- which is only true for a LEFT/INNER join; it would incorrectly fail (RED)
+-- every time the simulator's missing_side_rate injects any
+-- MISSING_SALESFORCE rows (which it always does by default -- see
+-- data-sim/config.yaml). Fixed to independently compute the expected total
+-- as contract_line_item's count plus the count of ra_billed_circuit_rates
+-- rows whose SOURCE_LINE_ITEM_ID has no match in contract_line_item (a
+-- direct, join-based count of the ERP-only rows, not a guess at the
+-- simulator's injection rate). The row-level line_item_match_count/
+-- billed_rate_match_count expectations catch true fan-out; this
+-- independently proves nothing was dropped OR silently duplicated beyond
+-- the expected ERP-only additions.
 price_recon_grain_counts AS (
   SELECT
     (SELECT COUNT(*) FROM silver_contract_price_reconciliation) AS observed_records,
     (SELECT COUNT(DISTINCT line_item_id) FROM silver_contract_price_reconciliation) AS unique_line_items,
-    (SELECT COUNT(*) FROM salesforce_source.contract_line_item) AS contract_line_item_count
+    (SELECT COUNT(*) FROM salesforce_source.contract_line_item) AS contract_line_item_count,
+    (
+      SELECT COUNT(*)
+      FROM oracle_erp_source.ra_billed_circuit_rates billed
+      LEFT ANTI JOIN salesforce_source.contract_line_item cli
+        ON cli.Id = billed.SOURCE_LINE_ITEM_ID
+    ) AS erp_only_row_count
 ),
 price_recon_grain_check AS (
   SELECT
     'DQ-2' AS check_type,
     'silver_contract_price_reconciliation' AS dataset,
-    'dq2_exactly_one_row_per_contract_line' AS expectation_name,
+    'dq2_full_outer_row_count_accounts_for_erp_only_rows' AS expectation_name,
     CAST(NULL AS STRING) AS update_id,
     CAST(NULL AS TIMESTAMP) AS observed_at,
     observed_records,
     unique_line_items AS passed_records,
     observed_records - unique_line_items AS failed_records,
     CASE
-      WHEN observed_records = unique_line_items AND observed_records = contract_line_item_count
+      WHEN observed_records = unique_line_items
+       AND observed_records = contract_line_item_count + erp_only_row_count
       THEN 'GREEN' ELSE 'RED'
     END AS status,
-    'row_count = count(distinct line_item_id) = contract_line_item row_count' AS expected_condition
+    'row_count = count(distinct line_item_id) = contract_line_item row_count + erp_only_row_count' AS expected_condition
   FROM price_recon_grain_counts
 )
 SELECT * FROM inline_expectation_checks
@@ -206,6 +269,8 @@ UNION ALL
 SELECT * FROM source_volume_checks
 UNION ALL
 SELECT * FROM scorecard_uniqueness_check
+UNION ALL
+SELECT * FROM scorecard_unattributed_check
 UNION ALL
 SELECT * FROM billed_rate_key_uniqueness_check
 UNION ALL

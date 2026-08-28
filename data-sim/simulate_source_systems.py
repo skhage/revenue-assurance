@@ -862,10 +862,16 @@ write_table(billed_rates_out, SCHEMA_ERP, "ra_billed_circuit_rates",
      "BILLED_TOTAL_AMOUNT":"Actual ERP-billed monthly total for the circuit."})
 
 # ---- RA_CUSTOMER_TRX_ALL : AR invoice headers (from tmf bill) ----------------
-# Invoice currency is the customer's real billing_currency (tmf_customer.customer),
-# restricted to the currency pairs Refinitiv actually quotes (config.yaml
-# `fx_pairs:`) — customers outside that set invoice in USD. This gives FX
-# validation meaningful non-USD transactions to check, instead of an all-USD book.
+# Invoice currency is the customer's REAL billing_currency (tmf_customer.
+# customer) UNCHANGED -- previously this coerced any currency outside
+# config.yaml `fx_pairs:` to USD, which silently erased the "customer bills
+# in a currency our FX validation doesn't even support" scenario (~21 of 27
+# real billing_currency values in the golden data are not in fx_pairs, e.g.
+# PLN/BGN/CNY/NOK/INR/CHF/HUF -- verified live). Keeping the real currency
+# means silver_fx_rate_validation's UNSUPPORTED_CURRENCY status (distinct
+# from MISSING_MARKET_RATE, which means "supported currency, no quote for
+# this specific date") is deterministically exercised by real customer data
+# every run, not left as dead code.
 #
 # INDEPENDENCE (APPLIED_EXCHANGE_RATE vs gl_daily_rates.CONVERSION_RATE):
 #   The ERP does NOT recompute the market rate from a parallel formula. It
@@ -881,12 +887,15 @@ write_table(billed_rates_out, SCHEMA_ERP, "ra_billed_circuit_rates",
 #   small spread alone stays far under the 1% detection threshold on
 #   non-leakage invoices (satisfying CHK-0); only the independent leakage
 #   draw pushes an invoice's applied rate far enough from market to flag.
-_fx_currencies = [p[0] for p in FX_PAIRS if p[0] != "USD"]
-_fx_currency_expr = F.array(*[F.lit(c) for c in _fx_currencies]) if _fx_currencies else F.array()
+#   For an UNSUPPORTED_CURRENCY invoice there is no market_rate_lookup match
+#   at all (no fx_pairs entry for that FROM_CURRENCY), so APPLIED_EXCHANGE_RATE
+#   falls back to a deterministic same-currency rate derived independently
+#   from the invoice's own key (not copied from any market source, since
+#   none exists) -- silver_fx_rate_validation flags the row as
+#   UNSUPPORTED_CURRENCY before ever looking at this value.
 cust_currency = spark.table(f"{CATALOG}.tmf_customer.customer").select(
     F.col("customer_id").alias("_ccid"),
-    F.when(F.array_contains(_fx_currency_expr, F.col("billing_currency")), F.col("billing_currency"))
-     .otherwise(F.lit("USD")).alias("INVOICE_CURRENCY_CODE"))
+    F.coalesce(F.col("billing_currency"), F.lit("USD")).alias("INVOICE_CURRENCY_CODE"))
 market_rate_lookup = fx.select(
     F.col("FROM_CURRENCY").alias("_fx_currency"),
     F.col("CONVERSION_DATE").alias("_fx_date"),
@@ -928,10 +937,10 @@ write_table(trx.select("CUSTOMER_TRX_ID","TRX_NUMBER","TRX_DATE","BILL_TO_CUSTOM
         F.col("total_amount").alias("INVOICE_AMOUNT"), F.col("tax_amount").alias("TAX_AMOUNT"),
         F.col("bill_id").alias("TMF_BILL_ID")),
     SCHEMA_ERP, "ra_customer_trx_all",
-    "Oracle Receivables RA_CUSTOMER_TRX_ALL: AR invoice headers. Derived 1:1 from tmf_customer.bill so ERP finance and billing reconcile to the same invoices. Invoice currency follows the customer's real billing_currency (restricted to Refinitiv-quoted pairs).",
+    "Oracle Receivables RA_CUSTOMER_TRX_ALL: AR invoice headers. Derived 1:1 from tmf_customer.bill so ERP finance and billing reconcile to the same invoices. Invoice currency follows the customer's real billing_currency UNCHANGED -- not restricted to Refinitiv-quoted pairs, so silver_fx_rate_validation's UNSUPPORTED_CURRENCY status is deterministically exercised by real customer data.",
     {"CUSTOMER_TRX_ID":"Receivables transaction id (PK).","TRX_NUMBER":"Human-readable invoice number.",
      "TRX_DATE":"Invoice date.","BILL_TO_CUSTOMER_ID":"FK to hz_cust_accounts.CUST_ACCOUNT_ID.",
-     "INVOICE_CURRENCY_CODE":"Invoice currency (customer billing_currency, restricted to Refinitiv-quoted pairs; else USD).",
+     "INVOICE_CURRENCY_CODE":"Invoice currency copied unchanged from customer billing_currency (NULL defaults to USD); currencies without Refinitiv coverage remain visible for explicit UNSUPPORTED_CURRENCY reconciliation outcomes.",
      "APPLIED_EXCHANGE_RATE":"Rate the billing system actually applied to convert this invoice to USD -- looked up from the real Refinitiv market print plus ERP's own small spread. Reconciled against refinitiv_fx_source.gl_daily_rates by silver_fx_rate_validation; diverges materially only where FX leakage was seeded.",
      "INVOICE_AMOUNT":"Invoice total (matches tmf bill.total_amount).","TMF_BILL_ID":"Crosswalk to tmf_customer.bill.bill_id."})
 

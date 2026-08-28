@@ -8,7 +8,7 @@
 > - ❌ **WRONG (superseded):** The "6 checks" (active-circuit-unbilled, usage–billing variance, billing-start-lag, partner-settlement). **FIXED:** the built check **set changed** — seven silver checks centered on contract-price, discount authorization, FX validation, AR aging, rev-rec timing, and two AI document-intelligence checks (see §7).
 > - ✅ **KEPT:** Personas (Dana Whitfield, Marcus Chen, Priya Nair), the RA Exceptions Console app, and UC-governed PII masking.
 > - ✅ **2026-08 correction applied:** Unified single `cdm_tmforum.revenue_assurance` schema, 7 check_type enum values, Lakebase Postgres case store (`ra.cases`/`ra.case_notes`), AppKit architecture; all data bindings updated; `service_instance` bridge removed; ML/forecast via `ai_forecast` + `gold_revenue_forecast_anomalies`; ~48K rows, ~$601M at-risk register.
-> - ❌ **WRONG (audit finding, fixed 2026-08):** `silver_contract_price_reconciliation` read the simulator's seeded `leakage_flag` to derive its own detection status, and `silver_fx_rate_validation` compared the market rate to a hardcoded `1.0` — neither check was an independent comparison of source-of-truth values. **FIXED:** contract price now compares `contract_line_item.UnitPrice` against a new independent `oracle_erp_source.ra_billed_circuit_rates.BILLED_UNIT_PRICE` extract; FX now compares `ra_customer_trx_all.APPLIED_EXCHANGE_RATE` against Refinitiv's market rate, over real non-USD invoices (`INVOICE_CURRENCY_CODE` now follows the customer's actual `billing_currency`, not a hardcoded `'USD'`). Revenue-recognition now groups both sides by invoice-origination period (previously compared full-invoice GL postings against a different mixed-cohort recognition-schedule grain). The forecast anomaly view now retains future rows and evaluates a held-out actuals window instead of joining historical actuals to a future-only forecast that never overlapped. The scorecard now scores all seven controls, not four. Expired-quote counting is now at quote grain, not line grain.
+> - ❌ **WRONG (audit finding, fixed 2026-08):** `silver_contract_price_reconciliation` read the simulator's seeded `leakage_flag` to derive its own detection status, and `silver_fx_rate_validation` compared the market rate to a hardcoded `1.0` — neither check was an independent comparison of source-of-truth values. **FIXED:** contract price now compares `contract_line_item.UnitPrice` against a new independent `oracle_erp_source.ra_billed_circuit_rates.BILLED_UNIT_PRICE` extract; FX now compares `ra_customer_trx_all.APPLIED_EXCHANGE_RATE` against Refinitiv's market rate, over real non-USD invoices (`INVOICE_CURRENCY_CODE` now follows the customer's actual `billing_currency`, not a hardcoded `'USD'`). Revenue-recognition now groups both sides by invoice-origination period (previously compared full-invoice GL postings against a different mixed-cohort recognition-schedule grain). The forecast anomaly view now retains future rows and evaluates a held-out actuals window instead of joining historical actuals to a future-only forecast that never overlapped. The scorecard now scores all eight controls, not four. Expired-quote counting is now at quote grain, not line grain.
 
 **Demo:** Revenue Assurance Lakehouse for Lakelink Fiber (Lumen pitch audience)  
 **Catalog / schema:** `cdm_tmforum` (TM Forum SID, read-only) + one new `cdm_tmforum.revenue_assurance` schema  
@@ -85,18 +85,18 @@ All silver MVs are `CREATE OR REFRESH MATERIALIZED VIEW cdm_tmforum.revenue_assu
 
 ### revenue_assurance.gold_leakage_summary — **unified exception register (queue/KPI source)**
 
-Union of every silver check's leakage rows. ~48K rows, ~$601M at risk, 7 `check_type`s.
+Union of every silver check's exception rows, including explicit missing-side price and FX outcomes.
 
 | Column | Type | Description |
 | :---- | :---- | :---- |
-| check_type | STRING | `contract_price_mismatch`, `unauthorized_discount`, `expired_quote_active`, `ar_collection_risk`, `rev_rec_timing_mismatch`, `doc_contract_mismatch`, `doc_invoice_mismatch` |
+| check_type | STRING | Price mismatch/missing-side, FX mismatch/missing/unsupported, discount, expired quote, AR, rev-rec, and document exception types |
 | severity | STRING | `HIGH` / `MEDIUM` (driven by check + $) |
 | customer_id | BIGINT | Owning customer (nullable for unattributed rows) |
 | account_name | STRING | Customer/account name (nullable) |
 | amount_at_risk | DOUBLE | Estimated leakage / amount at risk |
 | source_table | STRING | Originating `*_source` table (evidence pointer) |
 | detection_method | STRING | `rule_based` or `ai_extracted` |
-| known_leakage_flag | BOOLEAN | TRUE where seeded ground-truth leakage |
+| known_leakage_flag | BOOLEAN | Compatibility field; always `FALSE` in production so simulator truth never leaks into serving outputs |
 | reference_id | STRING | Business reference (contract #, quote id, invoice #, period…) |
 
 > The app synthesizes a stable `exception_id = md5(check_type | reference_id | customer_id | amount_at_risk)` at read time so case state can key on it without materializing all ~48K rows into Postgres.
@@ -108,11 +108,13 @@ Union of every silver check's leakage rows. ~48K rows, ~$601M at risk, 7 `check_
 | customer_id | BIGINT | Customer |
 | account_name | STRING | From `salesforce_source.account` |
 | account_status, arpu_tier, billing_currency | STRING | From `tmf_customer.customer` |
-| price_accuracy_score, discount_compliance_score, collection_efficiency_score, doc_consistency_score | DOUBLE | 0–100 component scores |
+| price_accuracy_score, discount_compliance_score, fx_accuracy_score, expired_quote_compliance_score, collection_efficiency_score, rev_rec_accuracy_score, doc_consistency_score, doc_invoice_consistency_score | DOUBLE | 0–100 component scores covering every reconciliation control |
 | composite_health_score | DOUBLE | Weighted composite (0–100) |
 | risk_tier | STRING | `GREEN` (≥90) / `AMBER` (≥70) / `RED` |
 | total_amount_at_risk | DOUBLE | Sum of the customer's at-risk amounts |
 | total_exceptions | BIGINT | Count of the customer's exceptions |
+| unattributed_missing_salesforce_exceptions | BIGINT | Global ERP-only price exception count repeated on each scorecard row to preserve customer grain |
+| unattributed_missing_salesforce_amount_at_risk | DOUBLE | Global ERP-only price risk repeated on each scorecard row; reconciles to leakage-register drill-down rows |
 
 ### revenue_assurance.gold_anomaly_scores — ML anomaly output
 Per-entity anomaly scores from the MLflow model (usage/billing/revenue variance). Note: the golden data is statistically flat; the source generator injects sharp anomalies for a compelling ML scene.

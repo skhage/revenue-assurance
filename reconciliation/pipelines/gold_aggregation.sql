@@ -57,6 +57,10 @@ CREATE OR REFRESH MATERIALIZED VIEW gold_leakage_summary (
       'contract_price_mismatch',
       'contract_price_missing_erp',
       'contract_price_missing_salesforce',
+      'fx_rate_mismatch',
+      'fx_unsupported_currency',
+      'fx_missing_market_rate',
+      'fx_missing_applied_rate',
       'unauthorized_discount',
       'expired_quote_active',
       'doc_contract_mismatch',
@@ -124,6 +128,45 @@ SELECT
   CAST(line_item_id AS STRING) AS reference_id
 FROM silver_contract_price_reconciliation
 WHERE reconciliation_status = 'MISSING_SALESFORCE'
+
+UNION ALL
+
+-- FX validation exceptions. The silver view is invoice-grain and does not
+-- carry customer attributes, so resolve them through the ERP invoice header
+-- and customer-account crosswalk. Each explicit missing/deviation outcome is
+-- preserved as its own check_type for auditable root-cause filtering.
+SELECT
+  CASE fx.fx_validation_status
+    WHEN 'MISMATCH' THEN 'fx_rate_mismatch'
+    WHEN 'UNSUPPORTED_CURRENCY' THEN 'fx_unsupported_currency'
+    WHEN 'MISSING_MARKET_RATE' THEN 'fx_missing_market_rate'
+    WHEN 'MISSING_APPLIED_RATE' THEN 'fx_missing_applied_rate'
+  END AS check_type,
+  CASE
+    WHEN fx.fx_validation_status = 'MISMATCH' AND fx.rate_deviation_pct > 0.05 THEN 'HIGH'
+    ELSE 'MEDIUM'
+  END AS severity,
+  hz.TMF_CUSTOMER_ID AS customer_id,
+  a.Name AS account_name,
+  fx.INVOICE_AMOUNT AS amount_at_risk,
+  CASE
+    WHEN fx.fx_validation_status = 'MISSING_APPLIED_RATE'
+      THEN 'oracle_erp_source.ra_customer_trx_all'
+    ELSE 'refinitiv_fx_source.gl_daily_rates'
+  END AS source_table,
+  fx.detection_method,
+  FALSE AS known_leakage_flag,
+  fx.TRX_NUMBER AS reference_id
+FROM silver_fx_rate_validation fx
+JOIN oracle_erp_source.ra_customer_trx_all trx
+  ON trx.CUSTOMER_TRX_ID = fx.CUSTOMER_TRX_ID
+LEFT JOIN oracle_erp_source.hz_cust_accounts hz
+  ON hz.CUST_ACCOUNT_ID = trx.BILL_TO_CUSTOMER_ID
+LEFT JOIN salesforce_source.account a
+  ON a.TMF_Customer_Id__c = hz.TMF_CUSTOMER_ID
+WHERE fx.fx_validation_status IN (
+  'MISMATCH', 'UNSUPPORTED_CURRENCY', 'MISSING_MARKET_RATE', 'MISSING_APPLIED_RATE'
+)
 
 UNION ALL
 
@@ -232,15 +275,19 @@ WHERE collection_risk = 'HIGH';
 
 -- -----------------------------------------------------------------------------
 -- 10. Reconciliation Scorecard
--- Per-customer health score for dashboard consumption.
+-- Per-customer health score for dashboard consumption. ERP-only price rows
+-- that cannot be assigned to a customer are exposed as repeated, scorecard-
+-- level audit totals instead of introducing a synthetic NULL-customer row;
+-- this preserves DQ-5's one-real-row-per-customer contract.
 --
 -- COVERAGE FIX: the prior version scored only 4 of the 7 reconciliation
 --   controls (price, discount/unauthorized, AR/collection, doc-contract) --
 --   omitting revenue-recognition, invoice-document mismatch, and expired-quote
---   entirely, despite all three having customer-attributable evidence. All 7
---   controls are now represented as named components, each weighted so the
---   composite still sums to 1.0 (0.20/0.15/0.10/0.20/0.15/0.10/0.10 for
---   price/discount/expired-quote/AR/rev-rec/doc-contract/doc-invoice).
+--   entirely, despite all three having customer-attributable evidence. All
+--   controls are now represented as named components, including FX, each
+--   weighted so the composite still sums to 1.0
+--   (0.15/0.15/0.10/0.10/0.15/0.15/0.10/0.10 for price/discount/FX/
+--   expired-quote/AR/rev-rec/doc-contract/doc-invoice).
 --
 -- DQ-5: `composite_health_score` in [0,100]; `risk_tier` in {GREEN, AMBER, RED}.
 --   Action: FAIL UPDATE per the test plan. The "one row per scored customer"
@@ -260,8 +307,9 @@ CREATE OR REFRESH MATERIALIZED VIEW gold_reconciliation_scorecard (
   CONSTRAINT dq5_customer_id_present
     EXPECT (customer_id IS NOT NULL) ON VIOLATION FAIL UPDATE
 )
-COMMENT 'Per-customer reconciliation health scorecard. Aggregates all seven silver checks into a single score per customer: price accuracy, discount compliance, expired-quote compliance, collection (AR) efficiency, revenue-recognition accuracy, and doc-vs-system consistency (contract + invoice).'
+COMMENT 'Per-customer reconciliation health scorecard. Aggregates all eight reconciliation controls into a single score per customer: price accuracy, discount compliance, FX accuracy, expired-quote compliance, collection (AR) efficiency, revenue-recognition accuracy, and doc-vs-system consistency (contract + invoice). Repeated unattributed_missing_salesforce_* columns disclose ERP-only price exceptions that cannot be assigned to a customer without violating the one-row-per-customer grain.'
 AS
+WITH
 -- price_check is customer-grain, so it can only aggregate rows with a
 -- resolvable customer_id. A MISSING_SALESFORCE row has no Salesforce
 -- contract line to resolve customer_id from (see silver_contract_price_
@@ -280,6 +328,18 @@ price_check AS (
   WHERE customer_id IS NOT NULL
   GROUP BY customer_id
 ),
+-- ERP-only price rows have no Salesforce contract/customer by definition.
+-- Keep their count and risk auditable without fabricating a customer row:
+-- this one-row aggregate is CROSS JOINed into every scorecard row as a pair
+-- of global audit columns, while customer totals remain customer-attributed.
+unattributed_price_check AS (
+  SELECT
+    COUNT(*) AS unattributed_missing_salesforce_exceptions,
+    COALESCE(SUM(estimated_amount_at_risk), 0) AS unattributed_missing_salesforce_amount_at_risk
+  FROM silver_contract_price_reconciliation
+  WHERE reconciliation_status = 'MISSING_SALESFORCE'
+    AND customer_id IS NULL
+),
 discount_check AS (
   SELECT
     customer_id,
@@ -288,6 +348,31 @@ discount_check AS (
     SUM(discount_overrun_amount) AS discount_risk_amount
   FROM silver_discount_authorization_check
   GROUP BY customer_id
+),
+-- FX component (score/count/exposure/status): silver_fx_rate_validation
+-- carries no customer_id of its own (it's invoice-grain, keyed by
+-- CUSTOMER_TRX_ID), so this joins back to ra_customer_trx_all (for
+-- BILL_TO_CUSTOMER_ID) and then to hz_cust_accounts (for TMF_CUSTOMER_ID)
+-- -- the same two-hop crosswalk silver_ar_aging_analysis uses via
+-- BILL_TO_CUSTOMER_ID -> CUST_ACCOUNT_ID -> TMF_CUSTOMER_ID. Exceptions are
+-- MISMATCH/UNSUPPORTED_CURRENCY/MISSING_MARKET_RATE/MISSING_APPLIED_RATE
+-- (everything except MATCHED/NOT_APPLICABLE, which represent "nothing
+-- wrong" or "nothing to check"); exposure is exception-consistent (only
+-- exception rows' INVOICE_AMOUNT contribute, matching the AR/rev-rec fix
+-- pattern -- not every FX-validated invoice's amount regardless of status).
+fx_check AS (
+  SELECT
+    hz.TMF_CUSTOMER_ID AS customer_id,
+    COUNT(*) AS total_fx_invoices,
+    SUM(CASE WHEN fx.fx_validation_status != 'MATCHED' THEN 1 ELSE 0 END) AS fx_exceptions,
+    SUM(CASE WHEN fx.fx_validation_status != 'MATCHED' THEN fx.INVOICE_AMOUNT ELSE 0 END) AS fx_risk_amount
+  FROM silver_fx_rate_validation fx
+  JOIN oracle_erp_source.ra_customer_trx_all t
+    ON t.CUSTOMER_TRX_ID = fx.CUSTOMER_TRX_ID
+  JOIN oracle_erp_source.hz_cust_accounts hz
+    ON hz.CUST_ACCOUNT_ID = t.BILL_TO_CUSTOMER_ID
+  WHERE fx.fx_validation_status != 'NOT_APPLICABLE'
+  GROUP BY hz.TMF_CUSTOMER_ID
 ),
 -- Expired-quote compliance at QUOTE grain (a quote's expiry status is
 -- constant across its lines; DISTINCT quote_id avoids counting the same
@@ -349,6 +434,11 @@ rev_rec_by_invoice AS (
   SELECT
     t.CUSTOMER_TRX_ID,
     hz.TMF_CUSTOMER_ID AS customer_id,
+    -- Same origination-period key as silver_revenue_recognition_check's
+    -- rev_rec_by_origination_period CTE (DATE_FORMAT(TRX_DATE, 'MMM-yy')) --
+    -- required so the period-level join below lands each invoice in
+    -- EXACTLY the period silver itself aggregated it into.
+    DATE_FORMAT(t.TRX_DATE, 'MMM-yy') AS PERIOD_NAME,
     COALESCE(ir.recognized_total, 0) AS invoice_recognized_total,
     COALESCE(ig.gl_posted, 0) AS invoice_gl_posted
   FROM oracle_erp_source.ra_customer_trx_all t
@@ -357,30 +447,58 @@ rev_rec_by_invoice AS (
   LEFT JOIN invoice_recognition ir ON ir.CUSTOMER_TRX_ID = t.CUSTOMER_TRX_ID
   LEFT JOIN invoice_gl ig ON ig.CUSTOMER_TRX_ID = t.CUSTOMER_TRX_ID
 ),
--- EXCEPTION-CONSISTENCY FIX (matches the AR fix pattern above):
--- rev_rec_risk_amount must sum variance only for invoices that actually
--- BREACH the 5% material-timing threshold, consistent with
--- rev_rec_exceptions' count -- not every invoice's variance regardless of
--- materiality. Summing all variance would put every invoice's rounding
--- noise into total_amount_at_risk even when rev_rec_exceptions = 0 for
--- that customer, inflating exposure for accounts with many small,
--- immaterial timing differences.
+-- PERIOD-GRAIN CONSISTENCY FIX: silver_revenue_recognition_check flags
+-- material_timing_mismatch at the ORIGINATION-PERIOD grain -- it SUMs
+-- recognized/GL totals across every invoice in a month, THEN applies the
+-- 5% threshold to that aggregate. The prior version of this scorecard
+-- independently re-derived its own per-INVOICE 5% check instead of
+-- consuming silver's period-level flag -- a different (and inconsistent)
+-- signal: two invoices in the same period varying in OPPOSITE directions
+-- can each individually breach 5% while the period's aggregate is
+-- perfectly clean (silver: no mismatch; old scorecard: 2 false
+-- exceptions), and conversely several invoices each UNDER 5% can
+-- accumulate to a period-level breach that silver correctly flags but the
+-- old per-invoice check would show as zero exceptions. Fixed by computing
+-- the SAME period-level aggregate silver computes (SUM first, threshold
+-- second) and deriving material_timing_mismatch with the identical
+-- formula, so a customer's invoice is only counted as a rev-rec exception
+-- when its OWN origination period is flagged -- not when its own
+-- individual variance happens to exceed 5%.
+rev_rec_period_totals AS (
+  SELECT
+    PERIOD_NAME,
+    SUM(invoice_recognized_total) AS period_recognized_total,
+    SUM(invoice_gl_posted) AS period_gl_posted,
+    CASE
+      WHEN ABS(SUM(invoice_recognized_total) - SUM(invoice_gl_posted))
+           / NULLIF(GREATEST(SUM(invoice_recognized_total), SUM(invoice_gl_posted)), 0) > 0.05
+      THEN TRUE ELSE FALSE
+    END AS material_timing_mismatch
+  FROM rev_rec_by_invoice
+  GROUP BY PERIOD_NAME
+),
+-- EXCEPTION-CONSISTENCY FIX (matches the AR fix pattern above): a
+-- customer's invoice counts as an exception, and its own
+-- (recognized - GL) variance counts toward exposure, ONLY when that
+-- invoice's origination period was flagged by rev_rec_period_totals above
+-- -- never re-deriving its own per-invoice threshold. This both matches
+-- silver's period-grain status exactly AND correctly handles offsetting
+-- invoice variances within a flagged period (every invoice in that period
+-- contributes its own signed variance to exposure, including a small one
+-- that individually looks immaterial but is part of the period's real
+-- aggregate miss).
 rev_rec_check AS (
   SELECT
-    customer_id,
+    rbi.customer_id,
     COUNT(*) AS total_invoices,
+    SUM(CASE WHEN rpt.material_timing_mismatch THEN 1 ELSE 0 END) AS rev_rec_exceptions,
     SUM(CASE
-      WHEN ABS(invoice_recognized_total - invoice_gl_posted)
-           / NULLIF(GREATEST(invoice_recognized_total, invoice_gl_posted), 0) > 0.05
-      THEN 1 ELSE 0
-    END) AS rev_rec_exceptions,
-    SUM(CASE
-      WHEN ABS(invoice_recognized_total - invoice_gl_posted)
-           / NULLIF(GREATEST(invoice_recognized_total, invoice_gl_posted), 0) > 0.05
-      THEN ABS(invoice_recognized_total - invoice_gl_posted) ELSE 0
+      WHEN rpt.material_timing_mismatch
+      THEN ABS(rbi.invoice_recognized_total - rbi.invoice_gl_posted) ELSE 0
     END) AS rev_rec_risk_amount
-  FROM rev_rec_by_invoice
-  GROUP BY customer_id
+  FROM rev_rec_by_invoice rbi
+  JOIN rev_rec_period_totals rpt ON rpt.PERIOD_NAME = rbi.PERIOD_NAME
+  GROUP BY rbi.customer_id
 ),
 doc_contract_check AS (
   SELECT
@@ -420,6 +538,8 @@ scored AS (
       AS price_accuracy_score,
     COALESCE(100.0 * (1 - COALESCE(dc.discount_exceptions, 0) / NULLIF(dc.total_lines, 0)), 100.0)
       AS discount_compliance_score,
+    COALESCE(100.0 * (1 - COALESCE(fx.fx_exceptions, 0) / NULLIF(fx.total_fx_invoices, 0)), 100.0)
+      AS fx_accuracy_score,
     COALESCE(100.0 * (1 - COALESCE(eq.expired_quotes, 0) / NULLIF(eq.total_quotes, 0)), 100.0)
       AS expired_quote_compliance_score,
     CASE
@@ -435,17 +555,23 @@ scored AS (
     COALESCE(100.0 * (1 - COALESCE(doci.doc_invoice_exceptions, 0) / NULLIF(doci.total_invoice_docs, 0)), 100.0)
       AS doc_invoice_consistency_score,
     COALESCE(pc.price_risk_amount, 0) + COALESCE(dc.discount_risk_amount, 0)
+      + COALESCE(fx.fx_risk_amount, 0)
       + COALESCE(cc.ar_risk_amount, 0) + COALESCE(rr.rev_rec_risk_amount, 0)
       + COALESCE(doci.doc_invoice_risk_amount, 0) AS total_amount_at_risk,
     COALESCE(pc.price_exceptions, 0) + COALESCE(dc.discount_exceptions, 0)
-      + COALESCE(eq.expired_quotes, 0) + COALESCE(cc.ar_exceptions, 0)
+      + COALESCE(fx.fx_exceptions, 0) + COALESCE(eq.expired_quotes, 0)
+      + COALESCE(cc.ar_exceptions, 0)
       + COALESCE(rr.rev_rec_exceptions, 0) + COALESCE(docc.doc_contract_exceptions, 0)
-      + COALESCE(doci.doc_invoice_exceptions, 0) AS total_exceptions
+      + COALESCE(doci.doc_invoice_exceptions, 0) AS total_exceptions,
+    upc.unattributed_missing_salesforce_exceptions,
+    upc.unattributed_missing_salesforce_amount_at_risk
   FROM tmf_customer.customer cust
+  CROSS JOIN unattributed_price_check upc
   LEFT JOIN salesforce_source.account a
     ON a.TMF_Customer_Id__c = cust.customer_id
   LEFT JOIN price_check pc ON pc.customer_id = cust.customer_id
   LEFT JOIN discount_check dc ON dc.customer_id = cust.customer_id
+  LEFT JOIN fx_check fx ON fx.customer_id = cust.customer_id
   LEFT JOIN expired_quote_check eq ON eq.customer_id = cust.customer_id
   LEFT JOIN collection_check cc ON cc.customer_id = cust.customer_id
   LEFT JOIN rev_rec_check rr ON rr.customer_id = cust.customer_id
@@ -459,10 +585,11 @@ scored AS (
 composite AS (
   SELECT
     *,
-    0.20 * price_accuracy_score
+    0.15 * price_accuracy_score
       + 0.15 * discount_compliance_score
+      + 0.10 * fx_accuracy_score
       + 0.10 * expired_quote_compliance_score
-      + 0.20 * collection_efficiency_score
+      + 0.15 * collection_efficiency_score
       + 0.15 * rev_rec_accuracy_score
       + 0.10 * doc_consistency_score
       + 0.10 * doc_invoice_consistency_score AS composite_raw
@@ -476,6 +603,7 @@ SELECT
   billing_currency,
   ROUND(price_accuracy_score, 1) AS price_accuracy_score,
   ROUND(discount_compliance_score, 1) AS discount_compliance_score,
+  ROUND(fx_accuracy_score, 1) AS fx_accuracy_score,
   ROUND(expired_quote_compliance_score, 1) AS expired_quote_compliance_score,
   collection_efficiency_score,
   ROUND(rev_rec_accuracy_score, 1) AS rev_rec_accuracy_score,
@@ -488,5 +616,7 @@ SELECT
     ELSE 'RED'
   END AS risk_tier,
   total_amount_at_risk,
-  total_exceptions
+  total_exceptions,
+  unattributed_missing_salesforce_exceptions,
+  unattributed_missing_salesforce_amount_at_risk
 FROM composite;

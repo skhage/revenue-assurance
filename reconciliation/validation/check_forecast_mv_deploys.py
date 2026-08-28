@@ -317,8 +317,17 @@ def main() -> int:
         # transient warehouse hiccup, or run_sql's own polling timeout on
         # the drop itself) does not abort cleanup of the remaining test
         # objects -- this must run even if the try block raised.
+        #
+        # REVERSED ORDER: deployed_test_names is appended in CREATE order
+        # (main forecast MV first, then the DQ-6 audit MV, which reads FROM
+        # the main MV in its own FROM clause). Dropping in that same
+        # (creation) order would drop the main MV while the audit MV --
+        # its dependent -- still exists and still references it. Iterating
+        # in reverse drops the dependent (audit MV) first, then the
+        # dependency (main forecast MV) second, matching how the
+        # statements actually relate to each other.
         cleanup_failures: list[str] = []
-        for test_name in deployed_test_names:
+        for test_name in reversed(deployed_test_names):
             print(f"Dropping {test_name} ...")
             try:
                 drop_resp = run_sql(args.profile, args.warehouse_id, f"DROP MATERIALIZED VIEW IF EXISTS {test_name}")

@@ -29,41 +29,72 @@
 
 
 -- -----------------------------------------------------------------------------
--- CHECK-1: Contract price reconciliation is independent of the leakage_flag.
+-- CHECK-1 FIXED: this check previously referenced `leakage_flag`, a column
+-- that no longer exists on silver_contract_price_reconciliation's output --
+-- the view became full-sided (FULL OUTER JOIN, explicit reconciliation_status
+-- in {MATCHED, MISMATCH, MISSING_ERP, MISSING_SALESFORCE}) and dropped that
+-- column entirely, so this check would fail to even EXECUTE
+-- (UNRESOLVED_COLUMN) against the real deployed view, not just fail its
+-- assertion. Rewritten to validate reconciliation_status instead.
+--
 -- A runtime query can't prove "the SQL doesn't read column X" (that's a
 -- structural property of the source, checked separately by
 -- `check_source_independence.py`). What a query CAN prove: contracted_price
 -- and billed_unit_price come from two different systems/tables (Salesforce
--- vs Oracle ERP) and every row's detected leakage_flag is arithmetically
--- consistent with those two values -- i.e. re-deriving the flag from
--- (contracted_price, billed_unit_price) alone reproduces exactly what's
--- stored, with no other input.
---
--- NULL-SAFETY FIX: `leakage_flag` is NULL on every clean row (by design --
--- see silver_contract_price_reconciliation's CASE...ELSE NULL). Comparing
--- `(price_mismatch_pct > 0.01) = (leakage_flag = 'price_mismatch')` is a
--- three-valued-logic trap: on a clean row the right side is
--- `(NULL = 'price_mismatch')` which itself evaluates to NULL (not FALSE),
--- so the whole equality is NULL, and `CASE WHEN NULL THEN 1 ELSE 0 END`
--- silently falls to the ELSE branch -- meaning every correctly-clean row
--- contributed 0, not 1, to the match count, and the check would fail even
--- when the SQL is 100% correct. Fixed by normalizing "is this row flagged"
--- to a plain boolean on BOTH sides before comparing (`leakage_flag IS NOT
--- NULL` rather than `leakage_flag = 'price_mismatch'`), so a clean row
--- correctly compares FALSE = FALSE.
+-- vs Oracle ERP) and every MATCHED/MISMATCH row's reconciliation_status is
+-- arithmetically consistent with those two values -- i.e. re-deriving the
+-- status from (contracted_price, billed_unit_price) alone reproduces
+-- exactly what's stored, with no other input. Restricted to rows where
+-- BOTH sides are present (billed_unit_price IS NOT NULL AND
+-- contracted_price is the row's own Salesforce-side value) so MISSING_ERP/
+-- MISSING_SALESFORCE rows -- which have no meaningful price_mismatch_pct to
+-- re-derive from -- don't need to be reproduced by this arithmetic check
+-- (they're covered by CHECK-1b below instead). Also covers the
+-- zero-contracted-price edge case (contracted_price = 0 AND
+-- billed_unit_price > 0 must be MISMATCH, not a NULL-arithmetic MATCHED).
 -- -----------------------------------------------------------------------------
 SELECT
-  'CHECK-1 price reconciliation is arithmetically self-consistent' AS check_name,
+  'CHECK-1 price reconciliation status is arithmetically self-consistent' AS check_name,
   CASE WHEN COUNT(*) = SUM(CASE
-    WHEN (ABS(contracted_price - billed_unit_price) / NULLIF(contracted_price, 0) > 0.01)
-         = (leakage_flag IS NOT NULL)
+    WHEN (
+      (contracted_price = 0 AND billed_unit_price > 0)
+      OR ABS(contracted_price - billed_unit_price) / NULLIF(contracted_price, 0) > 0.01
+    ) = (reconciliation_status = 'MISMATCH')
     THEN 1 ELSE 0 END)
     THEN 'PASS' ELSE 'FAIL' END AS status,
-  COUNT(*) AS total_rows,
-  SUM(CASE WHEN leakage_flag IS NOT NULL THEN 1 ELSE 0 END) AS flagged_rows,
-  SUM(CASE WHEN leakage_flag IS NULL THEN 1 ELSE 0 END) AS clean_rows
+  COUNT(*) AS total_matched_or_mismatch_rows,
+  SUM(CASE WHEN reconciliation_status = 'MISMATCH' THEN 1 ELSE 0 END) AS mismatch_rows,
+  SUM(CASE WHEN reconciliation_status = 'MATCHED' THEN 1 ELSE 0 END) AS matched_rows
 FROM cdm_tmforum.revenue_assurance.silver_contract_price_reconciliation
-WHERE billed_unit_price IS NOT NULL;
+WHERE reconciliation_status IN ('MATCHED', 'MISMATCH');
+
+-- CHECK-1b: MISSING_ERP/MISSING_SALESFORCE rows carry the full one-sided
+-- amount as their exposure, never NULL, and never MATCHED/MISMATCH (which
+-- require both sides present by construction -- silver's own CASE checks
+-- line_item_id/billed_line_item_id IS NULL before ever comparing prices).
+SELECT
+  'CHECK-1b missing-side rows have non-null, correctly-derived exposure' AS check_name,
+  CASE WHEN missing_side_rows = 0 OR missing_side_rows_with_valid_exposure = missing_side_rows
+    THEN 'PASS' ELSE 'FAIL' END AS status,
+  missing_side_rows,
+  missing_side_rows_with_valid_exposure
+FROM (
+  SELECT
+    COUNT(*) AS missing_side_rows,
+    -- Deliberately NOT filtering out NULL estimated_amount_at_risk rows
+    -- from the denominator -- a NULL exposure on a MISSING_* row IS the
+    -- bug this check exists to catch, so it must count against
+    -- missing_side_rows_with_valid_exposure (via the ELSE 0 branch, since
+    -- `NULL = contracted_total` is NULL, not TRUE), not be excluded from
+    -- the total and let the check vacuously pass.
+    SUM(CASE
+      WHEN reconciliation_status = 'MISSING_ERP' AND estimated_amount_at_risk = contracted_total THEN 1
+      WHEN reconciliation_status = 'MISSING_SALESFORCE' AND estimated_amount_at_risk = billed_total THEN 1
+      ELSE 0
+    END) AS missing_side_rows_with_valid_exposure
+  FROM cdm_tmforum.revenue_assurance.silver_contract_price_reconciliation
+  WHERE reconciliation_status IN ('MISSING_ERP', 'MISSING_SALESFORCE')
+);
 
 
 -- -----------------------------------------------------------------------------
@@ -109,11 +140,10 @@ FROM (
 
 
 -- -----------------------------------------------------------------------------
--- CHECK-2c/2d: DETERMINISTIC FIXTURES proving missing-market-rate and
--- missing-applied-rate are their OWN explicit exception status, not a
--- silent MATCHED/clean fallthrough. Reproduces the exact fx_validation_status
--- CASE expression from silver_fx_rate_validation against a literal 5-row
--- fixture (VALUES) covering all five statuses -- no live table required.
+-- CHECK-2c/2d/2e: DETERMINISTIC FIXTURES proving missing-market-rate,
+-- missing-applied-rate, and unsupported-currency are their OWN explicit
+-- exception statuses, not a silent MATCHED/clean fallthrough. Reproduces the
+-- exact fx_validation_status CASE order from silver_fx_rate_validation.
 -- -----------------------------------------------------------------------------
 WITH mock_trx AS (
   SELECT * FROM (VALUES
@@ -121,24 +151,34 @@ WITH mock_trx AS (
     ('T2', 'EUR', CAST(1.08 AS DOUBLE)),            -- matched
     ('T3', 'EUR', CAST(1.30 AS DOUBLE)),            -- deviation
     ('T4', 'EUR', CAST(NULL AS DOUBLE)),            -- missing_applied_rate
-    ('T5', 'XYZ', CAST(2.0 AS DOUBLE))              -- missing_market_rate (no XYZ quote in mock_fx)
+    ('T5', 'EUR', CAST(2.0 AS DOUBLE)),             -- supported currency, missing date quote
+    ('T6', 'XYZ', CAST(2.0 AS DOUBLE))              -- unsupported currency
   ) AS t(trx_id, currency, applied_rate)
 ),
 mock_fx AS (
-  SELECT * FROM (VALUES ('EUR', CAST(1.08 AS DOUBLE))) AS t(currency, market_rate)
+  SELECT * FROM (VALUES
+    ('T2', 'EUR', CAST(1.08 AS DOUBLE)),
+    ('T3', 'EUR', CAST(1.08 AS DOUBLE)),
+    ('T4', 'EUR', CAST(1.08 AS DOUBLE))
+  ) AS t(trx_id, currency, market_rate)
+),
+supported_currencies AS (
+  SELECT DISTINCT currency FROM mock_fx
 ),
 joined AS (
-  SELECT t.trx_id, t.currency, t.applied_rate, f.market_rate
+  SELECT t.trx_id, t.currency, t.applied_rate, f.market_rate, sc.currency AS supported_currency
   FROM mock_trx t
-  LEFT JOIN mock_fx f ON f.currency = t.currency
+  LEFT JOIN mock_fx f ON f.trx_id = t.trx_id
+  LEFT JOIN supported_currencies sc ON sc.currency = t.currency
 ),
 statused AS (
   SELECT trx_id,
     CASE
       WHEN currency = 'USD' THEN 'NOT_APPLICABLE'
+      WHEN supported_currency IS NULL THEN 'UNSUPPORTED_CURRENCY'
       WHEN applied_rate IS NULL THEN 'MISSING_APPLIED_RATE'
       WHEN market_rate IS NULL THEN 'MISSING_MARKET_RATE'
-      WHEN ABS(applied_rate - market_rate) / NULLIF(market_rate, 0) > 0.01 THEN 'DEVIATION'
+      WHEN ABS(applied_rate - market_rate) / NULLIF(market_rate, 0) > 0.01 THEN 'MISMATCH'
       ELSE 'MATCHED'
     END AS fx_validation_status
   FROM joined
@@ -155,24 +195,34 @@ WITH mock_trx AS (
     ('T2', 'EUR', CAST(1.08 AS DOUBLE)),
     ('T3', 'EUR', CAST(1.30 AS DOUBLE)),
     ('T4', 'EUR', CAST(NULL AS DOUBLE)),
-    ('T5', 'XYZ', CAST(2.0 AS DOUBLE))
+    ('T5', 'EUR', CAST(2.0 AS DOUBLE)),
+    ('T6', 'XYZ', CAST(2.0 AS DOUBLE))
   ) AS t(trx_id, currency, applied_rate)
 ),
 mock_fx AS (
-  SELECT * FROM (VALUES ('EUR', CAST(1.08 AS DOUBLE))) AS t(currency, market_rate)
+  SELECT * FROM (VALUES
+    ('T2', 'EUR', CAST(1.08 AS DOUBLE)),
+    ('T3', 'EUR', CAST(1.08 AS DOUBLE)),
+    ('T4', 'EUR', CAST(1.08 AS DOUBLE))
+  ) AS t(trx_id, currency, market_rate)
+),
+supported_currencies AS (
+  SELECT DISTINCT currency FROM mock_fx
 ),
 joined AS (
-  SELECT t.trx_id, t.currency, t.applied_rate, f.market_rate
+  SELECT t.trx_id, t.currency, t.applied_rate, f.market_rate, sc.currency AS supported_currency
   FROM mock_trx t
-  LEFT JOIN mock_fx f ON f.currency = t.currency
+  LEFT JOIN mock_fx f ON f.trx_id = t.trx_id
+  LEFT JOIN supported_currencies sc ON sc.currency = t.currency
 ),
 statused AS (
   SELECT trx_id,
     CASE
       WHEN currency = 'USD' THEN 'NOT_APPLICABLE'
+      WHEN supported_currency IS NULL THEN 'UNSUPPORTED_CURRENCY'
       WHEN applied_rate IS NULL THEN 'MISSING_APPLIED_RATE'
       WHEN market_rate IS NULL THEN 'MISSING_MARKET_RATE'
-      WHEN ABS(applied_rate - market_rate) / NULLIF(market_rate, 0) > 0.01 THEN 'DEVIATION'
+      WHEN ABS(applied_rate - market_rate) / NULLIF(market_rate, 0) > 0.01 THEN 'MISMATCH'
       ELSE 'MATCHED'
     END AS fx_validation_status
   FROM joined
@@ -182,6 +232,24 @@ SELECT
   CASE WHEN (SELECT fx_validation_status FROM statused WHERE trx_id = 'T5') = 'MISSING_MARKET_RATE'
     THEN 'PASS' ELSE 'FAIL' END AS status,
   (SELECT fx_validation_status FROM statused WHERE trx_id = 'T5') AS observed_status;
+
+WITH mock_status AS (
+  SELECT CASE
+    WHEN currency = 'USD' THEN 'NOT_APPLICABLE'
+    WHEN supported_currency IS NULL THEN 'UNSUPPORTED_CURRENCY'
+    WHEN applied_rate IS NULL THEN 'MISSING_APPLIED_RATE'
+    WHEN market_rate IS NULL THEN 'MISSING_MARKET_RATE'
+    WHEN ABS(applied_rate - market_rate) / NULLIF(market_rate, 0) > 0.01 THEN 'MISMATCH'
+    ELSE 'MATCHED'
+  END AS fx_validation_status
+  FROM (VALUES ('XYZ', CAST(2.0 AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS STRING)))
+    AS t(currency, applied_rate, market_rate, supported_currency)
+)
+SELECT
+  'CHECK-2e unsupported currency is distinct from a missing date quote' AS check_name,
+  CASE WHEN fx_validation_status = 'UNSUPPORTED_CURRENCY' THEN 'PASS' ELSE 'FAIL' END AS status,
+  fx_validation_status AS observed_status
+FROM mock_status;
 
 
 -- -----------------------------------------------------------------------------
@@ -422,63 +490,82 @@ SELECT
   flat_gl
 FROM silver_period_total, flat_total;
 
--- CHECK-3g: silver-vs-scorecard divergence. gold_reconciliation_scorecard's
--- rev_rec_by_invoice (customer grain) and silver_revenue_recognition_check
--- (period grain) must sum to the SAME total recognized/GL across the same
--- underlying invoice universe -- this branch fixed the scorecard's CTE to
--- mirror silver's LEFT JOIN + COALESCE-to-0 pattern exactly (previously the
--- scorecard used its own looser INNER JOIN and would diverge from silver on
--- GL-only invoices). Reproduces both shapes independently and asserts equality.
-WITH invoice_recognition AS (
-  SELECT CUSTOMER_TRX_ID, SUM(RECOGNIZED_AMOUNT) AS recognized_total
-  FROM cdm_tmforum.oracle_erp_source.revenue_recognition_schedule
-  GROUP BY CUSTOMER_TRX_ID
+-- CHECK-3g REPLACED: the prior version reproduced BOTH "silver_shaped" and
+-- "scorecard_shaped" from the exact same invoice_recognition/invoice_gl
+-- CTEs with the exact same LEFT JOINs -- two independently-named CTEs
+-- computing the SAME query twice, guaranteed to agree with each other
+-- regardless of whether either one actually matches the REAL deployed
+-- silver_revenue_recognition_check or gold_reconciliation_scorecard. It
+-- validated nothing about the actual production objects.
+--
+-- Rewritten to query the two REAL deployed objects directly:
+-- gold_leakage_summary's rev_rec_timing_mismatch arm independently
+-- re-derives its amount_at_risk from silver_revenue_recognition_check
+-- (see gold_aggregation.sql), so summing that check_type's amount_at_risk
+-- must equal silver's own flagged-period ABS(recognition_variance) sum --
+-- both read the identical upstream rows, so any divergence is a real bug
+-- in one of the two deployed views, not an artifact of re-derived test SQL.
+WITH leakage_rev_rec_totals AS (
+  SELECT SUM(amount_at_risk) AS leakage_rev_rec_amount
+  FROM cdm_tmforum.revenue_assurance.gold_leakage_summary
+  WHERE check_type = 'rev_rec_timing_mismatch'
 ),
-invoice_gl AS (
-  SELECT h.CUSTOMER_TRX_ID, SUM(l.ENTERED_CR) AS gl_posted
-  FROM cdm_tmforum.oracle_erp_source.gl_je_lines l
-  JOIN cdm_tmforum.oracle_erp_source.gl_je_headers h ON l.JE_HEADER_ID = h.JE_HEADER_ID
-  JOIN cdm_tmforum.oracle_erp_source.gl_code_combinations cc ON l.CODE_COMBINATION_ID = cc.CODE_COMBINATION_ID
-  WHERE cc.ACCOUNT = '4000'
-  GROUP BY h.CUSTOMER_TRX_ID
-),
-silver_shaped AS (
-  -- Mirrors silver_revenue_recognition_check's invoice_level CTE exactly.
-  SELECT
-    t.CUSTOMER_TRX_ID,
-    COALESCE(ir.recognized_total, 0) AS recognized_total,
-    COALESCE(ig.gl_posted, 0) AS gl_posted
-  FROM cdm_tmforum.oracle_erp_source.ra_customer_trx_all t
-  LEFT JOIN invoice_recognition ir ON ir.CUSTOMER_TRX_ID = t.CUSTOMER_TRX_ID
-  LEFT JOIN invoice_gl ig ON ig.CUSTOMER_TRX_ID = t.CUSTOMER_TRX_ID
-),
-scorecard_shaped AS (
-  -- Mirrors gold_reconciliation_scorecard's rev_rec_by_invoice CTE exactly
-  -- (post-fix -- see gold_aggregation.sql).
-  SELECT
-    t.CUSTOMER_TRX_ID,
-    COALESCE(ir.recognized_total, 0) AS recognized_total,
-    COALESCE(ig.gl_posted, 0) AS gl_posted
-  FROM cdm_tmforum.oracle_erp_source.ra_customer_trx_all t
-  LEFT JOIN invoice_recognition ir ON ir.CUSTOMER_TRX_ID = t.CUSTOMER_TRX_ID
-  LEFT JOIN invoice_gl ig ON ig.CUSTOMER_TRX_ID = t.CUSTOMER_TRX_ID
+silver_flagged_variance AS (
+  SELECT SUM(ABS(recognition_variance)) AS silver_flagged_amount
+  FROM cdm_tmforum.revenue_assurance.silver_revenue_recognition_check
+  WHERE material_timing_mismatch = TRUE
 )
 SELECT
-  'CHECK-3g silver and scorecard totals agree (no divergence)' AS check_name,
-  CASE WHEN ABS(silver_recognized - scorecard_recognized) < 0.01
-       AND ABS(silver_gl - scorecard_gl) < 0.01
+  'CHECK-3g gold_leakage_summary rev_rec exposure matches silver''s own flagged-period variance' AS check_name,
+  CASE WHEN ABS(COALESCE(leakage_rev_rec_amount, 0) - COALESCE(silver_flagged_amount, 0)) < 0.01
     THEN 'PASS' ELSE 'FAIL' END AS status,
-  silver_recognized,
-  scorecard_recognized,
-  silver_gl,
-  scorecard_gl
-FROM (
+  leakage_rev_rec_amount,
+  silver_flagged_amount
+FROM leakage_rev_rec_totals, silver_flagged_variance;
+
+-- CHECK-3h: gold_reconciliation_scorecard's rev_rec_accuracy_score must be
+-- consistent with silver's OWN period-grain material_timing_mismatch flag
+-- -- not a re-derived per-invoice threshold. Deterministic fixture:
+-- constructs the exact "offsetting invoice variances" scenario (two
+-- invoices in one period, opposite-direction, each individually breaching
+-- 5% but the period AGGREGATE is clean) and proves the scorecard's fixed
+-- period-join logic reports ZERO exceptions for both invoices' customers,
+-- matching what silver's period-grain check would report (no mismatch) --
+-- the bug this check exists to catch: a naive per-invoice re-derivation
+-- would wrongly flag both as exceptions even though silver sees a clean
+-- period.
+WITH fixture_invoices AS (
+  SELECT * FROM (VALUES
+    ('INV1', 'CUSTA', CAST(1000.0 AS DOUBLE), CAST(1200.0 AS DOUBLE)),
+    ('INV2', 'CUSTB', CAST(1200.0 AS DOUBLE), CAST(1000.0 AS DOUBLE))
+  ) AS t(CUSTOMER_TRX_ID, customer_id, invoice_recognized_total, invoice_gl_posted)
+),
+fixture_period AS (
   SELECT
-    (SELECT SUM(recognized_total) FROM silver_shaped) AS silver_recognized,
-    (SELECT SUM(recognized_total) FROM scorecard_shaped) AS scorecard_recognized,
-    (SELECT SUM(gl_posted) FROM silver_shaped) AS silver_gl,
-    (SELECT SUM(gl_posted) FROM scorecard_shaped) AS scorecard_gl
-);
+    SUM(invoice_recognized_total) AS period_recognized_total,
+    SUM(invoice_gl_posted) AS period_gl_posted,
+    CASE
+      WHEN ABS(SUM(invoice_recognized_total) - SUM(invoice_gl_posted))
+           / NULLIF(GREATEST(SUM(invoice_recognized_total), SUM(invoice_gl_posted)), 0) > 0.05
+      THEN TRUE ELSE FALSE
+    END AS material_timing_mismatch
+  FROM fixture_invoices
+),
+fixture_scorecard AS (
+  SELECT
+    fi.customer_id,
+    SUM(CASE WHEN fp.material_timing_mismatch THEN 1 ELSE 0 END) AS rev_rec_exceptions
+  FROM fixture_invoices fi
+  CROSS JOIN fixture_period fp
+  GROUP BY fi.customer_id
+)
+SELECT
+  'CHECK-3h offsetting invoice variances: period-grain join produces zero false exceptions' AS check_name,
+  CASE WHEN (SELECT material_timing_mismatch FROM fixture_period) = FALSE
+       AND (SELECT SUM(rev_rec_exceptions) FROM fixture_scorecard) = 0
+    THEN 'PASS' ELSE 'FAIL' END AS status,
+  (SELECT material_timing_mismatch FROM fixture_period) AS silver_period_flag,
+  (SELECT SUM(rev_rec_exceptions) FROM fixture_scorecard) AS scorecard_total_exceptions;
 
 
 -- -----------------------------------------------------------------------------
@@ -561,13 +648,14 @@ FROM (
 
 
 -- -----------------------------------------------------------------------------
--- CHECK-5: Scorecard includes all 7 controls (columns present + populated for
+-- CHECK-5: Scorecard includes all 8 controls (columns present + populated for
 -- at least one customer each).
 -- -----------------------------------------------------------------------------
 SELECT
-  'CHECK-5 scorecard covers all 7 controls' AS check_name,
+  'CHECK-5 scorecard covers all 8 controls' AS check_name,
   CASE WHEN COUNT(*) = COUNT(price_accuracy_score)
        AND COUNT(*) = COUNT(discount_compliance_score)
+       AND COUNT(*) = COUNT(fx_accuracy_score)
        AND COUNT(*) = COUNT(expired_quote_compliance_score)
        AND COUNT(*) = COUNT(collection_efficiency_score)
        AND COUNT(*) = COUNT(rev_rec_accuracy_score)
@@ -575,10 +663,44 @@ SELECT
        AND COUNT(*) = COUNT(doc_invoice_consistency_score)
     THEN 'PASS' ELSE 'FAIL' END AS status,
   COUNT(*) AS total_customers,
+  COUNT(fx_accuracy_score) AS with_fx_score,
   COUNT(rev_rec_accuracy_score) AS with_rev_rec_score,
   COUNT(doc_invoice_consistency_score) AS with_doc_invoice_score,
   COUNT(expired_quote_compliance_score) AS with_expired_quote_score
 FROM cdm_tmforum.revenue_assurance.gold_reconciliation_scorecard;
+
+-- CHECK-5b: the approved lower-risk schema keeps DQ-5 at one row per real
+-- customer and repeats two GLOBAL audit columns for MISSING_SALESFORCE rows
+-- that cannot be customer-attributed. Every scorecard row must carry the same
+-- totals, and those totals must equal the drill-down rows in gold leakage.
+WITH scorecard_totals AS (
+  SELECT
+    MIN(unattributed_missing_salesforce_exceptions) AS min_exception_count,
+    MAX(unattributed_missing_salesforce_exceptions) AS max_exception_count,
+    MIN(unattributed_missing_salesforce_amount_at_risk) AS min_risk_amount,
+    MAX(unattributed_missing_salesforce_amount_at_risk) AS max_risk_amount
+  FROM cdm_tmforum.revenue_assurance.gold_reconciliation_scorecard
+),
+leakage_totals AS (
+  SELECT
+    COUNT(*) AS exception_count,
+    COALESCE(SUM(amount_at_risk), 0) AS risk_amount
+  FROM cdm_tmforum.revenue_assurance.gold_leakage_summary
+  WHERE check_type = 'contract_price_missing_salesforce'
+    AND customer_id IS NULL
+)
+SELECT
+  'CHECK-5b unattributed MISSING_SALESFORCE totals reconcile to gold drill-down' AS check_name,
+  CASE WHEN min_exception_count = max_exception_count
+         AND min_risk_amount = max_risk_amount
+         AND max_exception_count = exception_count
+         AND ABS(max_risk_amount - risk_amount) < 0.01
+    THEN 'PASS' ELSE 'FAIL' END AS status,
+  max_exception_count AS scorecard_exception_count,
+  exception_count AS leakage_exception_count,
+  max_risk_amount AS scorecard_risk_amount,
+  risk_amount AS leakage_risk_amount
+FROM scorecard_totals, leakage_totals;
 
 
 -- -----------------------------------------------------------------------------

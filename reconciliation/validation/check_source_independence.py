@@ -283,30 +283,66 @@ def check_expired_quote_grain(sql_path: Path) -> None:
 
 
 def check_gold_leakage_flag_removed(gold_sql: str) -> None:
-    """gold_leakage_summary's contract_price_mismatch arm must not select
-    the simulator's known_leakage_flag ground-truth column -- it must
-    publish a fixed FALSE placeholder (`FALSE AS known_leakage_flag`) like
-    every other arm in the union, not read a real column into that alias."""
+    """Every gold_leakage_summary arm must publish only the fixed FALSE
+    compatibility placeholder, never simulator leakage truth."""
     match = re.search(
-        r"-- Contract price mismatches.*?(?=UNION ALL|\Z)", gold_sql, re.DOTALL
+        r"CREATE OR REFRESH MATERIALIZED VIEW gold_leakage_summary.*?"
+        r"(?=CREATE OR REFRESH MATERIALIZED VIEW|\Z)",
+        gold_sql,
+        re.DOTALL,
     )
     if not match:
-        FAILURES.append("contract_price_mismatch union arm not found in gold_aggregation.sql")
+        FAILURES.append("gold_leakage_summary view not found in gold_aggregation.sql")
         return
     body = match.group(0)
-    # Any occurrence of `known_leakage_flag` NOT immediately preceded by
-    # `FALSE AS ` means the arm is reading the real ground-truth column
-    # rather than publishing the fixed placeholder every other arm uses.
-    for occurrence in re.finditer(r"known_leakage_flag", body):
-        preceding = body[max(0, occurrence.start() - 12):occurrence.start()]
-        if "FALSE AS " not in preceding:
-            FAILURES.append(
-                "gold_leakage_summary's contract_price_mismatch arm reads a "
-                "real known_leakage_flag column instead of the fixed FALSE "
-                "placeholder -- the simulator's ground-truth leakage column "
-                "must not reach any gold output"
-            )
-            break
+    occurrences = list(re.finditer(r"\bknown_leakage_flag\b", body))
+    false_aliases = re.findall(r"\bFALSE\s+AS\s+known_leakage_flag\b", body)
+    if len(occurrences) != len(false_aliases):
+        FAILURES.append(
+            "gold_leakage_summary contains a known_leakage_flag occurrence "
+            "that is not the fixed FALSE compatibility placeholder"
+        )
+
+
+def check_gold_fx_and_unattributed_propagation(gold_sql: str) -> None:
+    """FX must reach the exception register, scorecard, totals, and weighted
+    composite. ERP-only price rows must retain a drill-down key and expose
+    global unattributed count/risk without adding a NULL-customer row."""
+    for check_type in (
+        "'fx_rate_mismatch'",
+        "'fx_unsupported_currency'",
+        "'fx_missing_market_rate'",
+        "'fx_missing_applied_rate'",
+    ):
+        if check_type not in gold_sql:
+            FAILURES.append(f"gold_leakage_summary is missing FX check type {check_type}")
+
+    required_scorecard_fragments = (
+        "fx_check AS (",
+        "AS fx_accuracy_score",
+        "COALESCE(fx.fx_risk_amount, 0)",
+        "COALESCE(fx.fx_exceptions, 0)",
+        "+ 0.10 * fx_accuracy_score",
+        "unattributed_price_check AS (",
+        "CROSS JOIN unattributed_price_check",
+        "unattributed_missing_salesforce_exceptions",
+        "unattributed_missing_salesforce_amount_at_risk",
+    )
+    for fragment in required_scorecard_fragments:
+        if fragment not in gold_sql:
+            FAILURES.append(f"gold scorecard propagation is missing {fragment!r}")
+
+    missing_salesforce_arm = re.search(
+        r"-- ERP billed rate exists with no corresponding Salesforce contract line.*?"
+        r"(?=UNION ALL|\Z)",
+        gold_sql,
+        re.DOTALL,
+    )
+    if not missing_salesforce_arm or "line_item_id AS STRING" not in missing_salesforce_arm.group(0):
+        FAILURES.append(
+            "contract_price_missing_salesforce lacks the non-null ERP line key "
+            "needed to drill from gold_leakage_summary to source evidence"
+        )
 
 
 def check_scorecard_revrec_full_universe(gold_sql: str) -> None:
@@ -346,10 +382,8 @@ def check_scorecard_revrec_full_universe(gold_sql: str) -> None:
 
 
 def check_rev_rec_risk_amount_exception_consistency(gold_sql: str) -> None:
-    """rev_rec_risk_amount must sum variance only for invoices that breach
-    the 5% material-timing threshold, matching rev_rec_exceptions' count --
-    not SUM(ABS(...)) over every invoice regardless of materiality (the
-    same class of bug fixed for ar_risk_amount elsewhere in this file)."""
+    """rev_rec count and risk must use the same production-equivalent
+    period-level material_timing_mismatch predicate."""
     match = re.search(r"rev_rec_check AS \(.*?\n\),\n", gold_sql, re.DOTALL)
     if not match:
         FAILURES.append("rev_rec_check CTE not found in gold_aggregation.sql")
@@ -369,21 +403,16 @@ def check_rev_rec_risk_amount_exception_consistency(gold_sql: str) -> None:
             "invoices that breach the 5% material-timing threshold, "
             "consistent with rev_rec_exceptions' count"
         )
-    if "rev_rec_risk_amount" in body and not naive_form:
-        # Must have a CASE WHEN ... > 0.05 THEN ABS(...) ELSE 0 END guard.
-        guarded_form = re.search(
-            r"CASE\s+WHEN\s+ABS\(invoice_recognized_total - invoice_gl_posted\)\s*"
-            r"/\s*NULLIF\(GREATEST\(invoice_recognized_total, invoice_gl_posted\), 0\)\s*>\s*0\.05\s+"
-            r"THEN\s+ABS\(invoice_recognized_total - invoice_gl_posted\)\s+ELSE\s+0\s*\n\s*"
-            r"END\)\s*AS\s+rev_rec_risk_amount",
-            body,
+    if body.count("rpt.material_timing_mismatch") != 2:
+        FAILURES.append(
+            "rev_rec_check must use rpt.material_timing_mismatch exactly for "
+            "both rev_rec_exceptions and rev_rec_risk_amount"
         )
-        if not guarded_form:
-            FAILURES.append(
-                "rev_rec_check's rev_rec_risk_amount does not appear to be "
-                "guarded by the same > 0.05 threshold CASE WHEN used for "
-                "rev_rec_exceptions"
-            )
+    if "JOIN rev_rec_period_totals rpt ON rpt.PERIOD_NAME = rbi.PERIOD_NAME" not in body:
+        FAILURES.append(
+            "rev_rec_check does not join the production-equivalent period "
+            "predicate from rev_rec_period_totals"
+        )
 
 
 def main() -> int:
@@ -394,6 +423,7 @@ def main() -> int:
 
     gold_sql = (REPO_ROOT / "reconciliation" / "pipelines" / "gold_aggregation.sql").read_text()
     check_gold_leakage_flag_removed(gold_sql)
+    check_gold_fx_and_unattributed_propagation(gold_sql)
     check_scorecard_revrec_full_universe(gold_sql)
     check_rev_rec_risk_amount_exception_consistency(gold_sql)
 

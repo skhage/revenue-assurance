@@ -104,8 +104,8 @@
       {
         "id": "30000000000000000000000000000001",
         "content": [
-          "Use cdm_tmforum.revenue_assurance.gold_leakage_summary as the unified exception register. amount_at_risk is the detected financial exposure, check_type is the reconciliation root cause, severity is HIGH or MEDIUM, and known_leakage_flag identifies seeded ground-truth leakage.\n",
-          "Use cdm_tmforum.revenue_assurance.gold_reconciliation_scorecard for customer-level health and component scores. Lower composite_health_score indicates higher reconciliation risk.\n",
+          "Use cdm_tmforum.revenue_assurance.gold_leakage_summary as the unified exception register. amount_at_risk is the detected financial exposure, check_type is the reconciliation root cause, severity is HIGH or MEDIUM, and known_leakage_flag is a compatibility field that is always FALSE in production.\n",
+          "Use cdm_tmforum.revenue_assurance.gold_reconciliation_scorecard for customer-level health and all eight component controls. Lower composite_health_score indicates higher reconciliation risk. The unattributed_missing_salesforce_exceptions and unattributed_missing_salesforce_amount_at_risk columns are global ERP-only price totals repeated on each customer row; do not sum them across customers.\n",
           "Use cdm_tmforum.revenue_assurance.gold_anomaly_scores for ML prioritization. The table is supplied by the separate ML workstream; prioritize lower anomaly_rank and HIGH review_priority when available.\n",
           "Use cdm_tmforum.revenue_assurance.gold_revenue_forecast_anomalies for monthly actual, forecast, confidence-bound, budget, and anomaly questions.\n",
           "Use the silver_doc_intelligence tables only for contract or invoice document-extraction evidence.\n",

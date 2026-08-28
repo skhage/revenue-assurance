@@ -123,9 +123,30 @@ billed_rates AS (
   FROM oracle_erp_source.ra_billed_circuit_rates
 ),
 -- FULL OUTER JOIN so a Salesforce-only line (no billed row) and an ERP-only
--- rate (no contract line) both survive. line_item_match_count is computed
--- over contract_lines alone (before the join) since a Salesforce-only line
--- can't fan out via the join it isn't part of on that side.
+-- rate (no contract line) both survive.
+--
+-- ONE-TO-ONE VALIDATION SCOPED TO MATCHED IDENTIFIERS ONLY: SQL's PARTITION
+--   BY groups all NULL values of the partition key together (NULLs compare
+--   equal for grouping purposes) -- so a naive `COUNT(*) OVER (PARTITION BY
+--   cl.line_item_id)` computed AFTER this FULL OUTER JOIN would lump every
+--   MISSING_SALESFORCE row (cl.line_item_id IS NULL, by construction: no
+--   contract line matched) into ONE partition and report that partition's
+--   SIZE (the count of ALL MISSING_SALESFORCE rows) as every such row's
+--   "match count" -- with multiple MISSING_SALESFORCE rows (which the
+--   simulator deliberately injects), this false-fails the 1:1 join
+--   invariant on rows that were never part of a join fan-out at all; there
+--   was nothing on the Salesforce side to fan out FROM. Fixed by only
+--   evaluating the windowed COUNT when cl.line_item_id IS NOT NULL (a real,
+--   matched-or-Salesforce-only identifier) and reporting exactly 1 for
+--   MISSING_SALESFORCE rows (the row-level statement "this identifier
+--   appears once, trivially, since it has no Salesforce-side counterpart to
+--   duplicate against"). ERP-side uniqueness is validated separately and
+--   correctly by `billed_rate_match_count`, which the `billed_rates` CTE
+--   computes BEFORE this join, directly over ra_billed_circuit_rates'
+--   non-null SOURCE_LINE_ITEM_ID values (every row there, including
+--   MISSING_SALESFORCE synthetic ones, carries its own distinct id -- see
+--   data-sim/simulate_source_systems.py -- so no NULL-grouping risk exists
+--   on that side).
 joined AS (
   SELECT
     cl.line_item_id,
@@ -142,22 +163,34 @@ joined AS (
     br.BILLED_UNIT_PRICE AS billed_unit_price,
     br.BILLED_TOTAL_AMOUNT AS billed_total,
     COALESCE(br.billed_rate_match_count, 0) AS billed_rate_match_count,
-    COUNT(*) OVER (PARTITION BY cl.line_item_id) AS line_item_match_count
+    CASE
+      WHEN cl.line_item_id IS NULL THEN 1
+      ELSE COUNT(*) OVER (PARTITION BY cl.line_item_id)
+    END AS line_item_match_count
   FROM contract_lines cl
   FULL OUTER JOIN billed_rates br
     ON br.SOURCE_LINE_ITEM_ID = cl.line_item_id
 ),
+-- ZERO-CONTRACTED-PRICE FIX: ABS(contracted - billed) / NULLIF(contracted, 0)
+-- goes NULL when contracted_price = 0 (division by zero guarded into NULL),
+-- and NULL > 0.01 evaluates to NULL rather than TRUE -- so a $0-contracted
+-- line billed at a positive amount fell through the CASE's WHEN clauses
+-- straight to MATCHED via NULL arithmetic, hiding a real exception (being
+-- billed for something with zero contracted value) as "nothing wrong".
+-- Fixed by checking billed_unit_price > 0 explicitly first when
+-- contracted_price = 0, independent of the percentage calculation.
 priced AS (
   SELECT
     j.*,
-    -- price_mismatch_pct is only meaningful when both sides are present;
-    -- NULL here is fine (it's an internal working column, not published
-    -- directly) since reconciliation_status/estimated_amount_at_risk below
-    -- are always non-null regardless of this value.
+    -- price_mismatch_pct is only meaningful when both sides are present and
+    -- contracted_price is nonzero; NULL here is fine (it's an internal
+    -- working column, not published directly) since reconciliation_status/
+    -- estimated_amount_at_risk below are always non-null regardless.
     ABS(j.contracted_price - j.billed_unit_price) / NULLIF(j.contracted_price, 0) AS price_mismatch_pct,
     CASE
       WHEN j.line_item_id IS NULL THEN 'MISSING_SALESFORCE'
       WHEN j.billed_line_item_id IS NULL THEN 'MISSING_ERP'
+      WHEN j.contracted_price = 0 AND j.billed_unit_price > 0 THEN 'MISMATCH'
       WHEN ABS(j.contracted_price - j.billed_unit_price) / NULLIF(j.contracted_price, 0) > 0.01 THEN 'MISMATCH'
       ELSE 'MATCHED'
     END AS reconciliation_status
@@ -260,16 +293,27 @@ LEFT JOIN salesforce_source.account a
 -- (oracle_erp_source.ra_customer_trx_all.APPLIED_EXCHANGE_RATE) matches the
 -- Refinitiv market rate for that currency/date. Flags > 1% deviation.
 --
--- EXPLICIT EXCEPTION STATUSES: a missing market rate (no Refinitiv quote for
---   that currency/date) or a missing applied rate previously fell through to
---   rate_deviation_flag = FALSE -- indistinguishable from "checked and
---   clean". Both are now their own status: MISSING_MARKET_RATE (no
---   Refinitiv row for that currency/date -- can't validate at all, which is
---   itself worth flagging, not silently passing) and MISSING_APPLIED_RATE
---   (a non-USD invoice with no APPLIED_EXCHANGE_RATE value on record --
---   itself a data-completeness exception). `fx_validation_status` is one of
---   MATCHED, DEVIATION, MISSING_MARKET_RATE, MISSING_APPLIED_RATE,
---   NOT_APPLICABLE (USD invoices, which have nothing to convert).
+-- EXPLICIT EXCEPTION STATUSES: a missing market rate, a missing applied
+--   rate, or an entirely unsupported currency previously all fell through
+--   to rate_deviation_flag = FALSE -- indistinguishable from "checked and
+--   clean". Each is now its own status:
+--     - UNSUPPORTED_CURRENCY: the invoice's currency has NO Refinitiv
+--       coverage at all (no row for that FROM_CURRENCY on ANY date) --
+--       this is a market-data gap, not a single missing day's quote.
+--       Simulator preserves the customer's real billing_currency
+--       unchanged (data-sim/simulate_source_systems.py), so ~21 of 27 real
+--       currencies in the golden data deterministically exercise this
+--       every run (verified live) rather than being silently coerced to
+--       USD before this check ever sees them.
+--     - MISSING_MARKET_RATE: the currency IS supported (Refinitiv quotes
+--       it on other dates) but this specific TRX_DATE has no quote --
+--       narrower and distinct from UNSUPPORTED_CURRENCY.
+--     - MISSING_APPLIED_RATE: a non-USD invoice with no
+--       APPLIED_EXCHANGE_RATE value on record -- a data-completeness
+--       exception on the ERP side.
+--   `fx_validation_status` is one of MATCHED, MISMATCH, UNSUPPORTED_CURRENCY,
+--   MISSING_MARKET_RATE, MISSING_APPLIED_RATE, NOT_APPLICABLE (USD invoices,
+--   which have nothing to convert).
 --
 -- INDEPENDENCE: both sides come from data-sim, but through unrelated formulas
 --   (see simulate_source_systems.py) — APPLIED_EXCHANGE_RATE is not copied
@@ -289,10 +333,15 @@ CREATE OR REFRESH MATERIALIZED VIEW silver_fx_rate_validation (
     EXPECT (INVOICE_CURRENCY_CODE IS NOT NULL),
   CONSTRAINT dq_fx_validation_status_in_known_set
     EXPECT (fx_validation_status IN
-      ('MATCHED', 'DEVIATION', 'MISSING_MARKET_RATE', 'MISSING_APPLIED_RATE', 'NOT_APPLICABLE'))
+      ('MATCHED', 'MISMATCH', 'UNSUPPORTED_CURRENCY', 'MISSING_MARKET_RATE', 'MISSING_APPLIED_RATE', 'NOT_APPLICABLE'))
 )
-COMMENT 'Validates the FX rate billing actually applied to non-USD invoices (ra_customer_trx_all.APPLIED_EXCHANGE_RATE) against the independently-sourced Refinitiv market rate for that currency/date. Publishes an explicit fx_validation_status in {MATCHED, DEVIATION, MISSING_MARKET_RATE, MISSING_APPLIED_RATE, NOT_APPLICABLE} -- a missing rate on either side is its own exception, never a silent clean fallthrough.'
+COMMENT 'Validates the FX rate billing actually applied to non-USD invoices (ra_customer_trx_all.APPLIED_EXCHANGE_RATE) against the independently-sourced Refinitiv market rate for that currency/date. Publishes an explicit fx_validation_status in {MATCHED, MISMATCH, UNSUPPORTED_CURRENCY, MISSING_MARKET_RATE, MISSING_APPLIED_RATE, NOT_APPLICABLE} -- a missing rate, an unsupported currency, or a deviation are each their own exception, never a silent clean fallthrough.'
 AS
+WITH supported_currencies AS (
+  -- A currency is "supported" if Refinitiv quotes it on ANY date -- distinct
+  -- from a supported currency simply missing a quote for one specific date.
+  SELECT DISTINCT FROM_CURRENCY FROM refinitiv_fx_source.gl_daily_rates
+)
 SELECT
   trx.CUSTOMER_TRX_ID,
   trx.TRX_NUMBER,
@@ -307,13 +356,14 @@ SELECT
     / NULLIF(fx.CONVERSION_RATE, 0) AS rate_deviation_pct,
   CASE
     WHEN trx.INVOICE_CURRENCY_CODE = 'USD' THEN 'NOT_APPLICABLE'
+    WHEN sc.FROM_CURRENCY IS NULL THEN 'UNSUPPORTED_CURRENCY'
     WHEN trx.APPLIED_EXCHANGE_RATE IS NULL THEN 'MISSING_APPLIED_RATE'
     WHEN fx.CONVERSION_RATE IS NULL THEN 'MISSING_MARKET_RATE'
-    WHEN ABS(trx.APPLIED_EXCHANGE_RATE - fx.CONVERSION_RATE) / NULLIF(fx.CONVERSION_RATE, 0) > 0.01 THEN 'DEVIATION'
+    WHEN ABS(trx.APPLIED_EXCHANGE_RATE - fx.CONVERSION_RATE) / NULLIF(fx.CONVERSION_RATE, 0) > 0.01 THEN 'MISMATCH'
     ELSE 'MATCHED'
   END AS fx_validation_status,
   -- rate_deviation_flag kept (renamed semantics unchanged) for backward
-  -- compatibility with any existing consumer of the boolean; DEVIATION is
+  -- compatibility with any existing consumer of the boolean; MISMATCH is
   -- the authoritative signal going forward.
   CASE
     WHEN trx.INVOICE_CURRENCY_CODE != 'USD'
@@ -324,6 +374,8 @@ SELECT
   END AS rate_deviation_flag,
   'rule_based' AS detection_method
 FROM oracle_erp_source.ra_customer_trx_all trx
+LEFT JOIN supported_currencies sc
+  ON sc.FROM_CURRENCY = trx.INVOICE_CURRENCY_CODE
 LEFT JOIN refinitiv_fx_source.gl_daily_rates fx
   ON fx.FROM_CURRENCY = trx.INVOICE_CURRENCY_CODE
   AND fx.TO_CURRENCY = 'USD'

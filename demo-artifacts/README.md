@@ -99,13 +99,16 @@ Each check is a **silver materialized view** over the simulated `*_source` syste
 `tmf_*` golden data). Their flagged rows are unioned into **`gold_leakage_summary`** — the unified
 exception register that backs the queue and KPIs (~48K rows, ~$601M at risk; columns `check_type`,
 `severity`, `amount_at_risk`, `account_name`, `reference_id`, `source_table`, `detection_method`,
-`known_leakage_flag`). Per-customer health rolls up into `gold_reconciliation_scorecard`.
+`known_leakage_flag`, retained as a compatibility column but always `FALSE` in production).
+Per-customer health rolls up into `gold_reconciliation_scorecard`; ERP-only price rows with no
+resolvable customer remain drillable in the leakage register and are disclosed through repeated
+`unattributed_missing_salesforce_*` scorecard audit columns rather than a synthetic customer row.
 
 | Silver check (materialized view) | Real evidence | `check_type` in `gold_leakage_summary` |
 |---|---|---|
-| `silver_contract_price_reconciliation` | `salesforce_source.contract_line_item.UnitPrice` (negotiated source of truth) vs `oracle_erp_source.ra_billed_circuit_rates.BILLED_UNIT_PRICE` (independent ERP-billed extract; >1% divergence flags) | `contract_price_mismatch` |
+| `silver_contract_price_reconciliation` | `salesforce_source.contract_line_item.UnitPrice` (negotiated source of truth) vs `oracle_erp_source.ra_billed_circuit_rates.BILLED_UNIT_PRICE` (independent ERP-billed extract; >1% divergence flags); full outer line-key reconciliation retains either missing side | `contract_price_mismatch`, `contract_price_missing_erp`, `contract_price_missing_salesforce` |
 | `silver_discount_authorization_check` | `salesforce_source.sbqq__quoteline__c` vs `sbqq__quote__c.discount_approval__c` | `unauthorized_discount`, `expired_quote_active` (counted at quote grain) |
-| `silver_fx_rate_validation` | `oracle_erp_source.ra_customer_trx_all.APPLIED_EXCHANGE_RATE` (billing-applied rate) vs Refinitiv mid-market `CONVERSION_RATE` (>1% dev) | (FX deviation; not unioned into the register) |
+| `silver_fx_rate_validation` | `oracle_erp_source.ra_customer_trx_all.APPLIED_EXCHANGE_RATE` (billing-applied rate) vs Refinitiv mid-market `CONVERSION_RATE` (>1% dev), with explicit missing/unsupported outcomes | `fx_rate_mismatch`, `fx_unsupported_currency`, `fx_missing_market_rate`, `fx_missing_applied_rate` |
 | `silver_ar_aging_analysis` | `oracle_erp_source.ar_payment_schedules_all` (DSO, 90+ days overdue) | `ar_collection_risk` |
 | `silver_revenue_recognition_check` | ASC-606 `oracle_erp_source.revenue_recognition_schedule` vs `gl_je_lines` | `rev_rec_timing_mismatch` |
 | `silver_doc_intelligence_contracts` | `ai_parse_document` + `ai_extract` on `ironclad_clm_source` contract PDFs vs system | `doc_contract_mismatch` |
