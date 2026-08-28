@@ -1,0 +1,3 @@
+# Pinned dependency for demo-artifacts/scripts/build_pptx.py
+# Install with: python3 -m pip install -r requirements-presentation.txt
+python-pptx==1.0.2

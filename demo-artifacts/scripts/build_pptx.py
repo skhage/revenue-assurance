@@ -96,19 +96,22 @@ def add_card(slide, left, top, width, height, title, body, title_color=TEXT,
     return shape
 
 
-def add_pill(slide, left, top, text, fill=GOLD_HL, color=GOLD, size=10):
-    w = Inches(0.09 * len(text) + 0.35)
-    shape = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, w, Inches(0.28))
+def add_pill(slide, left, top, text, fill=GOLD_HL, color=GOLD, size=10, width=None, height=None):
+    w = width if width is not None else Inches(0.09 * len(text) + 0.35)
+    h = height if height is not None else Inches(0.28)
+    shape = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, w, h)
     shape.adjustments[0] = 0.5
     shape.fill.solid()
     shape.fill.fore_color.rgb = fill
     shape.line.fill.background()
     shape.shadow.inherit = False
     tf = shape.text_frame
+    tf.word_wrap = True
     tf.margin_left = Inches(0.08)
     tf.margin_right = Inches(0.08)
-    tf.margin_top = Inches(0.02)
-    tf.margin_bottom = Inches(0.02)
+    tf.margin_top = Inches(0.06)
+    tf.margin_bottom = Inches(0.06)
+    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
     p = tf.paragraphs[0]
     p.text = text
     p.alignment = PP_ALIGN.CENTER
@@ -139,15 +142,17 @@ def new_slide(kicker, title, sub=None, notes=None):
                 size=26, bold=True, color=TEXT)
     y += Inches(0.65)
     if sub:
-        add_textbox(slide, Inches(0.75), y, Inches(11.8), Inches(0.5), sub,
+        sub_lines = max(1, -(-len(sub) // 110))  # ceil division; ~110 chars/line at this width+size
+        sub_h = Inches(0.3 * sub_lines + 0.1)
+        add_textbox(slide, Inches(0.75), y, Inches(11.8), sub_h, sub,
                     size=14, color=TEXT_MUTED)
-        y += Inches(0.5)
+        y += sub_h
     if notes:
         slide.notes_slide.notes_text_frame.text = notes
     return slide, y
 
 
-def notes_text(timing=None, tell=None, cues=None, translate=None, objection=None):
+def notes_text(timing=None, tell=None, cues=None, translate=None, objection=None, fallback=None, silent=None):
     parts = []
     if timing:
         parts.append(f"Timing: {timing}")
@@ -159,6 +164,10 @@ def notes_text(timing=None, tell=None, cues=None, translate=None, objection=None
         parts.append(f"\nTranslation:\n{translate}")
     if objection:
         parts.append(f"\nIf challenged:\n{objection}")
+    if fallback:
+        parts.append(f"\nIf this surface stalls >10s:\n{fallback}")
+    if silent:
+        parts.append(f"\nNote: {silent}")
     return "\n".join(parts)
 
 
@@ -176,19 +185,19 @@ add_textbox(slide, Inches(0), Inches(1.55), SLIDE_W, Inches(0.9),
 add_textbox(slide, Inches(0), Inches(2.35), SLIDE_W, Inches(0.5),
             "From fragmented audits to governed detection and recovery — built on Databricks",
             size=16, color=TEXT_MUTED, align=PP_ALIGN.CENTER)
-add_textbox(slide, Inches(0), Inches(3.15), SLIDE_W, Inches(1.0),
-            "$250M–$312.5M", size=54, bold=True, color=ERROR, align=PP_ALIGN.CENTER,
+add_textbox(slide, Inches(0), Inches(3.0), SLIDE_W, Inches(1.0),
+            "$248M–$310M", size=54, bold=True, color=ERROR, align=PP_ALIGN.CENTER,
             font="Consolas")
-pill = add_pill(slide, Inches(4.9), Inches(4.15), "ILLUSTRATIVE — BENCHMARK ESTIMATE AT LUMEN SCALE, NOT MEASURED LUMEN LEAKAGE",
-                 fill=GOLD_HL, color=GOLD, size=11)
-pill.width = Inches(3.5)
-pill.left = Inches((13.333 - 3.5) / 2)
-add_textbox(slide, Inches(1.0), Inches(4.85), Inches(11.3), Inches(0.6),
+pill_w = Inches(6.5)
+add_pill(slide, Inches((13.333 - 6.5) / 2), Inches(4.15),
+         "ILLUSTRATIVE — $12.402B SOURCED FY2025 LUMEN REVENUE (10-K) X 2.0-2.5% INDUSTRY LEAKAGE ASSUMPTION",
+         fill=GOLD_HL, color=GOLD, size=11, width=pill_w, height=Inches(0.55))
+add_textbox(slide, Inches(1.0), Inches(5.0), Inches(11.3), Inches(0.6),
             "Prospect: Lumen Technologies — no Lumen data used        Demo operator: Lakelink Fiber (fictional)        Format: 20–30 min scored roleplay",
             size=12, color=TEXT_MUTED, align=PP_ALIGN.CENTER)
 slide.notes_slide.notes_text_frame.text = notes_text(
     timing="1:15",
-    tell="At Lumen's scale, a two-to-two-and-a-half percent leakage rate represents roughly $250 million to $312 million a year. That is not one broken billing rule — it is value escaping between systems that are each locally correct: sales, contracts, provisioning, billing, finance, and collections. We built a working revenue-assurance solution for Lakelink Fiber, a fictional carrier with realistic telecom data and operating patterns. No Lumen customer data is used.",
+    tell="Lumen reported $12.4 billion in total revenue for fiscal year 2025 — that's from your own 10-K, filed February 20, 2026, not an estimate. Apply a conservative industry leakage assumption of two to two-and-a-half percent, bounded by PwC's published one-to-five-percent range for telecom revenue leakage, and that's roughly $248 million to $310 million a year of exposure. That is not one broken billing rule — it is value escaping between systems that are each locally correct: sales, contracts, provisioning, billing, finance, and collections. I want to be direct about what kind of number this is: it's your real revenue multiplied by an external industry assumption, not a measurement of your actual leakage — full sources and formulas are in Appendix F. We built a working revenue-assurance solution for Lakelink Fiber, a fictional carrier with realistic telecom data and operating patterns. No Lumen customer data is used.",
     cues=["Dana (executive): value framing throughout.", "Priya (technical): architecture, governance, control points behind every number."],
 )
 
@@ -230,7 +239,7 @@ for title, body in flow:
 # ============================================================================
 # SLIDE 4 — DEMO CONTRACT
 # ============================================================================
-slide, y = new_slide("Demo contract · Setup 3 of 7", "In the next 16 minutes, three outcomes",
+slide, y = new_slide("Demo contract · Setup 3 of 7", "In the next 16.5 minutes, three outcomes",
     "The verbal contract before switching to the live demo.",
     notes=notes_text(timing="0:45",
         tell="The demo has three tests. First, can an executive quantify the exposure? Second, can an architect or auditor prove each exception? Third, can an analyst move from detection to accountable recovery?"))
@@ -248,7 +257,8 @@ slide, y = new_slide("Live demo 1 of 7 · Show 3:00", "Executive Command Center"
     notes=notes_text(timing="3:00",
         tell="We have moved from an unbounded audit question to a governed register that finance can decompose by cause and customer. The value is not the dashboard itself — it is deciding where to put the next hour of recovery effort.",
         cues=["Open “Lakelink Fiber — Revenue Assurance Command Center” dashboard.", "Executive Summary tiles → Leakage by Check Type → Customer Risk Scorecard."],
-        translate="Faster prioritization, a shared finance/sales/billing/collections definition, and exposure that can be tracked run over run."))
+        translate="Faster prioritization, a shared finance/sales/billing/collections definition, and exposure that can be tracked run over run.",
+        fallback="Named fallback: ra_demo_fallback.pdf (KPI-tile slide). Recovery script: \"Let me walk you through the numbers from our last verified run\" — narrate the golden baseline (~$601.5M / ~48,108 exceptions) from 09-runbook.md section 2.4."))
 kpis = [("$601.5M", "Total amount at risk (demo)"), ("48,108", "Open exceptions (demo)"),
         ("$127.5M", "High-severity at risk (demo)"), ("~8,200", "Accounts affected (demo)")]
 kx = Inches(0.75)
@@ -265,7 +275,8 @@ slide, y = new_slide("Live demo 2 of 7 · Show 1:30", "Overview: the same truth 
     "The executive and analyst should not debate different numbers.",
     notes=notes_text(timing="1:30",
         tell="One definition now serves two altitudes. The dashboard funds the decision; this workspace turns the decision into daily work.",
-        cues=["Connect KPI totals to the executive dashboard.", "Show root-cause concentration bar chart."]))
+        cues=["Connect KPI totals to the executive dashboard.", "Show root-cause concentration bar chart."],
+        fallback="Named fallback: ra_demo_prerun.html (exported KPIs, no live compute). Recovery script: \"Here's the same view captured from our pre-run — the numbers reconcile to what you just saw on the dashboard.\""))
 bars = [("ar_collection_risk", "~$500M"), ("rev_rec_timing_mismatch", "~$85.7M"), ("unauthorized_discount", "~$13.9M")]
 add_card(slide, Inches(0.75), y, Inches(11.55), Inches(2.2), "RA Exceptions Console → Overview",
          "\n".join(f"{k}: {v}" for k, v in bars), body_size=13)
@@ -278,7 +289,8 @@ add_textbox(slide, Inches(0.75), y + Inches(2.4), Inches(11.55), Inches(0.5),
 slide, y = new_slide("Live demo 3 of 7 · Show 2:00", "Exception Queue: prioritize the work",
     "Forty-eight thousand exceptions are not a to-do list. Prioritization is the product.",
     notes=notes_text(timing="2:00",
-        tell="We have reduced a portfolio-level number to the next best recovery action. Now the architect's question becomes: is this evidence, or merely an assertion?"))
+        tell="We have reduced a portfolio-level number to the next best recovery action. Now the architect's question becomes: is this evidence, or merely an assertion?",
+        fallback="Named fallback: ra_demo_prerun.html (exported KPIs, no live compute). Recovery script: \"Here's the same view captured from our pre-run — the numbers reconcile to what you just saw on the dashboard.\""))
 rows = [("ar_collection_risk", "Meridian Logistics Corp", "High", "$284,000", "New"),
         ("contract_price_mismatch", "Harbor Point Manufacturing", "High", "$171,500", "Investigating"),
         ("unauthorized_discount", "Palisade Health Network", "Medium", "$96,200", "Recovering")]
@@ -305,7 +317,8 @@ slide, y = new_slide("Live demo 4 of 7 · Show 2:30", "Exception evidence: prove
     "A revenue-assurance signal is only useful if finance, audit, and engineering can reproduce it.",
     notes=notes_text(timing="2:30",
         tell="Every exception carries enough provenance to move from 'the model says so' to 'this source record violated this named control.' That shortens dispute resolution and builds trust with finance and audit.",
-        translate="The gold register retains the check type, source reference, detection method, severity, and amount at risk. Unity Catalog provides the governed analytical boundary and lineage path back through the reconciliation layer."))
+        translate="The gold register retains the check type, source reference, detection method, severity, and amount at risk. Unity Catalog provides the governed analytical boundary and lineage path back through the reconciliation layer.",
+        fallback="Named fallback: ra_demo_fallback.pdf (evidence-drawer slide). Recovery script: narrate the detection-evidence table verbatim from the fallback slide — it carries the same check_type/reference/source_table fields as the live drawer."))
 add_card(slide, Inches(0.75), y, Inches(5.6), Inches(3.0), "Detection evidence",
          "Check type: contract_price_mismatch\nReference: ContractNumber CN-40218\nDetection method: rule_based\nSource table: salesforce_source.contract_line_item\nKnown-leakage flag: true", body_size=12)
 add_card(slide, Inches(6.55), y, Inches(6.0), Inches(3.0), "Demo cues",
@@ -318,7 +331,8 @@ slide, y = new_slide("Live demo 5 of 7 · Show 2:30", "My Cases: close the recov
     "Detection without recovery is a better report, not a business outcome.",
     notes=notes_text(timing="2:30",
         tell="The control now has an owner, a decision trail, and a recovery state. That is the bridge from amount at risk to recovered and prevented revenue.",
-        translate="Executive: this gives leadership accountability. Technical: Lakebase provides transactional updates and relational constraints for case state, while the analytical evidence remains governed in Unity Catalog."))
+        translate="Executive: this gives leadership accountability. Technical: Lakebase provides transactional updates and relational constraints for case state, while the analytical evidence remains governed in Unity Catalog.",
+        fallback="Named fallback: ra_demo_full.mp4 (case-workflow segment). Recovery script: \"I'll play the recorded case-assignment flow rather than risk a stall on stage.\""))
 stages = ["New", "Investigating\n(requires assignee)", "Recovering", "Recovered / Written off\n(terminal)"]
 sx = Inches(0.75)
 for s in stages:
@@ -334,7 +348,8 @@ slide, y = new_slide("Live demo 6 of 7 · Show 3:00", "Architecture: transparent
     "We designed this to fit the data estate rather than requiring an eighteen-month replacement program.",
     notes=notes_text(timing="3:00",
         tell="The path is explicit, governed, and deployable as one repository. We reuse the customer's existing model, isolate writes, and add controls incrementally.",
-        cues=["Open Architecture tab in the console; walk the seven-step tour at executive speed.", "Open one live workspace or catalog link if stable."]))
+        cues=["Open Architecture tab in the console; walk the seven-step tour at executive speed.", "Open one live workspace or catalog link if stable."],
+        fallback="Named fallback: ra_demo_fallback.pdf (architecture-tour slide). Recovery script: narrate the seven-step tour from the static diagram; skip the \"open in workspace\" link."))
 steps = [
     ("1 · Lakehouse", "Existing TM Forum source foundation (cdm_tmforum.tmf_*, read-only)"),
     ("2 · Simulated sources", "*_source snapshots keyed to golden customers"),
@@ -359,7 +374,8 @@ for i, (t, b) in enumerate(steps):
 slide, y = new_slide("Live demo 7 of 7 · Show 2:00", "AI where it earns its place",
     "AI is useful here when it expands coverage beyond deterministic joins without weakening provenance.",
     notes=notes_text(timing="2:00",
-        tell="AI is not replacing the control framework. It is extending the kinds of evidence the framework can evaluate. The output still lands in named, governed, reviewable surfaces."))
+        tell="AI is not replacing the control framework. It is extending the kinds of evidence the framework can evaluate. The output still lands in named, governed, reviewable surfaces.",
+        fallback="Named fallback: pre-run Genie screenshot in ra_demo_fallback.pdf. Recovery script: \"Here's the same question answered a moment ago\" — read the pre-captured answer verbatim."))
 add_card(slide, Inches(0.75), y, Inches(3.75), Inches(1.7), "Document Intelligence", "Compare Ironclad contract/invoice PDFs with structured records using ai_parse_document + ai_extract.", body_size=11)
 add_card(slide, Inches(4.65), y, Inches(3.75), Inches(1.7), "Forecast vs. Actuals", "Actual revenue, ai_forecast interval, and budget comparison per month.", body_size=11)
 add_card(slide, Inches(8.55), y, Inches(3.75), Inches(1.7), "Genie", "One scripted natural-language question against governed data.", body_size=11)
@@ -417,7 +433,7 @@ add_card(slide, Inches(6.65), y + Inches(2.2), Inches(5.9), Inches(2.2), "Succes
 # ============================================================================
 slide, y = new_slide("Value story · Close 3 of 4", "Quantify → Prioritize → Prove → Recover → Prevent", None,
     notes=notes_text(timing="1:45",
-        tell="Let me leave you with the business progression. Leakage stops being an opinion and becomes a register. Nobody recovers all of the gross leakage — a defensible planning range is $125 million to $220 million of recovered and prevented revenue over a phased 12-to-24-month program, subject to validation on Lumen data."))
+        tell="Let me leave you with the business progression. Leakage stops being an opinion and becomes a register. Using Lumen's own reported FY2025 revenue of $12.4 billion and a conservative two-to-two-and-a-half-percent industry leakage assumption, gross exposure lands at $248 million to $310 million. Nobody recovers all of the gross leakage — applying a fifty-to-seventy-percent industry recovery-rate assumption, a defensible planning range is $124 million to $217 million of recovered and prevented revenue over a phased 12-to-24-month program, subject to validation on Lumen data."))
 steps5 = [("1 · Quantify", "A governed leakage register replaces competing spreadsheets"),
           ("2 · Prioritize", "Risk, amount, cause, and customer concentrate recovery effort"),
           ("3 · Prove", "Source evidence, detection method, and lineage accelerate trust"),
@@ -430,18 +446,22 @@ for i, (t, b) in enumerate(steps5):
     if (i + 1) % 3 == 0:
         sx = Inches(0.75)
         sy += Inches(1.3)
-add_card(slide, Inches(0.75), y + Inches(2.5), Inches(5.6), Inches(0.9), "$250M–$312M",
-         "Illustrative annual gross leakage exposure at Lumen scale", title_color=ERROR, title_size=22, body_size=10)
-add_card(slide, Inches(6.55), y + Inches(2.5), Inches(6.0), Inches(0.9), "$125M–$220M",
-         "Defensible planning range: recovered + prevented over 12–24 months", title_color=PRIMARY, title_size=22, body_size=10)
-add_textbox(slide, Inches(0.75), y + Inches(3.6), Inches(11.55), Inches(0.6),
+add_card(slide, Inches(0.75), y + Inches(2.5), Inches(5.6), Inches(0.9), "$248M–$310M",
+         "Illustrative gross exposure: $12.402B sourced FY2025 Lumen revenue (10-K) x 2.0-2.5% industry leakage assumption", title_color=ERROR, title_size=20, body_size=9)
+add_card(slide, Inches(6.55), y + Inches(2.5), Inches(6.0), Inches(0.9), "$124M–$217M",
+         "Illustrative recovery: gross exposure x 50-70% industry recovery-rate assumption, over 12-24 months", title_color=PRIMARY, title_size=20, body_size=9)
+add_textbox(slide, Inches(0.75), y + Inches(3.55), Inches(11.55), Inches(0.35),
+            "Formula and full citations: Appendix F. Contrast with the synthetic Lakelink demo output shown live (~48,108 exceptions / ~$601.5M) — never the same number.",
+            size=10, color=TEXT_FAINT)
+add_textbox(slide, Inches(0.75), y + Inches(3.95), Inches(11.55), Inches(0.5),
             "Dana, does that create a sufficiently clear economic test for sponsorship? Priya, are the evidence, governance, and integration boundaries strong enough to earn a read-only technical discovery?",
             size=13, italic=True, color=TEXT_MUTED)
 
 # ============================================================================
 # SLIDE 15 — APPENDIX A: EXECUTIVE OBJECTIONS
 # ============================================================================
-slide, y = new_slide("Appendix A · Objection handling", "Executive objections", None)
+slide, y = new_slide("Appendix A · Objection handling", "Executive objections", None,
+    notes=notes_text(silent="Reference-only appendix slide — no talk track. The on-slide Q&A text is the speaker note; read it directly if the objection comes up."))
 exec_obj = [
     ('"How do I know the value is real?"', "Exec: figures are explicitly illustrative; the decision gate is the first two controls on your data. Technical bridge: every measured exception retains a source reference and named control."),
     ('"This sounds expensive."', "Exec: reuses existing data estate, starts with two controls, bounded first investment. Technical bridge: serverless resources, SQL-first controls, one deployable repository."),
@@ -465,7 +485,8 @@ for i, (q, a) in enumerate(exec_obj):
 # ============================================================================
 # SLIDE 16 — APPENDIX B: TECHNICAL OBJECTIONS
 # ============================================================================
-slide, y = new_slide("Appendix B · Objection handling", "Technical objections", None)
+slide, y = new_slide("Appendix B · Objection handling", "Technical objections", None,
+    notes=notes_text(silent="Reference-only appendix slide — no talk track. The on-slide Q&A text is the speaker note; read it directly if the objection comes up."))
 tech_obj = [
     ('"How do identities resolve across systems?"', "Explicit joins from source keys to golden TM Forum identities; a production roadmap should standardize mappings as complexity grows."),
     ('"How do you prevent false positives?"', "Named/testable controls, non-negative amounts, constrained enumerations, flagged unparseable docs, deterministic seeded coverage."),
@@ -486,7 +507,8 @@ for i, (q, a) in enumerate(tech_obj):
 # ============================================================================
 # SLIDE 17 — APPENDIX C: IMPLEMENTED VS ROADMAP
 # ============================================================================
-slide, y = new_slide("Appendix C · Scope honesty", "Implemented versus roadmap", None)
+slide, y = new_slide("Appendix C · Scope honesty", "Implemented versus roadmap", None,
+    notes=notes_text(silent="Reference-only appendix slide — no talk track. Use it to answer a scope question directly from the two lists if asked."))
 implemented = "Existing TM Forum catalog reuse\nSimulated Salesforce, Oracle, Refinitiv, Ironclad, MDM sources\nSeven reconciliation control surfaces\nUnified gold leakage register\nReconciliation scorecard\nDocument-intelligence checks\nForecast anomaly surface\nExecutive AI/BI dashboard\nStandalone Genie space\nRA Exceptions Console\nLakebase cases and notes\nArchitecture links and bundle deployment contract"
 roadmap = "Live production connectors and continuous ingestion\nEmbedded Genie side panel\nDeployed Unity Catalog metric views\nDeployed business Domains, governed tags, glossary Pages\nLakebase-to-Delta sync for recovery-rate KPIs\nAutomated CRM, billing, or collections write-back\nMulti-tenancy, disaster recovery, production SSO design\nProven production ML accuracy on organic distributions"
 add_card(slide, Inches(0.75), y, Inches(5.7), Inches(4.5), "Implemented — safe to demonstrate", implemented, title_color=PRIMARY, body_size=11)
@@ -506,13 +528,14 @@ add_card(slide, Inches(6.65), y, Inches(5.9), Inches(3.4), "Controls retained", 
 # ============================================================================
 # SLIDE 19 — TIMING CARD
 # ============================================================================
-slide, y = new_slide("Appendix E · Timing card", "24 minutes prepared + 6 minutes Q&A", None)
+slide, y = new_slide("Appendix E · Timing card", "Full route: 26:30 prepared + 3:30 Q&A", None,
+    notes=notes_text(silent="Reference-only appendix slide — no talk track. The on-slide table and compressed-route card are the content; read timings directly if asked."))
 timing_rows = [
-    ("Slides 1–4: setup and contract", "4:00"), ("Executive dashboard", "3:00"),
-    ("App Overview and Queue", "3:30"), ("Evidence drawer", "2:30"),
-    ("Assignment and lifecycle", "2:30"), ("Architecture", "3:00"),
-    ("AI surface", "2:00"), ("Trade-offs and value close", "3:30"),
-    ("Prepared total", "24:00"), ("Q&A buffer", "6:00"),
+    ("Slides 1-4: setup and contract", "5:15"), ("Executive dashboard (Demo 1)", "3:00"),
+    ("App Overview and Queue (Demo 2+3)", "3:30"), ("Evidence drawer (Demo 4)", "2:30"),
+    ("Assignment and lifecycle (Demo 5)", "2:30"), ("Architecture (Demo 6)", "3:00"),
+    ("AI surface (Demo 7)", "2:00"), ("Trade-offs and value close (Slides 5-7)", "4:45"),
+    ("Prepared total", "26:30"), ("Q&A buffer", "3:30"), ("Grand total", "30:00"),
 ]
 tbl_shape = slide.shapes.add_table(len(timing_rows) + 1, 2, Inches(0.75), y, Inches(6.5), Inches(4.6))
 tbl = tbl_shape.table
@@ -528,13 +551,14 @@ for r, (seg, t) in enumerate(timing_rows, start=1):
     tbl.cell(r, 1).text = t
     for c in range(2):
         tbl.cell(r, c).text_frame.paragraphs[0].runs[0].font.size = Pt(10)
-add_card(slide, Inches(7.5), y, Inches(4.85), Inches(4.6), "20-minute compression",
-         "Executive dashboard: 2:00\nOverview and Queue: 2:30\nEvidence drawer: 2:00\nCase lifecycle: 2:00\nArchitecture: 2:00\nAI: 1:00\nClose: 2:00\n\nDo not cut quantification, evidence, or recovery.", body_size=11)
+add_card(slide, Inches(7.5), y, Inches(4.85), Inches(4.6), "Rehearsed 20-22 min compressed route",
+         "21:00 prepared + up to 9:00 Q&A\n\nSetup: 3:00 | Exec dashboard: 2:00\nOverview+Queue: 2:30 | Evidence: 2:00\nCase lifecycle: 2:00 | Architecture: 2:30\nAI (one surface): 1:30 | Trade-offs+close: 5:30\n\nCuts land on setup and architecture narration — never on quantify, prove, recover, or the sponsorship close.", body_size=10)
 
 # ============================================================================
 # SLIDE 20 — REHEARSAL SCORECARD
 # ============================================================================
-slide, y = new_slide("Appendix E (cont.) · Rehearsal scorecard", "How this gets scored", None)
+slide, y = new_slide("Appendix E (cont.) · Rehearsal scorecard", "How this gets scored", None,
+    notes=notes_text(silent="Reference-only appendix slide — no talk track. This is a self-scoring checklist, not narrated content."))
 score = [
     ("Demo setup", "Name Lumen as audience, Lakelink as demo operator.\nState problem + illustrative economics before tech.\nContract for quantify/prove/recover."),
     ("Tell-show-tell", "State one claim before each screen.\nPerform one or two intentional actions only.\nTranslate the screen into a business outcome."),
@@ -551,6 +575,30 @@ for i, (t, b) in enumerate(score):
         qy += Inches(1.75)
 add_card(slide, Inches(0.75), qy, Inches(11.8), Inches(1.1), "Professionalism",
          "Never debug on stage for more than ten seconds. Volunteer material limitations before being challenged. Avoid claiming undeployed metric views, tags, embedded Genie, or production ML accuracy. Close with two direct stakeholder questions.", body_size=10)
+
+# ============================================================================
+# SLIDE 21 — APPENDIX F: SOURCES & ASSUMPTIONS
+# ============================================================================
+slide, y = new_slide("Appendix F · Sources & assumptions", "Where the $248M-$310M and $124M-$217M come from",
+    "Three categories used consistently across this deck: sourced Lumen fact, external industry assumption, synthetic Lakelink demo output.",
+    notes=notes_text(silent="Reference-only appendix slide — no talk track by default. If challenged on \"how do I know the value is real,\" pull this up and read the formula and citations directly rather than defending the number from memory."))
+sources = [
+    ("Sourced Lumen fact", "$12.402B total revenue, FY2025.\nLumen Technologies Form 10-K, filed with the SEC Feb 20, 2026 (accession 0000018926-26-000014). Corroborated by Lumen's Feb 3, 2026 Q4/FY2025 earnings release (Exhibit 99.1 to Form 8-K) — same figure, down 5% from $13.108B in FY2024."),
+    ("External assumption — leakage rate", "2.0%-2.5% of revenue as gross leakage.\nBounded by PwC's \"1-5% of telecom revenue\" range (Dec 2020) and TM Forum's 2017/18 survey (0.9% measured / 1.9% estimated). Caveat: TM Forum's 2024-2025 survey (IG1438) shows industry average has fallen to ~0.52%; a separate RAG 2020 survey found non-fraud billing-error leakage alone averages 2.92%. Our range is a conservative planning test between those two figures."),
+    ("External assumption — recovery rate", "50%-70% of identified leakage recovered/prevented.\nTM Forum 2017/18 survey: 51% average industry recovery rate; top-tier programs report 75%+."),
+    ("Synthetic Lakelink demo output (never blended with the above)", "~48,108 exceptions / ~$601.5M at risk.\nOutput of the seeded gold_leakage_summary register (fixed seed=42) shown live in Demos 1-2 — entirely separate data, entirely separate number, from a different (fictional) operator."),
+]
+fx, fy2 = Inches(0.75), y
+for i, (t, b) in enumerate(sources):
+    add_card(slide, fx, fy2, Inches(5.7), Inches(1.75), t, b, body_size=9, title_size=11)
+    if i % 2 == 0:
+        fx = Inches(6.65)
+    else:
+        fx = Inches(0.75)
+        fy2 += Inches(1.9)
+add_card(slide, Inches(0.75), fy2, Inches(11.55), Inches(1.5), "The formula, in full",
+         "Gross exposure = $12.402B x 2.0% to $12.402B x 2.5% = $248.0M to $310.1M\n\nRecovered/prevented = $248.0M x 50% to $310.1M x 70% = $124.0M to $217.0M",
+         body_size=11)
 
 prs.save(OUTPUT_PATH)
 print(f"Saved {len(prs.slides._sldIdLst)} slides to {OUTPUT_PATH}")

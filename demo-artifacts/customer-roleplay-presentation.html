@@ -15,12 +15,12 @@
   --color-bg:#f5f6f5; --color-surface:#ffffff; --color-surface-2:#fbfbfa;
   --color-surface-offset:#eef0ef; --color-surface-offset-2:#e6e9e7; --color-surface-dynamic:#dfe3e1;
   --color-divider:#dfe1df; --color-border:#d3d6d3;
-  --color-text:#1c2321; --color-text-muted:#5c6663; --color-text-faint:#9aa19e; --color-text-inverse:#f7f8f7;
+  --color-text:#1c2321; --color-text-muted:#5c6663; --color-text-faint:#676e6b; --color-text-inverse:#f7f8f7;
   --color-primary:#0a6e6e; --color-primary-hover:#075454; --color-primary-active:#053e3e; --color-primary-highlight:#cfe3e1;
   --color-warning:#96530f; --color-warning-hover:#713e0b; --color-warning-highlight:#e6d8c6;
   --color-error:#9c2b2b; --color-error-hover:#7a2020; --color-error-highlight:#e6cccc;
   --color-success:#2f6d3a; --color-success-highlight:#d3e2d5;
-  --color-gold:#a97c0b; --color-gold-highlight:#ecdfc0;
+  --color-gold:#89590b; --color-gold-highlight:#ecdfc0;
   --color-brand:#ff5f46; --color-brand-highlight:#fabfba;
   --radius-sm:.375rem; --radius-md:.5rem; --radius-lg:.75rem; --radius-xl:1rem; --radius-full:9999px;
   --transition-interactive:180ms cubic-bezier(.16,1,.3,1);
@@ -31,7 +31,7 @@
   --color-bg:#14181a; --color-surface:#1a1f21; --color-surface-2:#1e2325;
   --color-surface-offset:#20262a; --color-surface-offset-2:#262d31; --color-surface-dynamic:#2d3538;
   --color-divider:#272e31; --color-border:#374045;
-  --color-text:#dee3e1; --color-text-muted:#8a9491; --color-text-faint:#5c6663; --color-text-inverse:#171b1c;
+  --color-text:#dee3e1; --color-text-muted:#8a9491; --color-text-faint:#868d8a; --color-text-inverse:#171b1c;
   --color-primary:#5bb0ac; --color-primary-hover:#7ecac6; --color-primary-highlight:#243838;
   --color-warning:#d99a58; --color-warning-highlight:#3d3324;
   --color-error:#e58080; --color-error-highlight:#3e2626;
@@ -50,6 +50,11 @@ table{border-collapse:collapse;width:100%}
 :focus-visible{outline:2px solid var(--color-primary);outline-offset:2px;border-radius:4px}
 .mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums lining-nums}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+@media (prefers-reduced-motion:reduce){
+  .slide{transition:none}
+  .deck-progress-fill{transition:none}
+  html{scroll-behavior:auto}
+}
 
 /* ============ Deck shell ============ */
 .deck{position:relative;height:100dvh;display:flex;flex-direction:column}
@@ -164,41 +169,42 @@ table.deck-table tr:last-child td{border-bottom:none}
 </style>
 </head>
 <body>
-<div class="deck" id="deck">
+<a href="#stage" class="sr-only">Skip to slide content</a>
+<div class="deck" id="deck" role="application" aria-label="Lakelink Fiber Revenue Assurance customer roleplay presentation">
   <div class="deck-chrome">
     <div class="brand">
-      <svg viewBox="0 0 512 512" fill="none"><path d="M64 64H224V224H64V64Z" fill="currentColor" opacity=".55"/><path d="M440 448L280 448L280 352C280 316.654 308.654 288 344 288L376 288C411.346 288 440 316.654 440 352L440 448Z" fill="currentColor" opacity=".55"/><path d="M152 288L240 448H64L152 288Z" fill="currentColor"/><path d="M280 148C280 101.608 317.608 64 364 64V64C410.392 64 448 101.608 448 148V148C448 194.392 410.392 232 364 232V232C317.608 232 280 194.392 280 148V148Z" fill="currentColor"/></svg>
+      <svg viewBox="0 0 512 512" fill="none" aria-hidden="true"><path d="M64 64H224V224H64V64Z" fill="currentColor" opacity=".55"/><path d="M440 448L280 448L280 352C280 316.654 308.654 288 344 288L376 288C411.346 288 440 316.654 440 352L440 448Z" fill="currentColor" opacity=".55"/><path d="M152 288L240 448H64L152 288Z" fill="currentColor"/><path d="M280 148C280 101.608 317.608 64 364 64V64C410.392 64 448 101.608 448 148V148C448 194.392 410.392 232 364 232V232C317.608 232 280 194.392 280 148V148Z" fill="currentColor"/></svg>
       <span>Lakelink Fiber Revenue Assurance — Customer Roleplay</span>
     </div>
-    <div class="deck-progress"><div class="deck-progress-fill" id="progressFill"></div></div>
+    <div class="deck-progress" role="progressbar" aria-label="Presentation progress" aria-valuemin="1" id="progressBar"><div class="deck-progress-fill" id="progressFill"></div></div>
     <div class="deck-controls">
       <button class="icon-btn" id="btnPrev" aria-label="Previous slide" title="Previous (←)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
       </button>
-      <span class="count mono" id="slideCount">1 / 1</span>
+      <span class="count mono" id="slideCount" aria-hidden="true">1 / 1</span>
       <button class="icon-btn" id="btnNext" aria-label="Next slide" title="Next (→)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
       </button>
-      <button class="icon-btn" id="btnOverview" aria-label="Toggle slide overview" title="Overview (O)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+      <button class="icon-btn" id="btnOverview" aria-label="Toggle slide overview" aria-pressed="false" title="Overview (O)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
       </button>
-      <button class="icon-btn" id="btnNotes" aria-label="Toggle speaker notes" title="Speaker notes (N)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4h16v12H8l-4 4V4z"/></svg>
+      <button class="icon-btn" id="btnNotes" aria-label="Toggle speaker notes" aria-pressed="false" title="Speaker notes (N)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 4h16v12H8l-4 4V4z"/></svg>
       </button>
-      <button class="icon-btn" id="btnFullscreen" aria-label="Toggle fullscreen" title="Fullscreen (F)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
+      <button class="icon-btn" id="btnFullscreen" aria-label="Toggle fullscreen" aria-pressed="false" title="Fullscreen (F)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
       </button>
-      <button class="icon-btn" id="btnTheme" aria-label="Toggle theme" title="Theme">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+      <button class="icon-btn" id="btnTheme" aria-label="Toggle dark mode" aria-pressed="false" title="Theme">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
       </button>
     </div>
   </div>
   <div class="deck-body">
     <div class="stage-wrap" id="stageWrap">
-      <div class="stage" id="stage"></div>
+      <div class="stage" id="stage" role="region" aria-label="Current slide" aria-live="off" tabindex="-1"></div>
     </div>
-    <div class="overview-shell" id="overviewShell"><div class="overview-grid" id="overviewGrid"></div></div>
-    <aside class="notes-pane" id="notesPane">
+    <div class="overview-shell" id="overviewShell" role="region" aria-label="Slide overview"><div class="overview-grid" id="overviewGrid"></div></div>
+    <aside class="notes-pane" id="notesPane" aria-label="Speaker notes">
       <div class="notes-pane-header">
         <h3 id="notesTitle">Speaker notes</h3>
         <span class="timing mono" id="notesTiming"></span>
@@ -206,6 +212,7 @@ table.deck-table tr:last-child td{border-bottom:none}
       <div class="notes-pane-body" id="notesBody"></div>
     </aside>
   </div>
+  <div class="sr-only" role="status" aria-live="polite" id="slideAnnouncer"></div>
 </div>
 <script>
 /* ===================== SLIDE DATA ===================== */
@@ -225,8 +232,8 @@ const SLIDES = [
       <h1>Lakelink Fiber Revenue Assurance</h1>
     </div>
     <div class="tagline">From fragmented audits to governed detection and recovery — built on Databricks</div>
-    <div class="hero-number">$250M–$312.5M</div>
-    <div class="hero-caption pill illustrative" style="display:inline-block">Illustrative benchmark-based estimate at Lumen scale — not measured Lumen leakage</div>
+    <div class="hero-number">$248M–$310M</div>
+    <div class="hero-caption pill illustrative" style="display:inline-block">Illustrative — Lumen's sourced FY2025 revenue ($12.402B, 10-K) × an external 2.0–2.5% industry leakage-rate assumption. Not measured Lumen leakage.</div>
     <div class="audience-row">
       <div><b>Prospect</b> · Lumen Technologies — no Lumen data used</div>
       <div><b>Demo operator</b> · Lakelink Fiber (fictional) — synthetic + seeded data</div>
@@ -235,10 +242,10 @@ const SLIDES = [
   `,
   notes: {
     timing: '1:15',
-    tell: "At Lumen's scale, a two-to-two-and-a-half percent leakage rate represents roughly $250 million to $312 million a year. That is not one broken billing rule — it is value escaping between systems that are each locally correct: sales, contracts, provisioning, billing, finance, and collections. We built a working revenue-assurance solution for Lakelink Fiber, a fictional carrier with realistic telecom data and operating patterns. No Lumen customer data is used. For the next twenty minutes, judge two things: can this turn leakage into a daily operational control, and can we prove where every dollar came from?",
+    tell: "Lumen reported $12.4 billion in total revenue for fiscal year 2025 — that's from your own 10-K, filed February 20, 2026, not an estimate. Apply a conservative industry leakage assumption of two to two-and-a-half percent, bounded by PwC's published one-to-five-percent range for telecom revenue leakage, and that's roughly $248 million to $310 million a year of exposure. That is not one broken billing rule — it is value escaping between systems that are each locally correct: sales, contracts, provisioning, billing, finance, and collections. I want to be direct about what kind of number this is: it's your real revenue multiplied by an external industry assumption, not a measurement of your actual leakage — full sources and formulas are in the appendix. We built a working revenue-assurance solution for Lakelink Fiber, a fictional carrier with realistic telecom data and operating patterns. No Lumen customer data is used. For the next twenty minutes, judge two things: can this turn leakage into a daily operational control, and can we prove where every dollar came from?",
     cues: ['Dana (executive): value framing throughout.', 'Priya (technical): architecture, governance, control points behind every number.'],
   },
-  evidence: ['demo-artifacts/00-problem-overview.md', 'demo-artifacts/01-product-requirements.md', 'demo-artifacts/README.md'],
+  evidence: ['demo-artifacts/00-problem-overview.md', 'demo-artifacts/01-product-requirements.md', 'demo-artifacts/README.md', 'Appendix F — Sources & assumptions'],
 },
 
 // ---------- 2. LEAKAGE LIVES BETWEEN SYSTEMS ----------
@@ -315,7 +322,7 @@ const SLIDES = [
 {
   kicker: 'Demo contract',
   segment: 'Setup · 3 of 7',
-  title: 'In the next 16 minutes, three outcomes',
+  title: 'In the next 16.5 minutes, three outcomes',
   sub: 'The verbal contract before switching to the live demo.',
   body: `
     <div class="grid-3">
@@ -366,6 +373,7 @@ const SLIDES = [
     tell: "We have moved from an unbounded audit question to a governed register that finance can decompose by cause and customer. The value is not the dashboard itself — it is deciding where to put the next hour of recovery effort.",
     cues: ['Open "Lakelink Fiber — Revenue Assurance Command Center" dashboard.', 'Executive Summary tiles → Leakage by Check Type → Customer Risk Scorecard.'],
     translate: "Faster prioritization, a shared finance/sales/billing/collections definition, and exposure that can be tracked run over run.",
+    fallback: "Named fallback: ra_demo_fallback.pdf (KPI-tile slide). Recovery script: \"Let me walk you through the numbers from our last verified run\" — narrate the golden baseline (~$601.5M / ~48,108 exceptions) from 09-runbook.md §2.4.",
   },
   evidence: ['demo-artifacts/07-ui-specs.md', 'demo-artifacts/08-test-plan.md', 'demo-artifacts/09-runbook.md'],
 },
@@ -392,6 +400,7 @@ const SLIDES = [
     timing: '1:30',
     tell: "One definition now serves two altitudes. The dashboard funds the decision; this workspace turns the decision into daily work.",
     cues: ['Connect KPI totals to the executive dashboard.', 'Show root-cause concentration bar chart.'],
+    fallback: "Named fallback: ra_demo_prerun.html (exported KPIs, no live compute). Recovery script: \"Here's the same view captured from our pre-run — the numbers reconcile to what you just saw on the dashboard.\"",
   },
   evidence: ['ra-exceptions-console/README.md', 'ra-exceptions-console/CLAUDE.md', 'demo-artifacts/07-ui-specs.md'],
 },
@@ -424,6 +433,7 @@ const SLIDES = [
   notes: {
     timing: '2:00',
     tell: "We have reduced a portfolio-level number to the next best recovery action. Now the architect's question becomes: is this evidence, or merely an assertion?",
+    fallback: "Named fallback: ra_demo_prerun.html (exported KPIs, no live compute). Recovery script: \"Here's the same view captured from our pre-run — the numbers reconcile to what you just saw on the dashboard.\"",
   },
   evidence: ['demo-artifacts/07-ui-specs.md', 'demo-artifacts/09-runbook.md', 'demo-artifacts/08-test-plan.md'],
 },
@@ -462,6 +472,7 @@ const SLIDES = [
     timing: '2:30',
     tell: 'Every exception carries enough provenance to move from "the model says so" to "this source record violated this named control." That shortens dispute resolution and builds trust with finance and audit.',
     translate: 'The gold register retains the check type, source reference, detection method, severity, and amount at risk. Unity Catalog provides the governed analytical boundary and lineage path back through the reconciliation layer.',
+    fallback: "Named fallback: ra_demo_fallback.pdf (evidence-drawer slide). Recovery script: narrate the detection-evidence table verbatim from the fallback slide — it carries the same check_type/reference/source_table fields as the live drawer.",
   },
   evidence: ['demo-artifacts/03-domain-model.md', 'demo-artifacts/08-test-plan.md', 'demo-artifacts/12-domains-and-tags.md — design direction, not deployed proof', 'demo-artifacts/13-glossary.md — terminology guidance, not deployed proof'],
 },
@@ -494,6 +505,7 @@ const SLIDES = [
     timing: '2:30',
     tell: 'The control now has an owner, a decision trail, and a recovery state. That is the bridge from amount at risk to recovered and prevented revenue.',
     translate: 'Executive: this gives leadership accountability — what was found, who owns it, and how quickly the organization is converting exposure into action. Technical: Lakebase provides transactional updates and relational constraints for case state, while the analytical evidence remains governed in Unity Catalog.',
+    fallback: "Named fallback: ra_demo_full.mp4 (case-workflow segment). Recovery script: \"I'll play the recorded case-assignment flow rather than risk a stall on stage.\"",
   },
   evidence: ['demo-artifacts/03-domain-model.md', 'demo-artifacts/06-deployment-contract.md', 'demo-artifacts/07-ui-specs.md', 'demo-artifacts/09-runbook.md'],
 },
@@ -521,6 +533,7 @@ const SLIDES = [
     timing: '3:00',
     tell: 'The path is explicit, governed, and deployable as one repository. We reuse the customer\'s existing model, isolate writes, and add controls incrementally. The first two reconciliations can create a business case before the full roadmap is funded.',
     cues: ['Open Architecture tab in the console; walk the seven-step tour at executive speed.', 'Open one live workspace or catalog link if stable.'],
+    fallback: "Named fallback: ra_demo_fallback.pdf (architecture-tour slide). Recovery script: narrate the seven-step tour from the static diagram; skip the \"open in workspace\" link.",
   },
   evidence: ['demo-artifacts/04-source-data-spec.md', 'demo-artifacts/05-repository-blueprint.md', 'demo-artifacts/06-deployment-contract.md', 'demo-artifacts/10-decision-log.md', '.claude/skills/ra-data-explorer/SKILL.md', '.claude/skills/ra-demo-build/SKILL.md', '.claude/skills/ra-source-simulation/SKILL.md'],
 },
@@ -549,6 +562,7 @@ const SLIDES = [
   notes: {
     timing: '2:00',
     tell: 'AI is not replacing the control framework. It is extending the kinds of evidence the framework can evaluate. The output still lands in named, governed, reviewable surfaces.',
+    fallback: "Named fallback: pre-run Genie screenshot in ra_demo_fallback.pdf. Recovery script: \"Here's the same question answered a moment ago\" — read the pre-captured answer verbatim.",
   },
   evidence: ['demo-artifacts/02-capability-matrix.md', 'demo-artifacts/03-domain-model.md', 'demo-artifacts/08-test-plan.md', 'demo-artifacts/10-decision-log.md'],
 },
@@ -637,16 +651,18 @@ const SLIDES = [
     </div>
     <div class="card" style="text-align:center">
       <div class="stat-row" style="justify-content:center;gap:40px">
-        <div class="stat"><span class="num mono" style="color:var(--color-error)">$250M–$312M</span><span class="lbl pill illustrative">Illustrative annual gross leakage exposure at Lumen scale</span></div>
-        <div class="stat"><span class="num mono" style="color:var(--color-primary)">$125M–$220M</span><span class="lbl pill illustrative">Defensible planning range: recovered + prevented over 12–24 months</span></div>
+        <div class="stat"><span class="num mono" style="color:var(--color-error)">$248M–$310M</span><span class="lbl pill illustrative">Illustrative gross exposure: $12.402B sourced FY2025 Lumen revenue (10-K) × 2.0–2.5% industry leakage assumption</span></div>
+        <div class="stat"><span class="num mono" style="color:var(--color-primary)">$124M–$217M</span><span class="lbl pill illustrative">Illustrative recovery: gross exposure × 50–70% industry recovery-rate assumption, over 12–24 months</span></div>
       </div>
+      <p style="font-size:11px;color:var(--color-text-faint);margin-top:10px">Formula and full citations: Appendix F. Contrast with the synthetic Lakelink demo output shown live (~48,108 exceptions / ~$601.5M) — the two are never the same number.</p>
     </div>
     <div class="quote-block">Dana, does that create a sufficiently clear economic test for sponsorship? Priya, are the evidence, governance, and integration boundaries strong enough to earn a read-only technical discovery?</div>
   `,
   notes: {
     timing: '1:45',
-    tell: "Let me leave you with the business progression. Leakage stops being an opinion and becomes a register. The register becomes a prioritized workload. Each item is supported by evidence. Each item has an owner and lifecycle. The same controls then prevent recurrence. Nobody recovers all of the gross leakage — a defensible planning range is $125 million to $220 million of recovered and prevented revenue over a phased 12-to-24-month program, subject to validation on Lumen data. Our recommended next step is a two-control value sprint.",
+    tell: "Let me leave you with the business progression. Leakage stops being an opinion and becomes a register. The register becomes a prioritized workload. Each item is supported by evidence. Each item has an owner and lifecycle. The same controls then prevent recurrence. Using Lumen's own reported FY2025 revenue of $12.4 billion and a conservative two-to-two-and-a-half-percent industry leakage assumption, gross exposure lands at $248 million to $310 million. Nobody recovers all of the gross leakage — applying a fifty-to-seventy-percent industry recovery-rate assumption, a defensible planning range is $124 million to $217 million of recovered and prevented revenue over a phased 12-to-24-month program, subject to validation on Lumen data. Our recommended next step is a two-control value sprint.",
   },
+  evidence: ['demo-artifacts/00-problem-overview.md', 'Appendix F — Sources & assumptions'],
 },
 
 // ---------- APPENDIX A: EXECUTIVE OBJECTIONS ----------
@@ -681,6 +697,7 @@ const SLIDES = [
       </div>
     </div>
   `,
+  notes: { silent: 'Reference-only appendix slide — no talk track. The Q&A text on this slide is the speaker note; read it directly if the objection comes up.' },
 },
 
 // ---------- APPENDIX B: TECHNICAL OBJECTIONS ----------
@@ -701,6 +718,7 @@ const SLIDES = [
       <div class="card"><h3>"What happens if the AI is wrong?"</h3><p>AI-derived signals do not bypass the control framework. They produce reviewable exceptions with source context and detection method. Analysts retain disposition and recovery responsibility, and seeded demo anomalies are not presented as proof of production model accuracy.</p></div>
     </div>
   `,
+  notes: { silent: 'Reference-only appendix slide — no talk track. The Q&A text on this slide is the speaker note; read it directly if the objection comes up.' },
 },
 
 // ---------- APPENDIX C: IMPLEMENTED VS ROADMAP ----------
@@ -742,6 +760,7 @@ const SLIDES = [
       </div>
     </div>
   `,
+  notes: { silent: 'Reference-only appendix slide — no talk track. Use it to answer a scope question directly from the two lists if asked.' },
 },
 
 // ---------- APPENDIX D: AI FORCE MULTIPLIER ----------
@@ -785,33 +804,36 @@ const SLIDES = [
 {
   kicker: 'Appendix E',
   segment: 'Timing card',
-  title: '24 minutes prepared + 6 minutes Q&A',
+  title: 'Full route: 26:30 prepared + 3:30 Q&A',
+  sub: 'Segment totals are the exact sum of the per-slide "Speaker notes" timings stated earlier in this deck — not independently estimated.',
   dense: true,
   body: `
     <table class="deck-table">
-      <thead><tr><th>Segment</th><th>Target</th></tr></thead>
+      <thead><tr><th>Segment</th><th>Constituent slides</th><th>Target</th></tr></thead>
       <tbody>
-        <tr><td>Slides 1–4: setup and contract</td><td class="mono">4:00</td></tr>
-        <tr><td>Executive dashboard</td><td class="mono">3:00</td></tr>
-        <tr><td>App Overview and Queue</td><td class="mono">3:30</td></tr>
-        <tr><td>Evidence drawer</td><td class="mono">2:30</td></tr>
-        <tr><td>Assignment and lifecycle</td><td class="mono">2:30</td></tr>
-        <tr><td>Architecture</td><td class="mono">3:00</td></tr>
-        <tr><td>AI surface</td><td class="mono">2:00</td></tr>
-        <tr><td>Trade-offs and value close</td><td class="mono">3:30</td></tr>
-        <tr><td><b>Prepared total</b></td><td class="mono"><b>24:00</b></td></tr>
-        <tr><td>Q&A buffer</td><td class="mono">6:00</td></tr>
+        <tr><td>Slides 1–4: setup and contract</td><td class="mono">1:15+1:30+1:45+0:45</td><td class="mono">5:15</td></tr>
+        <tr><td>Executive dashboard</td><td class="mono">Demo 1</td><td class="mono">3:00</td></tr>
+        <tr><td>App Overview and Queue</td><td class="mono">Demo 2+3</td><td class="mono">3:30</td></tr>
+        <tr><td>Evidence drawer</td><td class="mono">Demo 4</td><td class="mono">2:30</td></tr>
+        <tr><td>Assignment and lifecycle</td><td class="mono">Demo 5</td><td class="mono">2:30</td></tr>
+        <tr><td>Architecture</td><td class="mono">Demo 6</td><td class="mono">3:00</td></tr>
+        <tr><td>AI surface</td><td class="mono">Demo 7</td><td class="mono">2:00</td></tr>
+        <tr><td>Trade-offs and value close</td><td class="mono">Slides 5+6+7</td><td class="mono">4:45</td></tr>
+        <tr><td><b>Prepared total</b></td><td></td><td class="mono"><b>26:30</b></td></tr>
+        <tr><td>Q&A buffer</td><td></td><td class="mono">3:30</td></tr>
+        <tr><td><b>Grand total</b></td><td></td><td class="mono"><b>30:00</b></td></tr>
       </tbody>
     </table>
     <div class="card">
-      <h3>Twenty-minute compression</h3>
+      <h3>Rehearsed 20–22 minute compressed route — 21:00 prepared + up to 9:00 Q&A</h3>
       <ul>
-        <li>Executive dashboard: 2:00 · Overview and Queue: 2:30 · Evidence drawer: 2:00</li>
-        <li>Case lifecycle: 2:00 · Architecture: 2:00 · AI: 1:00 · Close: 2:00</li>
-        <li>Do not cut quantification, evidence, or recovery.</li>
+        <li>Setup: 3:00 · Executive dashboard: 2:00 · Overview+Queue: 2:30 · Evidence drawer: 2:00</li>
+        <li>Case lifecycle: 2:00 · Architecture: 2:30 · AI (one surface only): 1:30 · Trade-offs+close: 5:30</li>
+        <li>Cuts land on setup narration and the architecture tour's stop count — never on quantify, prove, or recover, and never on the trade-offs/value close (the sponsorship ask).</li>
       </ul>
     </div>
   `,
+  notes: { silent: 'Reference-only appendix slide — no talk track. The on-slide table and compressed-route card are the content; read timings directly if asked.' },
 },
 
 // ---------- REHEARSAL SCORECARD ----------
@@ -829,6 +851,52 @@ const SLIDES = [
     </div>
     <div class="card"><h3>Professionalism</h3><ul><li>Never debug on stage for more than ten seconds.</li><li>Volunteer material limitations before being challenged.</li><li>Avoid claiming undeployed metric views, tags, embedded Genie, or production ML accuracy.</li><li>Close with two direct stakeholder questions.</li></ul></div>
   `,
+  notes: { silent: 'Reference-only appendix slide — no talk track. This is a self-scoring checklist, not narrated content.' },
+},
+
+// ---------- APPENDIX F: SOURCES & ASSUMPTIONS ----------
+{
+  kicker: 'Appendix F',
+  segment: 'Sources & assumptions',
+  title: 'Where the $248M–$310M and $124M–$217M come from',
+  sub: 'Three categories, used consistently across this deck: sourced Lumen fact, external industry assumption, synthetic Lakelink demo output.',
+  dense: true,
+  body: `
+    <div class="grid-2">
+      <div class="card">
+        <h3>Sourced Lumen fact</h3>
+        <p><b>$12.402B</b> total revenue, FY2025.</p>
+        <p>Lumen Technologies Form 10-K, filed with the SEC February 20, 2026 (accession no. 0000018926-26-000014). Corroborated by Lumen's Feb 3, 2026 Q4/FY2025 earnings release (Exhibit 99.1 to Form 8-K) — identical figure, down 5% from $13.108B in FY2024.</p>
+      </div>
+      <div class="card">
+        <h3>External industry assumption — leakage rate</h3>
+        <p><b>2.0%–2.5%</b> of revenue as gross leakage.</p>
+        <p>Bounded by PwC's "1–5% of telecom revenue" range (Dec 2020) and TM Forum's 2017/18 survey (0.9% measured / 1.9% estimated). <b>Caveat:</b> TM Forum's 2024–2025 survey (IG1438, pub. Jun 2025) shows the industry average has since fallen to ~0.52%; a separate RAG 2020 survey found non-fraud billing-error leakage alone averages 2.92%. Our range is a conservative planning test between those two more recent figures — not a Lumen measurement.</p>
+      </div>
+      <div class="card">
+        <h3>External industry assumption — recovery rate</h3>
+        <p><b>50%–70%</b> of identified leakage recovered/prevented.</p>
+        <p>TM Forum 2017/18 survey: 51% average industry recovery rate; top-tier programs report 75%+.</p>
+      </div>
+      <div class="card">
+        <h3>Synthetic Lakelink demo output (never blended with the above)</h3>
+        <p><span class="pill measured">measured (demo)</span> ~48,108 exceptions / ~$601.5M at risk</p>
+        <p>Output of the seeded <code class="mono">gold_leakage_summary</code> register (fixed seed=42) shown live in Demos 1–2 — entirely separate data, entirely separate number, from a different (fictional) operator.</p>
+      </div>
+    </div>
+    <div class="mock-frame">
+      <div class="mock-bar"><span class="dot" style="background:var(--color-primary)"></span>The formula, in full</div>
+      <div style="padding:14px;font-family:var(--font-mono);font-size:12.5px;line-height:1.7;white-space:pre">Gross exposure  = $12.402B x 2.0%  to  $12.402B x 2.5%
+                = $248.0M         to  $310.1M
+
+Recovered/prevented = $248.0M x 50%  to  $310.1M x 70%
+                     = $124.0M       to  $217.0M</div>
+    </div>
+  `,
+  notes: {
+    silent: 'Reference-only appendix slide — no talk track by default. If an executive or technical stakeholder pushes on "how do I know the value is real," this slide is the answer: pull it up and read the formula and citations directly rather than defending the number from memory.',
+  },
+  evidence: ['demo-artifacts/14-customer-roleplay-presentation.md — Appendix F', 'demo-artifacts/00-problem-overview.md', 'demo-artifacts/08-test-plan.md', 'demo-artifacts/09-runbook.md'],
 },
 ];
 </script>
@@ -845,9 +913,12 @@ const SLIDES = [
   const notesBody = document.getElementById('notesBody');
   const overviewGrid = document.getElementById('overviewGrid');
   const deckEl = document.getElementById('deck');
+  const progressBar = document.getElementById('progressBar');
+  const slideAnnouncer = document.getElementById('slideAnnouncer');
 
   let current = 0;
   const total = SLIDES.length;
+  progressBar.setAttribute('aria-valuemax', String(total));
 
   function evidenceHtml(list){
     if(!list || !list.length) return '';
@@ -871,7 +942,8 @@ const SLIDES = [
 
   function renderOverview(){
     overviewGrid.innerHTML = SLIDES.map(function(s, i){
-      return '<button class="thumb" data-goto="'+i+'"><span class="idx">'+(i+1)+' / '+total+'</span><span class="t">'+(s.title || s.kicker || 'Slide')+'</span></button>';
+      const label = 'Go to slide '+(i+1)+' of '+total+': '+(s.title || s.kicker || 'Slide');
+      return '<button class="thumb" data-goto="'+i+'" aria-label="'+label.replace(/"/g,'&quot;')+'"><span class="idx">'+(i+1)+' / '+total+'</span><span class="t">'+(s.title || s.kicker || 'Slide')+'</span></button>';
     }).join('');
     overviewGrid.querySelectorAll('[data-goto]').forEach(function(btn){
       btn.addEventListener('click', function(){
@@ -899,6 +971,12 @@ const SLIDES = [
     if(n.objection){
       html += '<div class="notes-section"><h4>If challenged</h4><p>'+n.objection+'</p></div>';
     }
+    if(n.fallback){
+      html += '<div class="notes-section"><h4>If this surface stalls &gt;10s</h4><p>'+n.fallback+'</p></div>';
+    }
+    if(n.silent){
+      html += '<div class="notes-section"><h4>Note</h4><p style="color:var(--color-text-faint);font-style:italic">'+n.silent+'</p></div>';
+    }
     notesBody.innerHTML = html || '<p style="font-size:13px;color:var(--color-text-faint)">No notes for this slide.</p>';
   }
 
@@ -908,8 +986,11 @@ const SLIDES = [
     });
     slideCountEl.textContent = (current+1) + ' / ' + total;
     progressFill.style.width = (((current+1)/total)*100) + '%';
+    progressBar.setAttribute('aria-valuenow', String(current+1));
     renderNotes();
     history.replaceState(null, '', '#slide-'+(current+1));
+    const s = SLIDES[current];
+    slideAnnouncer.textContent = 'Slide ' + (current+1) + ' of ' + total + ': ' + (s.title || s.kicker || '');
   }
 
   function goTo(i){
@@ -923,13 +1004,15 @@ const SLIDES = [
   document.getElementById('btnPrev').addEventListener('click', prev);
 
   document.getElementById('btnNotes').addEventListener('click', function(){
-    notesPane.classList.toggle('open');
-    this.classList.toggle('on');
+    const open = notesPane.classList.toggle('open');
+    this.classList.toggle('on', open);
+    this.setAttribute('aria-pressed', String(open));
   });
 
   document.getElementById('btnOverview').addEventListener('click', function(){
-    deckEl.classList.toggle('overview-mode');
-    this.classList.toggle('on');
+    const on = deckEl.classList.toggle('overview-mode');
+    this.classList.toggle('on', on);
+    this.setAttribute('aria-pressed', String(on));
   });
 
   document.getElementById('btnFullscreen').addEventListener('click', function(){
@@ -939,10 +1022,14 @@ const SLIDES = [
       document.exitFullscreen();
     }
   });
+  document.addEventListener('fullscreenchange', function(){
+    document.getElementById('btnFullscreen').setAttribute('aria-pressed', String(!!document.fullscreenElement));
+  });
 
   document.getElementById('btnTheme').addEventListener('click', function(){
     const d = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
     root.setAttribute('data-theme', d);
+    this.setAttribute('aria-pressed', String(d === 'dark'));
   });
 
   document.addEventListener('keydown', function(e){
@@ -969,6 +1056,7 @@ const SLIDES = [
   (function initTheme(){
     const preferred = matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light';
     root.setAttribute('data-theme', preferred);
+    document.getElementById('btnTheme').setAttribute('aria-pressed', String(preferred === 'dark'));
   })();
 
   const hashIdx = parseInt((location.hash.match(/slide-(\d+)/) || [])[1], 10);
