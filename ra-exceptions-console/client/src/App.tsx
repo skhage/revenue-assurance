@@ -1,12 +1,24 @@
 import { createBrowserRouter, RouterProvider, NavLink, Outlet, useLocation } from 'react-router';
 import { useState } from 'react';
 import { Button, Sheet, SheetContent } from '@databricks/appkit-ui/react';
-import { LayoutGrid, ListChecks, Briefcase, Menu, Moon, Sun, SearchCheck, Zap, Waypoints } from 'lucide-react';
+import {
+  LayoutGrid,
+  ListChecks,
+  Briefcase,
+  Menu,
+  Moon,
+  Sun,
+  SearchCheck,
+  Zap,
+  Waypoints,
+  type LucideIcon,
+} from 'lucide-react';
 import { OverviewPage } from './pages/OverviewPage';
 import { QueuePage } from './pages/QueuePage';
 import { CasesPage } from './pages/CasesPage';
 import { ArchitecturePage } from './pages/ArchitecturePage';
 import { LakelinkMark } from './components/LakelinkMark';
+import { DatabricksLogo } from './components/DatabricksLogo';
 import { useTheme } from './lib/useTheme';
 import { WhoAmIProvider, useWhoAmI } from './lib/whoami';
 import { initials } from './lib/format';
@@ -26,66 +38,106 @@ const TITLES: Record<string, { title: string; sub: string }> = {
   '/architecture': { title: 'Architecture', sub: 'The demo mapped onto the Databricks Data + AI Platform' },
 };
 
-function navItemClass({ isActive }: { isActive: boolean }) {
-  return `flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors ${
-    isActive
-      ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
-      : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground'
-  }`;
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-sidebar-foreground/50">
+      {children}
+    </div>
+  );
+}
+
+function NavItem({
+  to,
+  label,
+  icon: Icon,
+  end,
+  onNavigate,
+}: {
+  to: string;
+  label: string;
+  icon: LucideIcon;
+  end: boolean;
+  onNavigate?: () => void;
+}) {
+  return (
+    <NavLink
+      to={to}
+      end={end}
+      onClick={onNavigate}
+      className={({ isActive }) =>
+        `relative flex items-center gap-2.5 rounded-md py-2 pl-3.5 pr-2.5 text-sm transition-colors ${
+          isActive
+            ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
+            : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground'
+        }`
+      }
+    >
+      {({ isActive }) => (
+        <>
+          <span
+            className={`absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-r-full bg-brand transition-opacity ${
+              isActive ? 'opacity-100' : 'opacity-0'
+            }`}
+          />
+          <Icon className="h-4 w-4 shrink-0" />
+          {label}
+        </>
+      )}
+    </NavLink>
+  );
 }
 
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const me = useWhoAmI();
   return (
     <div className="flex h-full flex-col gap-6">
-      <div className="flex items-center gap-2 px-1">
-        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-brand text-brand-foreground">
-          <LakelinkMark className="h-4 w-4" />
+      {/* Product lockup */}
+      <div className="flex items-center gap-2.5 px-1">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand text-brand-foreground shadow-sm">
+          <LakelinkMark className="h-5 w-5" />
         </div>
-        <span className="text-sm font-semibold text-sidebar-foreground">Lakelink Fiber</span>
+        <div className="leading-tight">
+          <div className="text-sm font-semibold text-sidebar-foreground">Lakelink Fiber</div>
+          <div className="text-[11px] text-sidebar-foreground/60">Revenue Assurance</div>
+        </div>
       </div>
 
       <nav className="flex flex-col gap-0.5">
-        <div className="px-2.5 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-          Workflow
-        </div>
-        {NAV.map(({ to, label, icon: Icon, end }) => (
-          <NavLink key={to} to={to} end={end} className={navItemClass} onClick={onNavigate}>
-            <Icon className="h-4 w-4 shrink-0" />
-            {label}
-          </NavLink>
+        <SectionLabel>Workflow</SectionLabel>
+        {NAV.map(({ to, label, icon, end }) => (
+          <NavItem key={to} to={to} label={label} icon={icon} end={end} onNavigate={onNavigate} />
         ))}
       </nav>
 
       <nav className="flex flex-col gap-0.5">
-        <div className="px-2.5 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-          Detection
-        </div>
-        <div className="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-muted-foreground">
+        <SectionLabel>Detection</SectionLabel>
+        <div className="flex items-center gap-2.5 rounded-md py-2 pl-3.5 pr-2.5 text-sm text-sidebar-foreground/40">
           <SearchCheck className="h-4 w-4 shrink-0" /> Reconciliation rules
         </div>
-        <div className="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-muted-foreground">
+        <div className="flex items-center gap-2.5 rounded-md py-2 pl-3.5 pr-2.5 text-sm text-sidebar-foreground/40">
           <Zap className="h-4 w-4 shrink-0" /> Anomaly models
         </div>
       </nav>
 
       <nav className="flex flex-col gap-0.5">
-        <div className="px-2.5 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Learn</div>
-        {SECONDARY_NAV.map(({ to, label, icon: Icon, end }) => (
-          <NavLink key={to} to={to} end={end} className={navItemClass} onClick={onNavigate}>
-            <Icon className="h-4 w-4 shrink-0" />
-            {label}
-          </NavLink>
+        <SectionLabel>Learn</SectionLabel>
+        {SECONDARY_NAV.map(({ to, label, icon, end }) => (
+          <NavItem key={to} to={to} label={label} icon={icon} end={end} onNavigate={onNavigate} />
         ))}
       </nav>
 
-      <div className="mt-auto flex items-center gap-2.5 border-t border-sidebar-border pt-3">
-        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
-          {initials(me)}
+      <div className="mt-auto flex flex-col gap-3">
+        <div className="flex items-center gap-2.5 border-t border-sidebar-border pt-3">
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-brand text-xs font-bold text-brand-foreground">
+            {initials(me)}
+          </div>
+          <div className="min-w-0">
+            <div className="truncate text-xs font-medium text-sidebar-foreground">{me.split('@')[0]}</div>
+            <div className="text-[11px] text-sidebar-foreground/60">RA Analyst · B2B Broadband</div>
+          </div>
         </div>
-        <div className="min-w-0">
-          <div className="truncate text-xs font-medium text-sidebar-foreground">{me.split('@')[0]}</div>
-          <div className="text-[11px] text-muted-foreground">RA Analyst · B2B Broadband</div>
+        <div className="border-t border-sidebar-border pt-3">
+          <DatabricksLogo label="Built on" />
         </div>
       </div>
     </div>
@@ -129,7 +181,13 @@ function Layout() {
               {meta.sub && <p className="text-xs text-muted-foreground">{meta.sub}</p>}
             </div>
           </div>
-          <Button variant="ghost" size="icon" onClick={toggle} aria-label="Toggle theme">
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={toggle}
+            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
             {theme === 'dark' ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
           </Button>
         </header>

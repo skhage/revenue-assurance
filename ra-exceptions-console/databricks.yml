@@ -75,11 +75,18 @@ resources:
             database: ${var.postgres_database}
             permission: CAN_CONNECT_AND_CREATE
 
-      # Static, non-secret config for the in-app Architecture page's deep
-      # links. Bundle-level `config.env` (as opposed to app.yaml `env`) is
-      # the right place for plain values resolved from bundle variables.
+      # App runtime environment. NOTE: this bundle-level `config.env` REPLACES
+      # app.yaml's `env` block on deploy (it does not merge), so the resource
+      # bindings the app needs to boot must live here too — otherwise the app
+      # crashes at startup with "Warehouse ID not found". The RA_* entries below
+      # are the plain, bundle-variable-resolved values that power the in-app
+      # Architecture page's "Open in workspace" deep links.
       config:
         env:
+          - name: DATABRICKS_WAREHOUSE_ID
+            value_from: sql-warehouse
+          - name: LAKEBASE_ENDPOINT
+            value_from: postgres
           - name: RA_PIPELINE_ID
             value: ${var.ra_pipeline_id}
           - name: RA_ML_JOB_ID

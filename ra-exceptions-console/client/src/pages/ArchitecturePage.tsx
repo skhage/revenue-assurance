@@ -120,18 +120,22 @@ interface TourStep {
   kicker: string;
   title: string;
   body: string;
+  /** Why this component matters specifically for Telco revenue assurance. */
+  value: string;
   artifact: string;
   links: StepLink[];
 }
 
-// The requested clickthrough: App → Genie One → Genie Agent → SDP → MLOps → UC → Data.
+// The requested clickthrough: App → Genie One → Genie Agent → SDP → MLOps → UC → Data → Lakebase.
 // Each step links into the real workspace resource it maps to.
 const TOUR: TourStep[] = [
   {
     node: 'app',
     kicker: 'Step 1 · You are here',
     title: 'RA Exceptions Console',
-    body: 'The AppKit app an analyst uses to triage leakage and work cases. It reads analytics through the SQL warehouse and writes case state back to Lakebase Postgres.',
+    body: 'The AppKit app RA analysts live in — triage the leakage queue, open a case, assign it, and track recovery. Reads analytics from the SQL warehouse; writes case state to Lakebase.',
+    value:
+      'Telco RA teams still reconcile billing, network, and contracts by hand in spreadsheets. This console turns that into one ranked work queue — every leakage exception ordered by dollars at risk, with one-click assignment and tracked recovery — so detection actually converts into recovered revenue with a defensible audit trail.',
     artifact: 'ra-exceptions-console · reads gold_* / silver_*, writes ra.cases · ra.case_notes',
     links: [
       { label: 'Explore RA schema', build: (cfg) => exploreDataUrl(cfg) },
@@ -143,6 +147,8 @@ const TOUR: TourStep[] = [
     kicker: 'Step 2 · Agentic Work',
     title: 'Genie One',
     body: 'The org-wide AI coworker. A business user asks “where are we leaking revenue this quarter?” in plain language; Genie One routes it through the Genie Ontology to the right governed data.',
+    value:
+      'A revenue-assurance or finance lead can ask “which fiber products are leaking most this quarter?” in plain English instead of filing a BI request. Across a subscriber base in the millions, self-serve answers over billing, CRM, and network data collapse the time from suspicion to quantified leakage.',
     artifact: 'Genie One · natural-language entry point across all domains',
     links: [{ label: 'Open Genie', build: (cfg) => genieUrl(cfg) }],
   },
@@ -151,6 +157,8 @@ const TOUR: TourStep[] = [
     kicker: 'Step 3 · Agentic Work',
     title: 'RA Genie Agent',
     body: 'A curated Genie Space scoped to revenue assurance. It is grounded on the RA metric views and business glossary, so answers use the same KPI definitions the pipelines compute.',
+    value:
+      'Grounded on the RA metric views and glossary, “active service”, “MRR”, and “revenue leakage” mean exactly what Finance certifies. It removes the classic telco trap where Sales, Network Ops, and Finance each count subscribers differently — the number an exec sees matches the number the pipeline computed.',
     artifact: 'Genie Space · grounded on revenue_assurance metric views + glossary',
     links: [{ label: 'Open RA Genie space', build: (cfg) => genieUrl(cfg) }],
   },
@@ -159,6 +167,8 @@ const TOUR: TourStep[] = [
     kicker: 'Step 4 · Agentic Data',
     title: 'Reconciliation Pipelines (SDP)',
     body: 'Lakeflow Spark Declarative Pipelines run the seven silver reconciliation checks (one per check_type) and roll them into four gold views the app and Genie read.',
+    value:
+      'This is the engine of revenue assurance. Seven declarative checks cross-reference the service/network inventory against orders, billing, contracts, and FX to catch what telcos bleed on: services activated but never billed, rate-plan and discount mismatches, unrated usage, and contract-vs-invoice gaps. Declarative pipelines keep every check versioned, transparent, and audit-ready.',
     artifact: 'silver_reconciliation · gold_leakage_summary · gold_reconciliation_scorecard',
     links: [
       { label: 'Open pipeline', build: (cfg) => pipelineUrl(cfg) },
@@ -170,6 +180,8 @@ const TOUR: TourStep[] = [
     kicker: 'Step 5 · Agentic Data',
     title: 'Anomaly Detection & Forecast',
     body: 'An MLflow anomaly model scores exceptions and ai_forecast projects expected revenue, surfacing leakage that fixed rules miss. Models are registered and governed in Unity Catalog.',
+    value:
+      'Rules catch the leakage you already know about; telco leakage mutates as rate engines, promotions, and partners change. Anomaly scoring flags exceptions that fit no rule, and ai_forecast projects expected revenue so a silent drop — say a rating change quietly under-charging a segment — surfaces before it compounds across the base.',
     artifact: 'gold_anomaly_scores · gold_revenue_forecast_anomalies',
     links: [
       { label: 'ML job', build: (cfg) => jobUrl(cfg, cfg.mlJobId) },
@@ -181,6 +193,8 @@ const TOUR: TourStep[] = [
     kicker: 'Step 6 · Unified Governance',
     title: 'Unity Catalog',
     body: 'Every table, view, model, and metric is governed here. Metric Views define KPIs with synonyms, the domain tag maps resources to Sales/Ops/Finance, and the glossary reconciles the terms each team uses differently.',
+    value:
+      'Revenue assurance touches the most sensitive financial and customer data a telco holds. Unity Catalog enforces who can see what and traces lineage from raw source system to the reported leakage figure — the provenance auditors and SOX controls require. Its domain tags and glossary also settle the cross-department term disputes that let leakage hide.',
     artifact: 'Metric Views · domain tag matrix · business glossary · access + lineage',
     links: [{ label: 'Open Catalog Explorer', build: (cfg) => exploreDataUrl(cfg) }],
   },
@@ -189,11 +203,23 @@ const TOUR: TourStep[] = [
     kicker: 'Step 7 · The data',
     title: 'cdm_tmforum + source systems',
     body: 'The pre-populated TM Forum SID catalog (resource, service, product, customer, business partner) plus the simulated upstream sources. This golden data is what every layer above reconciles against.',
+    value:
+      'Telco revenue leakage is fundamentally an integration problem — it lives in the gaps between systems. The TM Forum SID model unifies resource, service, product, and customer, while the simulated Salesforce, Oracle ERP, Refinitiv FX, Ironclad CLM, and MDM sources are exactly the systems whose disagreements create leakage. This is the ground truth every check reconciles against.',
     artifact: 'cdm_tmforum.tmf_* (read-only) · *_source schemas · revenue_assurance',
     links: [
       { label: 'Explore cdm_tmforum', build: (cfg) => exploreDataUrl(cfg, cfg.catalog) },
       { label: 'Data-sim job', build: (cfg) => jobUrl(cfg, cfg.datasimJobId) },
     ],
+  },
+  {
+    node: 'lakebase',
+    kicker: 'Step 8 · Case management',
+    title: 'Lakebase — case write-back',
+    body: 'The serverless Postgres store behind the app’s case workflow — transactional writes (assign, status, notes) keyed to each exception, kept separate from the read-only analytics lakehouse.',
+    value:
+      'Detection is worthless without action, and the analytics lakehouse is not built for the constant small writes a caseload generates. Lakebase (serverless Postgres) is the operational system of record for the RA workflow — case status, owner, notes, and recovered amounts — closing the loop from “leak detected” to “revenue recovered” and giving auditors a per-case remediation trail.',
+    artifact: 'ra.cases · ra.case_notes (Lakebase Postgres) · keyed by exception_id',
+    links: [{ label: 'Open case store', build: (cfg) => lakebaseUrl(cfg) }],
   },
 ];
 
@@ -384,6 +410,12 @@ export function ArchitecturePage() {
                 </div>
                 <h3 className="text-xl font-semibold text-foreground">{current.title}</h3>
                 <p className="text-sm leading-relaxed text-muted-foreground">{current.body}</p>
+                <div className="rounded-lg border-l-2 border-brand bg-brand/5 py-2.5 pl-3 pr-3">
+                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-brand">
+                    Why it matters for Telco RA
+                  </div>
+                  <p className="text-sm leading-relaxed text-foreground">{current.value}</p>
+                </div>
                 <div className="rounded-lg border border-border bg-muted/40 p-3">
                   <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                     In this demo
