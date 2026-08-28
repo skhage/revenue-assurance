@@ -1,96 +1,120 @@
 @import '@databricks/appkit-ui/styles.css';
 
-:root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.141 0.005 285.823);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.141 0.005 285.823);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.141 0.005 285.823);
-  --primary: oklch(0.21 0.006 285.885);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.967 0.001 286.375);
-  --secondary-foreground: oklch(0.21 0.006 285.885);
-  --muted: oklch(0.967 0.001 286.375);
-  --muted-foreground: oklch(0.542 0.016 285.938);
-  --accent: oklch(0.967 0.001 286.375);
-  --accent-foreground: oklch(0.21 0.006 285.885);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.985 0 0);
-  --success: oklch(0.603 0.135 166.892);
-  --success-foreground: oklch(1 0 0);
-  --warning: oklch(0.795 0.157 78.748);
-  --warning-foreground: oklch(0.199 0.027 238.732);
-  --border: oklch(0.92 0.004 286.32);
-  --input: oklch(0.92 0.004 286.32);
-  --ring: oklch(0.705 0.015 286.067);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.141 0.005 285.823);
-  --sidebar-primary: oklch(0.21 0.006 285.885);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.967 0.001 286.375);
-  --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
-  --sidebar-border: oklch(0.92 0.004 286.32);
-  --sidebar-ring: oklch(0.705 0.015 286.067);
+/*
+ * Lakelink Fiber — Databricks brand theme.
+ *
+ * Defined AFTER AppKit's styles.css so these win in source order. That's what
+ * makes the in-app light/dark toggle work: AppKit ships a `.dark` class AND a
+ * trailing `@media (prefers-color-scheme: dark)` block, so on a dark-mode OS
+ * its media block would otherwise override the class and strand the toggle in
+ * dark. Redefining the tokens here as plain `:root` (light) + `.dark` (no media
+ * query) makes the class in lib/useTheme.ts authoritative both ways, on any OS.
+ *
+ * Palette: Databricks Lava #FF3621 (primary/brand), Navy #1B3139, warm Oat
+ * neutrals. `--brand` is kept as an alias of `--primary` so existing
+ * bg-brand/text-brand utilities stay coral and consistent.
+ */
 
-  /* Lakelink Fiber brand accent (Databricks-coral derived). Kept separate from
-     --primary so brand coral stays confined to intentional brand moments
-     (sidebar mark, Architecture tour) instead of recoloring every default
-     button/active-nav state. Verified >= 4.5:1 against white text (as a
-     background) and against the light background/card (as text). */
-  --brand: oklch(0.55 0.225 29.23);
-  --brand-foreground: oklch(0.985 0 0);
+:root {
+  color-scheme: light;
+  --radius: 0.625rem;
+
+  --background: #ffffff;
+  --foreground: #1b3139; /* Navy 800 */
+  --card: #ffffff;
+  --card-foreground: #1b3139;
+  --popover: #ffffff;
+  --popover-foreground: #1b3139;
+
+  --primary: #ff3621; /* Lava 600 */
+  --primary-foreground: #ffffff;
+
+  --secondary: #f3f2ef; /* Oat light */
+  --secondary-foreground: #1b3139;
+  --muted: #f3f2ef;
+  --muted-foreground: #5b6e75; /* muted navy-gray */
+  --accent: #edebe7;
+  --accent-foreground: #1b3139;
+
+  --destructive: #b42318; /* deep red, distinct from Lava orange-red */
+  --destructive-foreground: #ffffff;
+  --success: #12805c;
+  --success-foreground: #ffffff;
+  --warning: #b45309;
+  --warning-foreground: #ffffff;
+
+  --border: #e5e3de;
+  --input: #e5e3de;
+  --ring: #ff3621;
+
+  --chart-1: #ff3621;
+  --chart-2: #2272b4; /* Databricks blue */
+  --chart-3: #1b3139;
+  --chart-4: #ffab00;
+  --chart-5: #12805c;
+
+  /* Signature navy sidebar in both themes for brand presence */
+  --sidebar: #1b3139;
+  --sidebar-foreground: #c7d2d6;
+  --sidebar-primary: #ff3621;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #29434d;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #29434d;
+  --sidebar-ring: #ff3621;
+
+  --brand: var(--primary);
+  --brand-foreground: var(--primary-foreground);
 }
 
 .dark {
-  --background: oklch(0.141 0.005 285.823);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.21 0.006 285.885);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.21 0.006 285.885);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.92 0.004 286.32);
-  --primary-foreground: oklch(0.21 0.006 285.885);
-  --secondary: oklch(0.274 0.006 286.033);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.274 0.006 286.033);
-  --muted-foreground: oklch(0.705 0.015 286.067);
-  --accent: oklch(0.274 0.006 286.033);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --destructive-foreground: oklch(0.985 0 0);
-  --success: oklch(0.67 0.12 167);
-  --success-foreground: oklch(1 0 0);
-  --warning: oklch(0.83 0.165 85);
-  --warning-foreground: oklch(0.199 0.027 238.732);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.552 0.016 285.938);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.21 0.006 285.885);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.274 0.006 286.033);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.552 0.016 285.938);
+  color-scheme: dark;
 
-  /* Lighter coral for dark backgrounds, paired with a dark foreground for
-     text drawn on top of it. Verified >= 4.5:1 both as a background (against
-     dark foreground text) and as standalone text (against dark background/card). */
-  --brand: oklch(0.68 0.19 29.23);
-  --brand-foreground: oklch(0.141 0.005 285.823);
+  --background: #0e1b21; /* deep navy */
+  --foreground: #e6ecee;
+  --card: #15272e;
+  --card-foreground: #e6ecee;
+  --popover: #15272e;
+  --popover-foreground: #e6ecee;
+
+  --primary: #ff4b33; /* Lava, brightened for dark bg */
+  --primary-foreground: #ffffff;
+
+  --secondary: #1e333b;
+  --secondary-foreground: #e6ecee;
+  --muted: #1b2e35;
+  --muted-foreground: #93a8b0;
+  --accent: #21363e;
+  --accent-foreground: #e6ecee;
+
+  --destructive: #f0625a;
+  --destructive-foreground: #ffffff;
+  --success: #34d399;
+  --success-foreground: #04241a;
+  --warning: #fbbf24;
+  --warning-foreground: #2a1d00;
+
+  --border: #26393f;
+  --input: #26393f;
+  --ring: #ff4b33;
+
+  --chart-1: #ff4b33;
+  --chart-2: #4a9fdc;
+  --chart-3: #c7d2d6;
+  --chart-4: #ffab00;
+  --chart-5: #34d399;
+
+  --sidebar: #0b171c;
+  --sidebar-foreground: #c7d2d6;
+  --sidebar-primary: #ff4b33;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #1b2e35;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #1b2e35;
+  --sidebar-ring: #ff4b33;
+
+  --brand: var(--primary);
+  --brand-foreground: var(--primary-foreground);
 }
 
 /* AppKit's own @theme inline block (in the imported styles.css) doesn't know
