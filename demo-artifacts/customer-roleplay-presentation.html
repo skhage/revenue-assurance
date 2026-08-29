@@ -1,0 +1,1069 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lakelink Fiber Revenue Assurance — Customer Roleplay (Lumen Technologies)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://api.fontshare.com/v2/css?f[]=general-sans@400,500,600,700&f[]=jetbrains-mono@400,500&display=swap" rel="stylesheet">
+<style>
+/* Art direction inherited from demo-artifacts/B2B Broadband Revenue Assurance.html:
+   cool neutral surfaces, teal primary accent, warning/error reserved for leakage severity.
+   Typography: General Sans (UI) + JetBrains Mono (financial figures). Dense, dashboard-grade. */
+:root, [data-theme="light"] {
+  --color-bg:#f5f6f5; --color-surface:#ffffff; --color-surface-2:#fbfbfa;
+  --color-surface-offset:#eef0ef; --color-surface-offset-2:#e6e9e7; --color-surface-dynamic:#dfe3e1;
+  --color-divider:#dfe1df; --color-border:#d3d6d3;
+  --color-text:#1c2321; --color-text-muted:#5c6663; --color-text-faint:#676e6b; --color-text-inverse:#f7f8f7;
+  --color-primary:#0a6e6e; --color-primary-hover:#075454; --color-primary-active:#053e3e; --color-primary-highlight:#cfe3e1;
+  --color-warning:#96530f; --color-warning-hover:#713e0b; --color-warning-highlight:#e6d8c6;
+  --color-error:#9c2b2b; --color-error-hover:#7a2020; --color-error-highlight:#e6cccc;
+  --color-success:#2f6d3a; --color-success-highlight:#d3e2d5;
+  --color-gold:#89590b; --color-gold-highlight:#ecdfc0;
+  --color-brand:#ff5f46; --color-brand-highlight:#fabfba;
+  --radius-sm:.375rem; --radius-md:.5rem; --radius-lg:.75rem; --radius-xl:1rem; --radius-full:9999px;
+  --transition-interactive:180ms cubic-bezier(.16,1,.3,1);
+  --shadow-sm:0 1px 2px oklch(0.2 0.01 165/.06); --shadow-md:0 4px 12px oklch(0.2 0.01 165/.08); --shadow-lg:0 12px 32px oklch(0.2 0.01 165/.14);
+  --font-body:'General Sans','Inter',sans-serif; --font-mono:'JetBrains Mono',monospace;
+}
+[data-theme="dark"] {
+  --color-bg:#14181a; --color-surface:#1a1f21; --color-surface-2:#1e2325;
+  --color-surface-offset:#20262a; --color-surface-offset-2:#262d31; --color-surface-dynamic:#2d3538;
+  --color-divider:#272e31; --color-border:#374045;
+  --color-text:#dee3e1; --color-text-muted:#8a9491; --color-text-faint:#868d8a; --color-text-inverse:#171b1c;
+  --color-primary:#5bb0ac; --color-primary-hover:#7ecac6; --color-primary-highlight:#243838;
+  --color-warning:#d99a58; --color-warning-highlight:#3d3324;
+  --color-error:#e58080; --color-error-highlight:#3e2626;
+  --color-success:#7fc98d; --color-success-highlight:#243228;
+  --color-gold:#e0b653; --color-gold-highlight:#3a3222;
+  --color-brand:#ff7a63; --color-brand-highlight:#3a2420;
+  --shadow-sm:0 1px 2px oklch(0 0 0/.3); --shadow-md:0 4px 12px oklch(0 0 0/.4); --shadow-lg:0 12px 32px oklch(0 0 0/.5);
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-font-smoothing:antialiased}
+body{font-family:var(--font-body);color:var(--color-text);background:var(--color-bg);min-height:100dvh;line-height:1.5;overflow:hidden}
+img,svg{display:block}
+button{font:inherit;color:inherit;cursor:pointer;background:none;border:none}
+a{color:inherit;text-decoration:none}
+table{border-collapse:collapse;width:100%}
+:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px;border-radius:4px}
+.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums lining-nums}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+@media (prefers-reduced-motion:reduce){
+  .slide{transition:none}
+  .deck-progress-fill{transition:none}
+  html{scroll-behavior:auto}
+}
+
+/* ============ Deck shell ============ */
+.deck{position:relative;height:100dvh;display:flex;flex-direction:column}
+.deck-chrome{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;border-bottom:1px solid var(--color-divider);background:var(--color-surface);gap:16px;flex-shrink:0}
+.deck-chrome .brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13.5px;color:var(--color-text-muted)}
+.deck-chrome .brand svg{width:18px;height:18px;color:var(--color-brand)}
+.deck-progress{flex:1;height:3px;background:var(--color-surface-offset);border-radius:var(--radius-full);overflow:hidden;margin:0 4px}
+.deck-progress-fill{height:100%;background:var(--color-primary);transition:width 220ms ease}
+.deck-controls{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--color-text-faint)}
+.deck-controls .count{font-family:var(--font-mono);min-width:52px;text-align:center}
+.icon-btn{width:32px;height:32px;display:flex;align-items:center;justify-content:center;border-radius:var(--radius-md);color:var(--color-text-muted)}
+.icon-btn:hover{background:var(--color-surface-offset);color:var(--color-text)}
+.icon-btn svg{width:16px;height:16px}
+.icon-btn.on{background:var(--color-primary-highlight);color:var(--color-primary)}
+
+.deck-body{flex:1;display:flex;min-height:0}
+.stage-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:28px;min-width:0;overflow:auto}
+.stage{width:100%;max-width:1180px;aspect-ratio:16/9;background:var(--color-surface);border:1px solid var(--color-divider);border-radius:var(--radius-xl);box-shadow:var(--shadow-lg);position:relative;overflow:hidden;display:flex;flex-direction:column}
+:fullscreen .stage-wrap{padding:0}
+:fullscreen .stage{max-width:none;width:100vw;height:100vh;aspect-ratio:auto;border-radius:0;border:none}
+:fullscreen .deck-chrome{display:none}
+:fullscreen .notes-pane{position:fixed;right:0;top:0;bottom:0;z-index:20}
+
+.slide{position:absolute;inset:0;display:flex;flex-direction:column;padding:44px 56px;opacity:0;transform:translateY(6px);transition:opacity 200ms ease,transform 200ms ease;pointer-events:none}
+.slide.active{opacity:1;transform:none;pointer-events:auto;position:relative}
+.slide-kicker{font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--color-primary);display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.slide-kicker .seg{color:var(--color-text-faint);font-weight:500}
+.slide h2{font-size:30px;font-weight:700;line-height:1.15;letter-spacing:-.01em;margin-bottom:4px}
+.slide .sub{font-size:15px;color:var(--color-text-muted);margin-bottom:18px}
+.slide-content{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:16px}
+.slide.dense .slide-content{font-size:13.5px}
+
+/* Title slide */
+.title-slide{align-items:center;justify-content:center;text-align:center;gap:6px}
+.title-slide .wordmark{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+.title-slide .wordmark svg{width:40px;height:40px;color:var(--color-brand)}
+.title-slide h1{font-size:40px;font-weight:700;letter-spacing:-.01em}
+.title-slide .tagline{font-size:17px;color:var(--color-text-muted);margin-top:6px;max-width:640px}
+.hero-number{font-family:var(--font-mono);font-weight:700;font-size:64px;letter-spacing:-.02em;color:var(--color-error);margin:22px 0 6px}
+.hero-caption{font-size:13px;color:var(--color-text-faint);max-width:520px}
+.audience-row{display:flex;gap:24px;margin-top:26px;font-size:12.5px;color:var(--color-text-muted)}
+.audience-row b{color:var(--color-text)}
+
+/* Generic content blocks reused across slides */
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.card{background:var(--color-surface-2);border:1px solid var(--color-divider);border-radius:var(--radius-lg);padding:16px 18px}
+.card h3{font-size:14px;font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:8px}
+.card p, .card li{font-size:13px;color:var(--color-text-muted);line-height:1.5}
+.card ul{padding-left:18px;display:flex;flex-direction:column;gap:4px}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:3px 9px;border-radius:var(--radius-full)}
+.pill.illustrative{background:var(--color-gold-highlight);color:var(--color-gold)}
+.pill.measured{background:var(--color-primary-highlight);color:var(--color-primary)}
+.pill.roadmap{background:var(--color-surface-offset-2);color:var(--color-text-muted)}
+.pill.high{background:var(--color-error-highlight);color:var(--color-error)}
+.pill.med{background:var(--color-warning-highlight);color:var(--color-warning)}
+.stat-row{display:flex;gap:22px;flex-wrap:wrap}
+.stat{display:flex;flex-direction:column;gap:2px}
+.stat .num{font-family:var(--font-mono);font-weight:700;font-size:22px}
+.stat .lbl{font-size:11.5px;color:var(--color-text-faint)}
+.flow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.flow .node{flex:1;min-width:160px;background:var(--color-surface-2);border:1px solid var(--color-divider);border-radius:var(--radius-lg);padding:14px 16px}
+.flow .node h4{font-size:12.5px;font-weight:700;margin-bottom:4px}
+.flow .node p{font-size:11.5px;color:var(--color-text-muted)}
+.flow .arrow{color:var(--color-text-faint);flex-shrink:0}
+.flow .arrow svg{width:18px;height:18px}
+.flow.vertical{flex-direction:column}
+.flow.vertical .arrow{align-self:center;transform:rotate(90deg)}
+.badge-list{display:flex;flex-wrap:wrap;gap:8px}
+.badge-list .item{font-size:12px;padding:5px 10px;border-radius:var(--radius-full);border:1px solid var(--color-border);background:var(--color-surface)}
+.numbered-list{display:flex;flex-direction:column;gap:8px}
+.numbered-list li{display:flex;gap:10px;font-size:13.5px;line-height:1.45}
+.numbered-list .n{flex-shrink:0;width:22px;height:22px;border-radius:var(--radius-full);background:var(--color-primary-highlight);color:var(--color-primary);font-size:11.5px;font-weight:700;display:flex;align-items:center;justify-content:center}
+table.deck-table{font-size:12.5px}
+table.deck-table th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:var(--color-text-faint);padding:7px 10px;border-bottom:1px solid var(--color-divider)}
+table.deck-table td{padding:8px 10px;border-bottom:1px solid var(--color-divider);vertical-align:top}
+table.deck-table tr:last-child td{border-bottom:none}
+.quote-block{border-left:3px solid var(--color-primary);padding:10px 16px;font-size:13.5px;color:var(--color-text-muted);font-style:italic;background:var(--color-primary-highlight);border-radius:0 var(--radius-md) var(--radius-md) 0}
+.mock-frame{border:1px solid var(--color-divider);border-radius:var(--radius-md);overflow:hidden;background:var(--color-surface-offset)}
+.mock-frame .mock-bar{display:flex;gap:6px;align-items:center;padding:6px 10px;background:var(--color-surface-2);border-bottom:1px solid var(--color-divider);font-size:10.5px;color:var(--color-text-faint)}
+.mock-frame .mock-bar .dot{width:7px;height:7px;border-radius:50%}
+.two-col-notes{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+
+.footer-evidence{margin-top:auto;padding-top:10px;border-top:1px solid var(--color-divider);display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--color-text-faint);flex-wrap:wrap}
+.footer-evidence svg{width:12px;height:12px;flex-shrink:0}
+.footer-evidence code{font-family:var(--font-mono);background:var(--color-surface-offset);padding:1px 5px;border-radius:4px}
+
+/* Notes pane */
+.notes-pane{width:380px;flex-shrink:0;border-left:1px solid var(--color-divider);background:var(--color-surface);display:none;flex-direction:column;min-height:0}
+.notes-pane.open{display:flex}
+.notes-pane-header{padding:14px 16px;border-bottom:1px solid var(--color-divider);display:flex;align-items:center;justify-content:space-between}
+.notes-pane-header h3{font-size:13px;font-weight:600}
+.notes-pane-header .timing{font-family:var(--font-mono);font-size:12px;color:var(--color-primary);font-weight:600}
+.notes-pane-body{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:14px}
+.notes-section h4{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--color-text-faint);margin-bottom:6px}
+.notes-section p{font-size:13px;line-height:1.55;color:var(--color-text)}
+.notes-section ul{padding-left:16px;font-size:12.5px;color:var(--color-text-muted);display:flex;flex-direction:column;gap:4px}
+
+/* Slide picker (grid overview) */
+.overview-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;padding:20px;overflow-y:auto;height:100%}
+.overview-grid .thumb{border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:10px;background:var(--color-surface-2);cursor:pointer;font-size:11px;display:flex;flex-direction:column;gap:4px}
+.overview-grid .thumb:hover{border-color:var(--color-primary)}
+.overview-grid .thumb .idx{font-family:var(--font-mono);color:var(--color-text-faint)}
+.overview-grid .thumb .t{font-weight:600;font-size:12px;line-height:1.3}
+.overview-mode .stage-wrap{display:none}
+.overview-mode .overview-shell{display:block;width:100%;height:100%}
+.overview-shell{display:none}
+
+@media (max-width:1024px){.grid-4{grid-template-columns:repeat(2,1fr)}.grid-3{grid-template-columns:repeat(2,1fr)}.notes-pane{width:320px}}
+@media (max-width:768px){.grid-2,.grid-3,.grid-4{grid-template-columns:1fr}.notes-pane{display:none!important}.slide{padding:24px}}
+</style>
+</head>
+<body>
+<a href="#stage" class="sr-only">Skip to slide content</a>
+<div class="deck" id="deck" role="application" aria-label="Lakelink Fiber Revenue Assurance customer roleplay presentation">
+  <div class="deck-chrome">
+    <div class="brand">
+      <svg viewBox="0 0 512 512" fill="none" aria-hidden="true"><path d="M64 64H224V224H64V64Z" fill="currentColor" opacity=".55"/><path d="M440 448L280 448L280 352C280 316.654 308.654 288 344 288L376 288C411.346 288 440 316.654 440 352L440 448Z" fill="currentColor" opacity=".55"/><path d="M152 288L240 448H64L152 288Z" fill="currentColor"/><path d="M280 148C280 101.608 317.608 64 364 64V64C410.392 64 448 101.608 448 148V148C448 194.392 410.392 232 364 232V232C317.608 232 280 194.392 280 148V148Z" fill="currentColor"/></svg>
+      <span>Lakelink Fiber Revenue Assurance — Customer Roleplay</span>
+    </div>
+    <div class="deck-progress" role="progressbar" aria-label="Presentation progress" aria-valuemin="1" id="progressBar"><div class="deck-progress-fill" id="progressFill"></div></div>
+    <div class="deck-controls">
+      <button class="icon-btn" id="btnPrev" aria-label="Previous slide" title="Previous (←)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <span class="count mono" id="slideCount" aria-hidden="true">1 / 1</span>
+      <button class="icon-btn" id="btnNext" aria-label="Next slide" title="Next (→)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
+      <button class="icon-btn" id="btnOverview" aria-label="Toggle slide overview" aria-pressed="false" title="Overview (O)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+      </button>
+      <button class="icon-btn" id="btnNotes" aria-label="Toggle speaker notes" aria-pressed="false" title="Speaker notes (N)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 4h16v12H8l-4 4V4z"/></svg>
+      </button>
+      <button class="icon-btn" id="btnFullscreen" aria-label="Toggle fullscreen" aria-pressed="false" title="Fullscreen (F)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
+      </button>
+      <button class="icon-btn" id="btnTheme" aria-label="Toggle dark mode" aria-pressed="false" title="Theme">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="deck-body">
+    <div class="stage-wrap" id="stageWrap">
+      <div class="stage" id="stage" role="region" aria-label="Current slide" aria-live="off" tabindex="-1"></div>
+    </div>
+    <div class="overview-shell" id="overviewShell" role="region" aria-label="Slide overview"><div class="overview-grid" id="overviewGrid"></div></div>
+    <aside class="notes-pane" id="notesPane" aria-label="Speaker notes">
+      <div class="notes-pane-header">
+        <h3 id="notesTitle">Speaker notes</h3>
+        <span class="timing mono" id="notesTiming"></span>
+      </div>
+      <div class="notes-pane-body" id="notesBody"></div>
+    </aside>
+  </div>
+  <div class="sr-only" role="status" aria-live="polite" id="slideAnnouncer"></div>
+</div>
+<script>
+/* ===================== SLIDE DATA ===================== */
+/* Source of truth: demo-artifacts/14-customer-roleplay-presentation.md.
+   Every number here is either (a) explicitly labeled "illustrative" — the Lumen-scale
+   pitch estimate — or (b) the measured demo-dataset figure from the seeded cdm_tmforum
+   build (seed=42). Never blend the two without a label. */
+const SLIDES = [
+
+// ---------- 1. TITLE ----------
+{
+  kicker: 'Customer roleplay · Lumen Technologies',
+  variant: 'title-slide',
+  body: `
+    <div class="wordmark">
+      <svg viewBox="0 0 512 512" fill="none"><path d="M64 64H224V224H64V64Z" fill="currentColor" opacity=".55"/><path d="M440 448L280 448L280 352C280 316.654 308.654 288 344 288L376 288C411.346 288 440 316.654 440 352L440 448Z" fill="currentColor" opacity=".55"/><path d="M152 288L240 448H64L152 288Z" fill="currentColor"/><path d="M280 148C280 101.608 317.608 64 364 64V64C410.392 64 448 101.608 448 148V148C448 194.392 410.392 232 364 232V232C317.608 232 280 194.392 280 148V148Z" fill="currentColor"/></svg>
+      <h1>Lakelink Fiber Revenue Assurance</h1>
+    </div>
+    <div class="tagline">From fragmented audits to governed detection and recovery — built on Databricks</div>
+    <div class="hero-number">$248M–$310M</div>
+    <div class="hero-caption pill illustrative" style="display:inline-block">Illustrative — Lumen's sourced FY2025 revenue ($12.402B, 10-K) × an external 2.0–2.5% industry leakage-rate assumption. Not measured Lumen leakage.</div>
+    <div class="audience-row">
+      <div><b>Prospect</b> · Lumen Technologies — no Lumen data used</div>
+      <div><b>Demo operator</b> · Lakelink Fiber (fictional) — synthetic + seeded data</div>
+      <div><b>Format</b> · 20–30 min scored roleplay</div>
+    </div>
+  `,
+  notes: {
+    timing: '1:15',
+    tell: "Lumen reported $12.4 billion in total revenue for fiscal year 2025 — that's from your own 10-K, filed February 20, 2026, not an estimate. Apply a conservative industry leakage assumption of two to two-and-a-half percent, bounded by PwC's published one-to-five-percent range for telecom revenue leakage, and that's roughly $248 million to $310 million a year of exposure. That is not one broken billing rule — it is value escaping between systems that are each locally correct: sales, contracts, provisioning, billing, finance, and collections. I want to be direct about what kind of number this is: it's your real revenue multiplied by an external industry assumption, not a measurement of your actual leakage — full sources and formulas are in the appendix. We built a working revenue-assurance solution for Lakelink Fiber, a fictional carrier with realistic telecom data and operating patterns. No Lumen customer data is used. For the next twenty minutes, judge two things: can this turn leakage into a daily operational control, and can we prove where every dollar came from?",
+    cues: ['Dana (executive): value framing throughout.', 'Priya (technical): architecture, governance, control points behind every number.'],
+  },
+  evidence: ['demo-artifacts/00-problem-overview.md', 'demo-artifacts/01-product-requirements.md', 'demo-artifacts/README.md', 'Appendix F — Sources & assumptions'],
+},
+
+// ---------- 2. LEAKAGE LIVES BETWEEN SYSTEMS ----------
+{
+  kicker: 'Business problem',
+  segment: 'Setup · 1 of 7',
+  title: 'The systems are working. The handoffs are not.',
+  sub: 'Leakage persists because the definition of "revenue" changes by function — each view is locally correct, and the handoff between them is wrong.',
+  body: `
+    <div class="grid-2">
+      <div class="card">
+        <h3>Where the handoff breaks</h3>
+        <ol class="numbered-list">
+          <li><span class="n">1</span>Contract price differs from billed price</li>
+          <li><span class="n">2</span>Discounts bypass authorization</li>
+          <li><span class="n">3</span>Revenue recognition timing diverges from policy</li>
+          <li><span class="n">4</span>Collections risk is discovered too late</li>
+          <li><span class="n">5</span>Documents and structured records disagree</li>
+          <li><span class="n">6</span>Identity mappings break across CRM, billing, service, and finance</li>
+        </ol>
+      </div>
+      <div class="card">
+        <h3>Today vs. target</h3>
+        <div class="flow vertical">
+          <div class="node"><h4>Today</h4><p>Quarterly spreadsheet reconciliation — by the time finance finds the mismatch, the claim may be aged, disputed, or unrecoverable</p></div>
+          <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12l7 7 7-7"/></svg></div>
+          <div class="node"><h4>Target</h4><p>Governed, repeatable controls on every pipeline run, against the same enterprise data foundation</p></div>
+        </div>
+        <div class="badge-list" style="margin-top:12px">
+          <span class="item">Salesforce</span><span class="item">Oracle ERP</span><span class="item">Refinitiv</span><span class="item">Ironclad</span><span class="item">MDM</span>
+        </div>
+      </div>
+    </div>
+  `,
+  notes: {
+    timing: '1:30',
+    tell: "Leakage persists because the definition of revenue changes by function. Sales sees bookings, operations sees provisioned service, billing sees invoices, and finance sees recognized revenue. Each view can be correct while the handoff between them is wrong. The operational consequence is a quarterly spreadsheet hunt. Our design moves those reconciliations into governed controls that run against the same enterprise data foundation.",
+    translate: "Tell–show–tell transition: I have framed the business problem. Now I will show the integrated path from source records to a prioritized recovery action.",
+  },
+  evidence: ['demo-artifacts/00-problem-overview.md', 'data-source-assessment.md', 'demo-artifacts/04-source-data-spec.md'],
+},
+// ---------- 3. GOVERNED PATH ----------
+{
+  kicker: 'Architecture',
+  segment: 'Setup · 2 of 7',
+  title: 'One governed path from signal to recovery',
+  sub: 'We did not create another isolated revenue-assurance database — we built on the existing TM Forum SID estate.',
+  dense: true,
+  body: `
+    <div class="flow vertical">
+      <div class="node"><h4>Source systems</h4><p>TM Forum data (<code class="mono">cdm_tmforum.tmf_*</code>, read-only) + simulated Salesforce CPQ, Oracle ERP, Refinitiv FX, Ironclad CLM, MDM</p></div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12l7 7 7-7"/></svg></div>
+      <div class="node"><h4>Governed reconciliation</h4><p>Unity Catalog · 7 SQL controls · document intelligence (<code class="mono">ai_parse_document</code>/<code class="mono">ai_extract</code>) · forecast anomaly detection (<code class="mono">ai_forecast</code>)</p></div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12l7 7 7-7"/></svg></div>
+      <div class="node"><h4>Unified leakage register</h4><p><span class="pill measured">measured</span> <code class="mono">gold_leakage_summary</code> — ~48,108 demo exceptions · ~$601.5M demo amount at risk · evidence on every row</p></div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12l7 7 7-7"/></svg></div>
+      <div class="node"><h4>Persona-specific action</h4><p>AI/BI dashboard (Dana) · Genie space (Marcus) · RA Exceptions Console (Marcus) · Lakebase case workflow</p></div>
+    </div>
+    <div class="grid-3" style="margin-top:6px">
+      <div class="card"><h3>Technical proof point</h3><p>Existing <code class="mono">cdm_tmforum</code> catalog remains read-only.</p></div>
+      <div class="card"><h3>Technical proof point</h3><p>Derived analytical objects live in one new schema, <code class="mono">cdm_tmforum.revenue_assurance</code>.</p></div>
+      <div class="card"><h3>Technical proof point</h3><p>Operational case state lives in <code class="mono">ra.cases</code> / <code class="mono">ra.case_notes</code> (Lakebase Postgres) — the app uses service-principal resource bindings.</p></div>
+    </div>
+  `,
+  notes: {
+    timing: '1:45',
+    tell: "We did not create another isolated revenue-assurance database. We built on the existing TM Forum SID estate and added deterministic snapshots for the systems where reconciliation gaps originate. Seven transparent SQL controls create a unified leakage register in Unity Catalog. Document intelligence compares PDFs with structured contract and invoice records. Forecasting highlights unexpected revenue movement. The same governed outputs serve the executive dashboard, natural-language analysis, and the analyst application.",
+    translate: "Case activity is transactional, so assignments, notes, and lifecycle changes live in Lakebase rather than being forced into an analytical table. That is a deliberate trade-off: fit the storage engine to the workload while keeping a clear synchronization path for future governed recovery KPIs.",
+  },
+  evidence: ['demo-artifacts/03-domain-model.md', 'demo-artifacts/05-repository-blueprint.md', 'demo-artifacts/06-deployment-contract.md', 'demo-artifacts/10-decision-log.md'],
+},
+
+// ---------- 4. DEMO CONTRACT ----------
+{
+  kicker: 'Demo contract',
+  segment: 'Setup · 3 of 7',
+  title: 'In the next 16.5 minutes, three outcomes',
+  sub: 'The verbal contract before switching to the live demo.',
+  body: `
+    <div class="grid-3">
+      <div class="card"><h3>1 · Quantify</h3><p>One executive view of total exposure and concentration</p></div>
+      <div class="card"><h3>2 · Prove</h3><p>Evidence, lineage, and detection method for each exception</p></div>
+      <div class="card"><h3>3 · Recover</h3><p>Prioritized ownership, notes, and controlled lifecycle movement</p></div>
+    </div>
+    <div class="card">
+      <h3>Live surfaces</h3>
+      <div class="badge-list">
+        <span class="item">Lakelink Fiber — Revenue Assurance Command Center (AI/BI)</span>
+        <span class="item">RA Exceptions Console (AppKit)</span>
+        <span class="item">Unity Catalog + Architecture tab links</span>
+      </div>
+    </div>
+  `,
+  notes: {
+    timing: '0:45',
+    tell: "The demo has three tests. First, can an executive quantify the exposure? Second, can an architect or auditor prove each exception? Third, can an analyst move from detection to accountable recovery? I will show each once and then land what it means.",
+  },
+},
+
+// ---------- DEMO 1: EXECUTIVE COMMAND CENTER ----------
+{
+  kicker: 'Live demo 1 of 7',
+  segment: 'Show · 3:00',
+  title: 'Executive Command Center',
+  sub: 'The first question an executive asks is not which model we used — it is how much revenue is at risk and whether that number is getting better.',
+  body: `
+    <div class="mock-frame">
+      <div class="mock-bar"><span class="dot" style="background:var(--color-error)"></span><span class="dot" style="background:var(--color-warning)"></span><span class="dot" style="background:var(--color-success)"></span>Lakelink Fiber — Revenue Assurance Command Center</div>
+      <div style="padding:16px" class="grid-4">
+        <div class="card"><div class="stat"><span class="num mono">$601.5M</span><span class="lbl">Total amount at risk (demo)</span></div></div>
+        <div class="card"><div class="stat"><span class="num mono">48,108</span><span class="lbl">Open exceptions (demo)</span></div></div>
+        <div class="card"><div class="stat"><span class="num mono">$127.5M</span><span class="lbl">High-severity at risk (demo)</span></div></div>
+        <div class="card"><div class="stat"><span class="num mono">~8,200</span><span class="lbl">Accounts affected (demo)</span></div></div>
+      </div>
+    </div>
+    <div class="numbered-list">
+      <li><span class="n">1</span>Show Executive Summary KPI tiles.</li>
+      <li><span class="n">2</span>State clearly: the ~$601.5M and ~48K figures are demo-data outputs, not Lumen measurements.</li>
+      <li><span class="n">3</span>Move to Leakage by Check Type — call out concentration by root cause (AR collection risk dominates).</li>
+      <li><span class="n">4</span>Move briefly to Customer Risk Scorecard.</li>
+    </div>
+  `,
+  notes: {
+    timing: '3:00',
+    tell: "We have moved from an unbounded audit question to a governed register that finance can decompose by cause and customer. The value is not the dashboard itself — it is deciding where to put the next hour of recovery effort.",
+    cues: ['Open "Lakelink Fiber — Revenue Assurance Command Center" dashboard.', 'Executive Summary tiles → Leakage by Check Type → Customer Risk Scorecard.'],
+    translate: "Faster prioritization, a shared finance/sales/billing/collections definition, and exposure that can be tracked run over run.",
+    fallback: "Named fallback: ra_demo_fallback.pdf (KPI-tile slide). Recovery script: \"Let me walk you through the numbers from our last verified run\" — narrate the golden baseline (~$601.5M / ~48,108 exceptions) from 09-runbook.md §2.4.",
+  },
+  evidence: ['demo-artifacts/07-ui-specs.md', 'demo-artifacts/08-test-plan.md', 'demo-artifacts/09-runbook.md'],
+},
+
+// ---------- DEMO 2: OVERVIEW ----------
+{
+  kicker: 'Live demo 2 of 7',
+  segment: 'Show · 1:30',
+  title: 'Overview: the same truth for an analyst',
+  sub: 'The executive and analyst should not debate different numbers — this is the same governed leakage register, presented for a different decision.',
+  body: `
+    <div class="mock-frame">
+      <div class="mock-bar"><span class="dot" style="background:var(--color-primary)"></span>RA Exceptions Console → Overview</div>
+      <div style="padding:16px">
+        <p style="font-size:13px;color:var(--color-text-muted);margin-bottom:10px">KPI tiles: amount at risk · exception count · high-severity · affected accounts — reconciled to the executive dashboard totals.</p>
+        <div class="bar-row" style="display:flex;align-items:center;gap:10px;font-size:12.5px;margin-bottom:6px"><span style="width:170px;color:var(--color-text-muted)">ar_collection_risk</span><div style="flex:1;height:8px;background:var(--color-surface-offset);border-radius:99px;overflow:hidden"><div style="width:83%;height:100%;background:var(--color-error)"></div></div><span class="mono">~$500M</span></div>
+        <div class="bar-row" style="display:flex;align-items:center;gap:10px;font-size:12.5px;margin-bottom:6px"><span style="width:170px;color:var(--color-text-muted)">rev_rec_timing_mismatch</span><div style="flex:1;height:8px;background:var(--color-surface-offset);border-radius:99px;overflow:hidden"><div style="width:14%;height:100%;background:var(--color-warning)"></div></div><span class="mono">~$85.7M</span></div>
+        <div class="bar-row" style="display:flex;align-items:center;gap:10px;font-size:12.5px"><span style="width:170px;color:var(--color-text-muted)">unauthorized_discount</span><div style="flex:1;height:8px;background:var(--color-surface-offset);border-radius:99px;overflow:hidden"><div style="width:2%;height:100%;background:var(--color-gold)"></div></div><span class="mono">~$13.9M</span></div>
+      </div>
+    </div>
+    <p style="font-size:13px;color:var(--color-text-muted)">Point out loading, error, retry, and empty-state behavior without dwelling on UI mechanics.</p>
+  `,
+  notes: {
+    timing: '1:30',
+    tell: "One definition now serves two altitudes. The dashboard funds the decision; this workspace turns the decision into daily work.",
+    cues: ['Connect KPI totals to the executive dashboard.', 'Show root-cause concentration bar chart.'],
+    fallback: "Named fallback: ra_demo_prerun.html (exported KPIs, no live compute). Recovery script: \"Here's the same view captured from our pre-run — the numbers reconcile to what you just saw on the dashboard.\"",
+  },
+  evidence: ['ra-exceptions-console/README.md', 'ra-exceptions-console/CLAUDE.md', 'demo-artifacts/07-ui-specs.md'],
+},
+
+// ---------- DEMO 3: EXCEPTION QUEUE ----------
+{
+  kicker: 'Live demo 3 of 7',
+  segment: 'Show · 2:00',
+  title: 'Exception Queue: prioritize the work',
+  sub: 'Forty-eight thousand exceptions are not a to-do list. Prioritization is the product.',
+  body: `
+    <div class="mock-frame">
+      <div class="mock-bar"><span class="dot" style="background:var(--color-primary)"></span>RA Exceptions Console → Exception queue</div>
+      <table class="deck-table" style="padding:6px">
+        <thead><tr><th>Check type</th><th>Account</th><th>Severity</th><th>Impact $</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">ar_collection_risk</td><td>Meridian Logistics Corp</td><td><span class="pill high">High</span></td><td class="mono">$284,000</td><td>New</td></tr>
+          <tr><td class="mono">contract_price_mismatch</td><td>Harbor Point Manufacturing</td><td><span class="pill high">High</span></td><td class="mono">$171,500</td><td>Investigating</td></tr>
+          <tr><td class="mono">unauthorized_discount</td><td>Palisade Health Network</td><td><span class="pill med">Medium</span></td><td class="mono">$96,200</td><td>Recovering</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="numbered-list">
+      <li><span class="n">1</span>Sort or scan by amount at risk.</li>
+      <li><span class="n">2</span>Filter to a high-value root cause or severity.</li>
+      <li><span class="n">3</span>Show keyboard-accessible filters and row action.</li>
+      <li><span class="n">4</span>Open one exception.</li>
+    </div>
+  `,
+  notes: {
+    timing: '2:00',
+    tell: "We have reduced a portfolio-level number to the next best recovery action. Now the architect's question becomes: is this evidence, or merely an assertion?",
+    fallback: "Named fallback: ra_demo_prerun.html (exported KPIs, no live compute). Recovery script: \"Here's the same view captured from our pre-run — the numbers reconcile to what you just saw on the dashboard.\"",
+  },
+  evidence: ['demo-artifacts/07-ui-specs.md', 'demo-artifacts/09-runbook.md', 'demo-artifacts/08-test-plan.md'],
+},
+
+// ---------- DEMO 4: EVIDENCE DRAWER ----------
+{
+  kicker: 'Live demo 4 of 7',
+  segment: 'Show · 2:30',
+  title: 'Exception evidence: prove every dollar',
+  sub: 'A revenue-assurance signal is only useful if finance, audit, and engineering can reproduce it.',
+  dense: true,
+  body: `
+    <div class="grid-2">
+      <div class="mock-frame">
+        <div class="mock-bar"><span class="dot" style="background:var(--color-error)"></span>Detection evidence</div>
+        <div style="padding:14px" class="card" style="border:none">
+          <table class="deck-table">
+            <tr><td>Check type</td><td class="mono">contract_price_mismatch</td></tr>
+            <tr><td>Reference</td><td class="mono">ContractNumber CN-40218</td></tr>
+            <tr><td>Detection method</td><td class="mono">rule_based</td></tr>
+            <tr><td>Source table</td><td class="mono">salesforce_source.contract_line_item</td></tr>
+            <tr><td>Known-leakage flag</td><td class="mono">true</td></tr>
+          </table>
+        </div>
+      </div>
+      <div class="numbered-list">
+        <li><span class="n">1</span>Show reference identifier and customer context.</li>
+        <li><span class="n">2</span>Show friendly source context and detection method.</li>
+        <li><span class="n">3</span>Show risk tier or scorecard state.</li>
+        <li><span class="n">4</span>Explain: the technical Architecture tab exposes underlying physical objects; business surfaces intentionally use friendly labels.</li>
+        <li><span class="n">5</span>If available, open a lineage or catalog link.</li>
+      </div>
+    </div>
+  `,
+  notes: {
+    timing: '2:30',
+    tell: 'Every exception carries enough provenance to move from "the model says so" to "this source record violated this named control." That shortens dispute resolution and builds trust with finance and audit.',
+    translate: 'The gold register retains the check type, source reference, detection method, severity, and amount at risk. Unity Catalog provides the governed analytical boundary and lineage path back through the reconciliation layer.',
+    fallback: "Named fallback: ra_demo_fallback.pdf (evidence-drawer slide). Recovery script: narrate the detection-evidence table verbatim from the fallback slide — it carries the same check_type/reference/source_table fields as the live drawer.",
+  },
+  evidence: ['demo-artifacts/03-domain-model.md', 'demo-artifacts/08-test-plan.md', 'demo-artifacts/12-domains-and-tags.md — design direction, not deployed proof', 'demo-artifacts/13-glossary.md — terminology guidance, not deployed proof'],
+},
+
+// ---------- DEMO 5: MY CASES ----------
+{
+  kicker: 'Live demo 5 of 7',
+  segment: 'Show · 2:30',
+  title: 'My Cases: close the recovery loop',
+  sub: 'Detection without recovery is a better report, not a business outcome.',
+  body: `
+    <div class="flow">
+      <div class="node"><h4>New</h4><p>Exception surfaces in the register</p></div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 5l7 7-7 7"/></svg></div>
+      <div class="node"><h4>Investigating</h4><p>Requires an assignee</p></div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 5l7 7-7 7"/></svg></div>
+      <div class="node"><h4>Recovering</h4><p>Working toward resolution</p></div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 5l7 7-7 7"/></svg></div>
+      <div class="node"><h4>Recovered / Written off</h4><p>Terminal state; prompts for recovered $</p></div>
+    </div>
+    <div class="numbered-list">
+      <li><span class="n">1</span>Assign the exception to yourself or an analyst.</li>
+      <li><span class="n">2</span>Add a note describing the next action.</li>
+      <li><span class="n">3</span>Move New → Investigating → Recovering.</li>
+      <li><span class="n">4</span>Explain that illegal lifecycle jumps are rejected.</li>
+      <li><span class="n">5</span>Open My cases to show owned work.</li>
+    </div>
+  `,
+  notes: {
+    timing: '2:30',
+    tell: 'The control now has an owner, a decision trail, and a recovery state. That is the bridge from amount at risk to recovered and prevented revenue.',
+    translate: 'Executive: this gives leadership accountability — what was found, who owns it, and how quickly the organization is converting exposure into action. Technical: Lakebase provides transactional updates and relational constraints for case state, while the analytical evidence remains governed in Unity Catalog.',
+    fallback: "Named fallback: ra_demo_full.mp4 (case-workflow segment). Recovery script: \"I'll play the recorded case-assignment flow rather than risk a stall on stage.\"",
+  },
+  evidence: ['demo-artifacts/03-domain-model.md', 'demo-artifacts/06-deployment-contract.md', 'demo-artifacts/07-ui-specs.md', 'demo-artifacts/09-runbook.md'],
+},
+
+// ---------- DEMO 6: ARCHITECTURE ----------
+{
+  kicker: 'Live demo 6 of 7',
+  segment: 'Show · 3:00',
+  title: 'Architecture: transparent and deployable',
+  sub: 'We designed this to fit the data estate rather than requiring an eighteen-month replacement program.',
+  dense: true,
+  body: `
+    <div class="grid-4">
+      <div class="card"><h3>1 · Lakehouse</h3><p>Existing TM Forum source foundation (<code class="mono">cdm_tmforum.tmf_*</code>, read-only)</p></div>
+      <div class="card"><h3>2 · Simulated sources</h3><p><code class="mono">*_source</code> snapshots keyed to golden customers</p></div>
+      <div class="card"><h3>3 · Reconciliation pipelines</h3><p>Lakeflow SDP · 7 silver + 4 gold materialized views</p></div>
+      <div class="card"><h3>4 · Unified gold register</h3><p><code class="mono">gold_leakage_summary</code></p></div>
+      <div class="card"><h3>5 · Serving</h3><p>AI/BI dashboard (Dana) + Genie One / RA Genie Agent (Marcus)</p></div>
+      <div class="card"><h3>6 · Agentic apps</h3><p>RA Exceptions Console (React/TypeScript) + Lakebase case store</p></div>
+      <div class="card"><h3>7 · Governance</h3><p>Unity Catalog — Metric Views · Domains · Glossary · Access</p></div>
+      <div class="card"><h3>Deployment</h3><p>Databricks Asset Bundles; one repository; incremental grants</p></div>
+    </div>
+  `,
+  notes: {
+    timing: '3:00',
+    tell: 'The path is explicit, governed, and deployable as one repository. We reuse the customer\'s existing model, isolate writes, and add controls incrementally. The first two reconciliations can create a business case before the full roadmap is funded.',
+    cues: ['Open Architecture tab in the console; walk the seven-step tour at executive speed.', 'Open one live workspace or catalog link if stable.'],
+    fallback: "Named fallback: ra_demo_fallback.pdf (architecture-tour slide). Recovery script: narrate the seven-step tour from the static diagram; skip the \"open in workspace\" link.",
+  },
+  evidence: ['demo-artifacts/04-source-data-spec.md', 'demo-artifacts/05-repository-blueprint.md', 'demo-artifacts/06-deployment-contract.md', 'demo-artifacts/10-decision-log.md', '.claude/skills/ra-data-explorer/SKILL.md', '.claude/skills/ra-demo-build/SKILL.md', '.claude/skills/ra-source-simulation/SKILL.md'],
+},
+
+// ---------- DEMO 7: AI ----------
+{
+  kicker: 'Live demo 7 of 7',
+  segment: 'Show · 2:00',
+  title: 'AI where it earns its place',
+  sub: 'AI is useful here when it expands coverage beyond deterministic joins without weakening provenance.',
+  body: `
+    <div class="grid-3">
+      <div class="card"><h3>Document Intelligence</h3><p>Compare Ironclad contract/invoice PDFs with structured records using <code class="mono">ai_parse_document</code> + <code class="mono">ai_extract</code>.</p></div>
+      <div class="card"><h3>Forecast vs. Actuals</h3><p>Actual revenue, <code class="mono">ai_forecast</code> interval, and budget comparison per month.</p></div>
+      <div class="card"><h3>Genie</h3><p>One scripted natural-language question against governed data.</p></div>
+    </div>
+    <div class="card">
+      <h3>AI-as-force-multiplier disclosure</h3>
+      <ul>
+        <li>AI-assisted development accelerated repository analysis, UX review, test creation, and cross-vendor code review.</li>
+        <li>Deterministic quality gates and independent review were retained.</li>
+        <li>Demo anomalies are intentionally seeded; not a claim of production model accuracy.</li>
+      </ul>
+    </div>
+  `,
+  notes: {
+    timing: '2:00',
+    tell: 'AI is not replacing the control framework. It is extending the kinds of evidence the framework can evaluate. The output still lands in named, governed, reviewable surfaces.',
+    fallback: "Named fallback: pre-run Genie screenshot in ra_demo_fallback.pdf. Recovery script: \"Here's the same question answered a moment ago\" — read the pre-captured answer verbatim.",
+  },
+  evidence: ['demo-artifacts/02-capability-matrix.md', 'demo-artifacts/03-domain-model.md', 'demo-artifacts/08-test-plan.md', 'demo-artifacts/10-decision-log.md'],
+},
+
+// ---------- SLIDE 5: DECISIONS & TRADE-OFFS ----------
+{
+  kicker: 'Engineering rationale',
+  segment: 'Close · 1 of 4',
+  title: 'Decisions and trade-offs',
+  sub: 'Intentional choices, not missing architecture — optimized for explainability, repeatability, and time to value.',
+  dense: true,
+  body: `
+    <table class="deck-table">
+      <thead><tr><th>Decision</th><th>Why</th><th>Trade-off</th></tr></thead>
+      <tbody>
+        <tr><td>Reuse TM Forum foundation</td><td>Faster value, realistic relationships</td><td>Depends on existing data readiness</td></tr>
+        <tr><td>Batch-first controls</td><td>Repeatable, auditable, demo-safe</td><td>Not real-time ingestion</td></tr>
+        <tr><td>SQL-first reconciliation</td><td>Transparent to finance and audit</td><td>Less custom flexibility</td></tr>
+        <tr><td>One RA schema</td><td>Simpler deployment and grants</td><td>Less physical silver/gold separation</td></tr>
+        <tr><td>Direct identity joins</td><td>Fewer persisted objects</td><td>Mapping logic can be duplicated</td></tr>
+        <tr><td>Lakebase for cases</td><td>Correct transactional behavior</td><td>Requires sync for governed recovery KPIs</td></tr>
+        <tr><td>Dashboard + app + Genie</td><td>Right experience per persona</td><td>Cross-surface state must stay aligned</td></tr>
+      </tbody>
+    </table>
+  `,
+  notes: {
+    timing: '1:30',
+    tell: 'These are intentional choices, not missing architecture. We optimized the first release for explainability, repeatability, and time to value. In production, the highest-priority extensions are live ingestion where latency demands it, standardized identity mapping, and Lakebase-to-Unity-Catalog synchronization for recovery metrics.',
+  },
+  evidence: ['demo-artifacts/10-decision-log.md', 'demo-artifacts/11-metric-views.md', 'demo-artifacts/12-domains-and-tags.md', 'demo-artifacts/13-glossary.md'],
+},
+
+// ---------- SLIDE 6: TWO-CONTROL SPRINT ----------
+{
+  kicker: 'Recommended next step',
+  segment: 'Close · 2 of 4',
+  title: 'Start with two controls and prove the economics',
+  sub: 'Proposed first-value sprint: 2–4 weeks.',
+  body: `
+    <div class="grid-2">
+      <div class="card">
+        <h3>Sprint plan</h3>
+        <ol class="numbered-list">
+          <li><span class="n">1</span>Select two high-value reconciliations</li>
+          <li><span class="n">2</span>Connect read-only source data</li>
+          <li><span class="n">3</span>Validate identity and business definitions</li>
+          <li><span class="n">4</span>Quantify exposure and false-positive rate</li>
+          <li><span class="n">5</span>Put prioritized exceptions in front of owners</li>
+          <li><span class="n">6</span>Build the scale-out business case</li>
+        </ol>
+      </div>
+      <div class="card">
+        <h3>Recommended starting controls</h3>
+        <ul>
+          <li>Contract price versus billed price</li>
+          <li>Accounts-receivable aging and collection risk</li>
+        </ul>
+        <h3 style="margin-top:14px">Success criteria</h3>
+        <ul>
+          <li>Defensible dollars identified</li>
+          <li>Evidence traceable to source</li>
+          <li>Named operational owners</li>
+          <li>Agreed roadmap based on measured value</li>
+        </ul>
+      </div>
+    </div>
+  `,
+  notes: {
+    timing: '1:30',
+    tell: 'The ask is deliberately small. Give us the two reconciliations you understand least and read-only access to the relevant records. We will align definitions, run the controls, and put a defensible number on the board. If the number is uninteresting, the organization has spent a few weeks reducing uncertainty. If it is material, the measured exposure funds the next wave — a lower-risk decision than beginning with a broad platform transformation.',
+  },
+},
+
+// ---------- SLIDE 7: VALUE STORY & CLOSE ----------
+{
+  kicker: 'Value story',
+  segment: 'Close · 3 of 4',
+  title: 'Quantify → Prioritize → Prove → Recover → Prevent',
+  body: `
+    <div class="grid-3">
+      <div class="card"><h3>1 · Quantify</h3><p>A governed leakage register replaces competing spreadsheets</p></div>
+      <div class="card"><h3>2 · Prioritize</h3><p>Risk, amount, cause, and customer concentrate recovery effort</p></div>
+      <div class="card"><h3>3 · Prove</h3><p>Source evidence, detection method, and lineage accelerate trust</p></div>
+      <div class="card"><h3>4 · Recover</h3><p>Ownership, notes, and lifecycle convert exposure into action</p></div>
+      <div class="card"><h3>5 · Prevent</h3><p>Repeatable controls catch recurrence before quarter close</p></div>
+    </div>
+    <div class="card" style="text-align:center">
+      <div class="stat-row" style="justify-content:center;gap:40px">
+        <div class="stat"><span class="num mono" style="color:var(--color-error)">$248M–$310M</span><span class="lbl pill illustrative">Illustrative gross exposure: $12.402B sourced FY2025 Lumen revenue (10-K) × 2.0–2.5% industry leakage assumption</span></div>
+        <div class="stat"><span class="num mono" style="color:var(--color-primary)">$124M–$217M</span><span class="lbl pill illustrative">Illustrative recovery: gross exposure × 50–70% industry recovery-rate assumption, over 12–24 months</span></div>
+      </div>
+      <p style="font-size:11px;color:var(--color-text-faint);margin-top:10px">Formula and full citations: Appendix F. Contrast with the synthetic Lakelink demo output shown live (~48,108 exceptions / ~$601.5M) — the two are never the same number.</p>
+    </div>
+    <div class="quote-block">Dana, does that create a sufficiently clear economic test for sponsorship? Priya, are the evidence, governance, and integration boundaries strong enough to earn a read-only technical discovery?</div>
+  `,
+  notes: {
+    timing: '1:45',
+    tell: "Let me leave you with the business progression. Leakage stops being an opinion and becomes a register. The register becomes a prioritized workload. Each item is supported by evidence. Each item has an owner and lifecycle. The same controls then prevent recurrence. Using Lumen's own reported FY2025 revenue of $12.4 billion and a conservative two-to-two-and-a-half-percent industry leakage assumption, gross exposure lands at $248 million to $310 million. Nobody recovers all of the gross leakage — applying a fifty-to-seventy-percent industry recovery-rate assumption, a defensible planning range is $124 million to $217 million of recovered and prevented revenue over a phased 12-to-24-month program, subject to validation on Lumen data. Our recommended next step is a two-control value sprint.",
+  },
+  evidence: ['demo-artifacts/00-problem-overview.md', 'Appendix F — Sources & assumptions'],
+},
+
+// ---------- APPENDIX A: EXECUTIVE OBJECTIONS ----------
+{
+  kicker: 'Appendix A',
+  segment: 'Objection handling',
+  title: 'Executive objections',
+  dense: true,
+  body: `
+    <div class="two-col-notes">
+      <div class="card">
+        <h3>"How do I know the value is real?"</h3>
+        <p><b>Executive:</b> The customer-scale figures are explicitly illustrative. The decision gate is not the benchmark; it is the first two controls running against your data. We would measure gross exposure, evidence quality, duplication, dispute rate, and practical recoverability before scaling.</p>
+        <p><b>Technical bridge:</b> Every measured exception must retain a source reference and named control, so the business case can be audited rather than inferred from a model score.</p>
+      </div>
+      <div class="card">
+        <h3>"This sounds expensive."</h3>
+        <p><b>Executive:</b> The design reuses the existing data estate and starts with two controls. The first investment is bounded, and the broader program is funded only if measured exposure justifies it.</p>
+        <p><b>Technical bridge:</b> Serverless resources, SQL-first controls, and one deployable repository reduce standing infrastructure and integration overhead during the validation phase.</p>
+      </div>
+      <div class="card">
+        <h3>"How quickly do we see value?"</h3>
+        <p>The objective is a quantified first-value result in two to four weeks, not a full production transformation. Production scale, automation, and write-back follow the measured business case.</p>
+      </div>
+      <div class="card">
+        <h3>"What if recovery is much lower than the headline?"</h3>
+        <p>We assume it will be lower. Gross exposure and recoverable value are different metrics. Aged claims, disputes, churn, and contractual limits reduce backward recovery, which is why prevention and early detection become increasingly important.</p>
+      </div>
+      <div class="card">
+        <h3>"Why Databricks rather than another point solution?"</h3>
+        <p>Because the leakage already spans the customer's governed data estate. This approach brings controls, AI, analytics, lineage, and the operational application to shared data rather than creating another silo that needs to be reconciled.</p>
+      </div>
+    </div>
+  `,
+  notes: { silent: 'Reference-only appendix slide — no talk track. The Q&A text on this slide is the speaker note; read it directly if the objection comes up.' },
+},
+
+// ---------- APPENDIX B: TECHNICAL OBJECTIONS ----------
+{
+  kicker: 'Appendix B',
+  segment: 'Objection handling',
+  title: 'Technical objections',
+  dense: true,
+  body: `
+    <div class="two-col-notes">
+      <div class="card"><h3>"How do identities resolve across systems?"</h3><p>Each reconciliation resolves source-system keys to golden TM Forum identities using explicit joins. That reduces first-release object count, but duplicates mapping logic. A production roadmap should standardize those mappings or introduce a governed canonical identity layer as complexity grows.</p></div>
+      <div class="card"><h3>"How do you prevent false positives?"</h3><p>Controls are named and testable, amounts must be non-negative, enumerations are constrained, documents that cannot be parsed are flagged, and seeded anomalies establish deterministic test coverage. Production rollout adds measured precision, analyst disposition feedback, thresholds, and source-specific exception policies.</p></div>
+      <div class="card"><h3>"Where is PII protected?"</h3><p>Unity Catalog is the analytical governance boundary with least-privilege grants and intended masking for sensitive identifiers. The application runs through service-principal bindings. Case assignments in Lakebase require separate operational access controls. Deployed masking and tag status must be verified in the target environment rather than assumed from design artifacts.</p></div>
+      <div class="card"><h3>"Why Lakebase instead of Delta tables for cases?"</h3><p>Cases require frequent row-level updates, notes, lifecycle constraints, and low-latency transactional behavior. Lakebase fits that workload. The trade-off is that recovery KPIs need a synchronization pattern before they participate in Unity Catalog metric views and executive dashboards.</p></div>
+      <div class="card"><h3>"Is this streaming?"</h3><p>The current design is batch-first for deterministic, auditable reconciliation. Live Lakeflow Connect or streaming ingestion is a production extension where source latency and recovery economics justify it.</p></div>
+      <div class="card"><h3>"Does Genie have unrestricted data access?"</h3><p>No. The standalone Genie space queries governed Unity Catalog data and inherits its access controls. The embedded Genie side panel is planned, not part of the current application.</p></div>
+      <div class="card"><h3>"How portable is deployment?"</h3><p>The repository defines a bundle-based deployment contract and resolves environment-specific hosts, warehouses, and resource bindings at deploy time. We do not assert a cloud provider until the customer deployment profile is confirmed.</p></div>
+      <div class="card"><h3>"What happens if the AI is wrong?"</h3><p>AI-derived signals do not bypass the control framework. They produce reviewable exceptions with source context and detection method. Analysts retain disposition and recovery responsibility, and seeded demo anomalies are not presented as proof of production model accuracy.</p></div>
+    </div>
+  `,
+  notes: { silent: 'Reference-only appendix slide — no talk track. The Q&A text on this slide is the speaker note; read it directly if the objection comes up.' },
+},
+
+// ---------- APPENDIX C: IMPLEMENTED VS ROADMAP ----------
+{
+  kicker: 'Appendix C',
+  segment: 'Scope honesty',
+  title: 'Implemented versus roadmap',
+  body: `
+    <div class="grid-2">
+      <div class="card">
+        <h3><span class="pill measured">Implemented</span> Safe to demonstrate</h3>
+        <ul>
+          <li>Existing TM Forum catalog reuse</li>
+          <li>Simulated Salesforce, Oracle, Refinitiv, Ironclad, and MDM source snapshots</li>
+          <li>Seven reconciliation control surfaces</li>
+          <li>Unified gold leakage register</li>
+          <li>Reconciliation scorecard</li>
+          <li>Document-intelligence checks</li>
+          <li>Forecast anomaly surface</li>
+          <li>Executive AI/BI dashboard</li>
+          <li>Standalone Genie space</li>
+          <li>RA Exceptions Console</li>
+          <li>Lakebase cases and notes</li>
+          <li>Architecture links and bundle deployment contract</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="pill roadmap">Roadmap</span> Design-only</h3>
+        <ul>
+          <li>Live production connectors and continuous ingestion</li>
+          <li>Embedded Genie side panel</li>
+          <li>Deployed Unity Catalog metric views</li>
+          <li>Deployed business Domains, governed tags, and glossary Pages</li>
+          <li>Lakebase-to-Delta synchronization for recovery-rate KPIs</li>
+          <li>Automated CRM, billing, or collections write-back</li>
+          <li>Multi-tenancy, disaster recovery, and production SSO design</li>
+          <li>Proven production ML accuracy on organic customer distributions</li>
+        </ul>
+      </div>
+    </div>
+  `,
+  notes: { silent: 'Reference-only appendix slide — no talk track. Use it to answer a scope question directly from the two lists if asked.' },
+},
+
+// ---------- APPENDIX D: AI FORCE MULTIPLIER ----------
+{
+  kicker: 'Appendix D',
+  segment: 'How this was built',
+  title: 'AI as a force multiplier',
+  sub: 'How AI accelerated the build without replacing engineering controls.',
+  body: `
+    <div class="grid-2">
+      <div class="card">
+        <h3>AI accelerated</h3>
+        <ul>
+          <li>Repository-wide requirements synthesis</li>
+          <li>UX and accessibility audit</li>
+          <li>Parallel implementation planning</li>
+          <li>Test generation and configuration review</li>
+          <li>Independent cross-vendor code review</li>
+          <li>Customer-story and objection rehearsal</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Controls retained</h3>
+        <ul>
+          <li>Human-defined acceptance contract</li>
+          <li>Deterministic typecheck, lint, and server-build gates</li>
+          <li>Independent reviewer separated from implementer</li>
+          <li>Documented environment limitations</li>
+          <li>Explicit distinction between implemented and aspirational capabilities</li>
+        </ul>
+      </div>
+    </div>
+  `,
+  notes: {
+    timing: '—',
+    tell: 'We used AI as a teammate for breadth, speed, and independent challenge. We did not use it as the final authority. The implementer and reviewer were separated, acceptance criteria were explicit, and deterministic gates remained part of the process.',
+  },
+},
+
+// ---------- TIMING CARD ----------
+{
+  kicker: 'Appendix E',
+  segment: 'Timing card',
+  title: 'Full route: 26:30 prepared + 3:30 Q&A',
+  sub: 'Segment totals are the exact sum of the per-slide "Speaker notes" timings stated earlier in this deck — not independently estimated.',
+  dense: true,
+  body: `
+    <table class="deck-table">
+      <thead><tr><th>Segment</th><th>Constituent slides</th><th>Target</th></tr></thead>
+      <tbody>
+        <tr><td>Slides 1–4: setup and contract</td><td class="mono">1:15+1:30+1:45+0:45</td><td class="mono">5:15</td></tr>
+        <tr><td>Executive dashboard</td><td class="mono">Demo 1</td><td class="mono">3:00</td></tr>
+        <tr><td>App Overview and Queue</td><td class="mono">Demo 2+3</td><td class="mono">3:30</td></tr>
+        <tr><td>Evidence drawer</td><td class="mono">Demo 4</td><td class="mono">2:30</td></tr>
+        <tr><td>Assignment and lifecycle</td><td class="mono">Demo 5</td><td class="mono">2:30</td></tr>
+        <tr><td>Architecture</td><td class="mono">Demo 6</td><td class="mono">3:00</td></tr>
+        <tr><td>AI surface</td><td class="mono">Demo 7</td><td class="mono">2:00</td></tr>
+        <tr><td>Trade-offs and value close</td><td class="mono">Slides 5+6+7</td><td class="mono">4:45</td></tr>
+        <tr><td><b>Prepared total</b></td><td></td><td class="mono"><b>26:30</b></td></tr>
+        <tr><td>Q&A buffer</td><td></td><td class="mono">3:30</td></tr>
+        <tr><td><b>Grand total</b></td><td></td><td class="mono"><b>30:00</b></td></tr>
+      </tbody>
+    </table>
+    <div class="card">
+      <h3>Rehearsed 20–22 minute compressed route — 21:00 prepared + up to 9:00 Q&A</h3>
+      <ul>
+        <li>Setup: 3:00 · Executive dashboard: 2:00 · Overview+Queue: 2:30 · Evidence drawer: 2:00</li>
+        <li>Case lifecycle: 2:00 · Architecture: 2:30 · AI (one surface only): 1:30 · Trade-offs+close: 5:30</li>
+        <li>Cuts land on setup narration and the architecture tour's stop count — never on quantify, prove, or recover, and never on the trade-offs/value close (the sponsorship ask).</li>
+      </ul>
+    </div>
+  `,
+  notes: { silent: 'Reference-only appendix slide — no talk track. The on-slide table and compressed-route card are the content; read timings directly if asked.' },
+},
+
+// ---------- REHEARSAL SCORECARD ----------
+{
+  kicker: 'Appendix E (cont.)',
+  segment: 'Rehearsal scorecard',
+  title: 'How this gets scored',
+  dense: true,
+  body: `
+    <div class="grid-2">
+      <div class="card"><h3>Demo setup</h3><ul><li>Name Lumen as the audience and Lakelink as the fictional demo operator.</li><li>State the business problem and illustrative economics before showing technology.</li><li>Contract for the three demo outcomes: quantify, prove, recover.</li></ul></div>
+      <div class="card"><h3>Tell–show–tell</h3><ul><li>State one claim before each screen.</li><li>Perform one or two intentional actions only.</li><li>Translate the screen into a business outcome before moving on.</li></ul></div>
+      <div class="card"><h3>Value communication</h3><ul><li>Return every capability to recovered/prevented revenue, prioritization, trust, or time to action.</li><li>Label all estimated and synthetic figures.</li><li>End with a bounded two-control value sprint.</li></ul></div>
+      <div class="card"><h3>Reading the room</h3><ul><li>Answer the asker first.</li><li>Give the other stakeholder a one-sentence translation.</li><li>Offer deeper detail rather than forcing it into every answer.</li></ul></div>
+    </div>
+    <div class="card"><h3>Professionalism</h3><ul><li>Never debug on stage for more than ten seconds.</li><li>Volunteer material limitations before being challenged.</li><li>Avoid claiming undeployed metric views, tags, embedded Genie, or production ML accuracy.</li><li>Close with two direct stakeholder questions.</li></ul></div>
+  `,
+  notes: { silent: 'Reference-only appendix slide — no talk track. This is a self-scoring checklist, not narrated content.' },
+},
+
+// ---------- APPENDIX F: SOURCES & ASSUMPTIONS ----------
+{
+  kicker: 'Appendix F',
+  segment: 'Sources & assumptions',
+  title: 'Where the $248M–$310M and $124M–$217M come from',
+  sub: 'Three categories, used consistently across this deck: sourced Lumen fact, external industry assumption, synthetic Lakelink demo output.',
+  dense: true,
+  body: `
+    <div class="grid-2">
+      <div class="card">
+        <h3>Sourced Lumen fact</h3>
+        <p><b>$12.402B</b> total revenue, FY2025.</p>
+        <p>Lumen Technologies Form 10-K, filed with the SEC February 20, 2026 (accession no. 0000018926-26-000014). Corroborated by Lumen's Feb 3, 2026 Q4/FY2025 earnings release (Exhibit 99.1 to Form 8-K) — identical figure, down 5% from $13.108B in FY2024.</p>
+      </div>
+      <div class="card">
+        <h3>External industry assumption — leakage rate</h3>
+        <p><b>2.0%–2.5%</b> of revenue as gross leakage.</p>
+        <p>Bounded by PwC's "1–5% of telecom revenue" range (Dec 2020) and TM Forum's 2017/18 survey (0.9% measured / 1.9% estimated). <b>Caveat:</b> TM Forum's 2024–2025 survey (IG1438, pub. Jun 2025) shows the industry average has since fallen to ~0.52%; a separate RAG 2020 survey found non-fraud billing-error leakage alone averages 2.92%. Our range is a conservative planning test between those two more recent figures — not a Lumen measurement.</p>
+      </div>
+      <div class="card">
+        <h3>External industry assumption — recovery rate</h3>
+        <p><b>50%–70%</b> of identified leakage recovered/prevented.</p>
+        <p>TM Forum 2017/18 survey: 51% average industry recovery rate; top-tier programs report 75%+.</p>
+      </div>
+      <div class="card">
+        <h3>Synthetic Lakelink demo output (never blended with the above)</h3>
+        <p><span class="pill measured">measured (demo)</span> ~48,108 exceptions / ~$601.5M at risk</p>
+        <p>Output of the seeded <code class="mono">gold_leakage_summary</code> register (fixed seed=42) shown live in Demos 1–2 — entirely separate data, entirely separate number, from a different (fictional) operator.</p>
+      </div>
+    </div>
+    <div class="mock-frame">
+      <div class="mock-bar"><span class="dot" style="background:var(--color-primary)"></span>The formula, in full</div>
+      <div style="padding:14px;font-family:var(--font-mono);font-size:12.5px;line-height:1.7;white-space:pre">Gross exposure  = $12.402B x 2.0%  to  $12.402B x 2.5%
+                = $248.0M         to  $310.1M
+
+Recovered/prevented = $248.0M x 50%  to  $310.1M x 70%
+                     = $124.0M       to  $217.0M</div>
+    </div>
+  `,
+  notes: {
+    silent: 'Reference-only appendix slide — no talk track by default. If an executive or technical stakeholder pushes on "how do I know the value is real," this slide is the answer: pull it up and read the formula and citations directly rather than defending the number from memory.',
+  },
+  evidence: ['demo-artifacts/14-customer-roleplay-presentation.md — Appendix F', 'demo-artifacts/00-problem-overview.md', 'demo-artifacts/08-test-plan.md', 'demo-artifacts/09-runbook.md'],
+},
+];
+</script>
+<script>
+/* ===================== DECK ENGINE ===================== */
+(function(){
+  const root = document.documentElement;
+  const stage = document.getElementById('stage');
+  const slideCountEl = document.getElementById('slideCount');
+  const progressFill = document.getElementById('progressFill');
+  const notesPane = document.getElementById('notesPane');
+  const notesTitle = document.getElementById('notesTitle');
+  const notesTiming = document.getElementById('notesTiming');
+  const notesBody = document.getElementById('notesBody');
+  const overviewGrid = document.getElementById('overviewGrid');
+  const deckEl = document.getElementById('deck');
+  const progressBar = document.getElementById('progressBar');
+  const slideAnnouncer = document.getElementById('slideAnnouncer');
+
+  let current = 0;
+  const total = SLIDES.length;
+  progressBar.setAttribute('aria-valuemax', String(total));
+
+  function evidenceHtml(list){
+    if(!list || !list.length) return '';
+    const items = list.map(function(e){ return '<code>'+e+'</code>'; }).join('');
+    return '<div class="footer-evidence"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/></svg>Evidence: '+items+'</div>';
+  }
+
+  function renderStage(){
+    stage.innerHTML = SLIDES.map(function(s, i){
+      const kicker = s.kicker ? '<div class="slide-kicker">'+s.kicker+(s.segment ? ' <span class="seg">· '+s.segment+'</span>' : '')+'</div>' : '';
+      const sub = s.sub ? '<div class="sub">'+s.sub+'</div>' : '';
+      const h2 = s.title ? '<h2>'+s.title+'</h2>' : '';
+      const dense = s.dense ? ' dense' : '';
+      return '<div class="slide'+(s.variant ? ' '+s.variant : '')+dense+'" data-idx="'+i+'">'+
+        kicker + h2 + sub +
+        '<div class="slide-content">'+s.body+'</div>' +
+        evidenceHtml(s.evidence) +
+        '</div>';
+    }).join('');
+  }
+
+  function renderOverview(){
+    overviewGrid.innerHTML = SLIDES.map(function(s, i){
+      const label = 'Go to slide '+(i+1)+' of '+total+': '+(s.title || s.kicker || 'Slide');
+      return '<button class="thumb" data-goto="'+i+'" aria-label="'+label.replace(/"/g,'&quot;')+'"><span class="idx">'+(i+1)+' / '+total+'</span><span class="t">'+(s.title || s.kicker || 'Slide')+'</span></button>';
+    }).join('');
+    overviewGrid.querySelectorAll('[data-goto]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        goTo(parseInt(btn.getAttribute('data-goto'), 10));
+        deckEl.classList.remove('overview-mode');
+      });
+    });
+  }
+
+  function renderNotes(){
+    const s = SLIDES[current];
+    const n = s.notes || {};
+    notesTitle.textContent = s.title || s.kicker || ('Slide ' + (current+1));
+    notesTiming.textContent = n.timing || '';
+    let html = '';
+    if(n.tell){
+      html += '<div class="notes-section"><h4>Talk track</h4><p>'+n.tell+'</p></div>';
+    }
+    if(n.cues && n.cues.length){
+      html += '<div class="notes-section"><h4>Demo cues</h4><ul>'+n.cues.map(function(c){return '<li>'+c+'</li>';}).join('')+'</ul></div>';
+    }
+    if(n.translate){
+      html += '<div class="notes-section"><h4>Executive / technical translation</h4><p>'+n.translate+'</p></div>';
+    }
+    if(n.objection){
+      html += '<div class="notes-section"><h4>If challenged</h4><p>'+n.objection+'</p></div>';
+    }
+    if(n.fallback){
+      html += '<div class="notes-section"><h4>If this surface stalls &gt;10s</h4><p>'+n.fallback+'</p></div>';
+    }
+    if(n.silent){
+      html += '<div class="notes-section"><h4>Note</h4><p style="color:var(--color-text-faint);font-style:italic">'+n.silent+'</p></div>';
+    }
+    notesBody.innerHTML = html || '<p style="font-size:13px;color:var(--color-text-faint)">No notes for this slide.</p>';
+  }
+
+  function update(){
+    stage.querySelectorAll('.slide').forEach(function(el, i){
+      el.classList.toggle('active', i === current);
+    });
+    slideCountEl.textContent = (current+1) + ' / ' + total;
+    progressFill.style.width = (((current+1)/total)*100) + '%';
+    progressBar.setAttribute('aria-valuenow', String(current+1));
+    renderNotes();
+    history.replaceState(null, '', '#slide-'+(current+1));
+    const s = SLIDES[current];
+    slideAnnouncer.textContent = 'Slide ' + (current+1) + ' of ' + total + ': ' + (s.title || s.kicker || '');
+  }
+
+  function goTo(i){
+    current = Math.max(0, Math.min(total-1, i));
+    update();
+  }
+  function next(){ goTo(current+1); }
+  function prev(){ goTo(current-1); }
+
+  document.getElementById('btnNext').addEventListener('click', next);
+  document.getElementById('btnPrev').addEventListener('click', prev);
+
+  document.getElementById('btnNotes').addEventListener('click', function(){
+    const open = notesPane.classList.toggle('open');
+    this.classList.toggle('on', open);
+    this.setAttribute('aria-pressed', String(open));
+  });
+
+  document.getElementById('btnOverview').addEventListener('click', function(){
+    const on = deckEl.classList.toggle('overview-mode');
+    this.classList.toggle('on', on);
+    this.setAttribute('aria-pressed', String(on));
+  });
+
+  document.getElementById('btnFullscreen').addEventListener('click', function(){
+    if(!document.fullscreenElement){
+      deckEl.requestFullscreen().catch(function(){});
+    } else {
+      document.exitFullscreen();
+    }
+  });
+  document.addEventListener('fullscreenchange', function(){
+    document.getElementById('btnFullscreen').setAttribute('aria-pressed', String(!!document.fullscreenElement));
+  });
+
+  document.getElementById('btnTheme').addEventListener('click', function(){
+    const d = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', d);
+    this.setAttribute('aria-pressed', String(d === 'dark'));
+  });
+
+  document.addEventListener('keydown', function(e){
+    if(e.target && (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT')) return;
+    if(e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' '){ e.preventDefault(); next(); }
+    else if(e.key === 'ArrowLeft' || e.key === 'PageUp'){ e.preventDefault(); prev(); }
+    else if(e.key === 'Home'){ goTo(0); }
+    else if(e.key === 'End'){ goTo(total-1); }
+    else if(e.key.toLowerCase() === 'n'){ document.getElementById('btnNotes').click(); }
+    else if(e.key.toLowerCase() === 'o'){ document.getElementById('btnOverview').click(); }
+    else if(e.key.toLowerCase() === 'f'){ document.getElementById('btnFullscreen').click(); }
+    else if(e.key === 'Escape' && deckEl.classList.contains('overview-mode')){ deckEl.classList.remove('overview-mode'); }
+  });
+
+  let touchStartX = null;
+  document.getElementById('stageWrap').addEventListener('touchstart', function(e){ touchStartX = e.touches[0].clientX; }, {passive:true});
+  document.getElementById('stageWrap').addEventListener('touchend', function(e){
+    if(touchStartX === null) return;
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    if(Math.abs(dx) > 60){ dx < 0 ? next() : prev(); }
+    touchStartX = null;
+  }, {passive:true});
+
+  (function initTheme(){
+    const preferred = matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light';
+    root.setAttribute('data-theme', preferred);
+    document.getElementById('btnTheme').setAttribute('aria-pressed', String(preferred === 'dark'));
+  })();
+
+  const hashIdx = parseInt((location.hash.match(/slide-(\d+)/) || [])[1], 10);
+  renderStage();
+  renderOverview();
+  goTo(!isNaN(hashIdx) ? hashIdx - 1 : 0);
+})();
+</script>
+</body>
+</html>
