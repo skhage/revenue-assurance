@@ -4,7 +4,7 @@
 // (casesApi's fetch calls) and drives the real row-open flow through real
 // components, so a regression in keyboard semantics, labels, or focus
 // behavior on the production row-action button fails this test.
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CasesPage } from './CasesPage';
 import type { CaseRow } from '../lib/cases';
@@ -53,8 +53,9 @@ describe('CasesPage row-open flow', () => {
     await userEvent.click(openButton);
 
     await waitFor(() => {
-      expect(screen.getByText('Acme Fiber')).toBeInTheDocument();
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
     });
+    expect(within(screen.getByRole('dialog')).getByText('Acme Fiber')).toBeInTheDocument();
   });
 
   it('opens the drawer on Enter after tabbing to the row button', async () => {
@@ -67,7 +68,8 @@ describe('CasesPage row-open flow', () => {
     await userEvent.keyboard('{Enter}');
 
     await waitFor(() => {
-      expect(screen.getByText('Acme Fiber')).toBeInTheDocument();
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
     });
+    expect(within(screen.getByRole('dialog')).getByText('Acme Fiber')).toBeInTheDocument();
   });
 });
