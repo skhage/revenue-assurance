@@ -1,11 +1,12 @@
 import { createBrowserRouter, RouterProvider, NavLink, Outlet, useLocation } from 'react-router';
 import { useState } from 'react';
 import { Button, Sheet, SheetContent } from '@databricks/appkit-ui/react';
-import { LayoutGrid, ListChecks, Briefcase, Menu, Moon, Sun, SearchCheck, Zap, Waypoints } from 'lucide-react';
+import { LayoutGrid, ListChecks, Briefcase, Menu, Moon, Sun, SearchCheck, Zap, Waypoints, Bot } from 'lucide-react';
 import { OverviewPage } from './pages/OverviewPage';
 import { QueuePage } from './pages/QueuePage';
 import { CasesPage } from './pages/CasesPage';
 import { ArchitecturePage } from './pages/ArchitecturePage';
+import { AgentWorkbenchPage } from './pages/AgentWorkbenchPage';
 import { LakelinkMark } from './components/LakelinkMark';
 import { useTheme } from './lib/useTheme';
 import { WhoAmIProvider, useWhoAmI } from './lib/whoami';
@@ -15,6 +16,7 @@ const NAV = [
   { to: '/', label: 'Overview', icon: LayoutGrid, end: true },
   { to: '/queue', label: 'Exception queue', icon: ListChecks, end: false },
   { to: '/cases', label: 'My cases', icon: Briefcase, end: false },
+  { to: '/agents', label: 'Agent Workbench', icon: Bot, end: false },
 ];
 
 const SECONDARY_NAV = [{ to: '/architecture', label: 'Architecture', icon: Waypoints, end: false }];
@@ -23,6 +25,7 @@ const TITLES: Record<string, { title: string; sub: string }> = {
   '/': { title: 'Overview', sub: 'Revenue leakage across all reconciliation checks' },
   '/queue': { title: 'Exception queue', sub: 'Triage detected leakage, highest impact first' },
   '/cases': { title: 'My cases', sub: 'Cases you are investigating and recovering' },
+  '/agents': { title: 'Agent Workbench', sub: 'Deterministic agents over existing RA data — human-approved, no LLM' },
   '/architecture': { title: 'Architecture', sub: 'The demo mapped onto the Databricks Data + AI Platform' },
 };
 
@@ -149,6 +152,7 @@ const router = createBrowserRouter([
       { path: '/', element: <OverviewPage /> },
       { path: '/queue', element: <QueuePage /> },
       { path: '/cases', element: <CasesPage /> },
+      { path: '/agents', element: <AgentWorkbenchPage /> },
       { path: '/architecture', element: <ArchitecturePage /> },
     ],
   },

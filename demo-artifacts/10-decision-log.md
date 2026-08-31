@@ -31,6 +31,8 @@
 | ADR-011 | Identity model | ~~Single canonical `service_instance` bridge~~ → **superseded** (2026-08-25): checks join `*_source` → `tmf_*` directly, no materialized bridge |
 | ADR-012 | Data determinism | Fixed-seed simulation for reproducibility |
 | ADR-013 | Schema organization | ~~Build `ra_silver`/`ra_gold`~~ → **superseded** (2026-08-25): single `cdm_tmforum.revenue_assurance` schema; keep `tmf_*` read-only |
+| ADR-014 | Governed semantic layer | Unity Catalog Business Semantics (Metric Views, Domains, Pages) — design-only |
+| ADR-015 | Agent Workbench data access & audit trail | Inline SQL over `dq_audit` (no named query); reuse `ra.case_notes` for agent-run audit, no new table |
 
 ---
 
@@ -435,3 +437,53 @@ yet: case state lives in **Lakebase Postgres** (`ra.cases.status`) and metric vi
 UC/Delta. It requires a **Lakebase→Delta sync** (job) first. Likewise **ARPU** in the golden data
 is a *tier* (`customer.arpu_tier`), not a computed dollar — a deliberate disambiguation example, not
 a gap to "fix."
+
+---
+
+## 2026-08-31 — ADR-015: Agent Workbench data access & audit trail
+
+**Status:** Accepted. See [`07-ui-specs.md`](07-ui-specs.md) §5.5.
+
+**Context.** The Agent Workbench adds four deterministic, rule-based panels (Pipeline Reliability,
+Exception Investigation, Smart Prioritization & Routing, Recovery Playbook) to the RA Exceptions
+Console. Two implementation questions needed a decision: how the Pipeline Reliability panel reads
+`dq_audit` (a materialized view the app had never queried before), and how to record an immutable
+audit trail of what each agent recommended and whether a human applied it.
+
+**Decision 1 — `dq_audit` access: inline SQL, not a named query.**
+
+*Options considered:*
+- **(a) New named query** `config/queries/dq_audit.sql` + `npx appkit generate-types` against a live
+  warehouse, matching the pattern used by `exceptions_list.sql`/`exception_detail.sql`.
+- **(b) Inline SQL string** in a new server route, matching the pattern `analytics.ts` already uses
+  for `QUEUE_SQL` and the KPI merge query — calls `appkit.analytics.query(sql)` directly.
+
+*Choice:* **(b)**. `appkit generate-types` needs a live warehouse to introspect column types; this
+demo is built and tested without guaranteed live Databricks connectivity at every step, and this app
+already has *both* patterns in use (named queries for the original 4 surfaces, inline SQL for
+`exceptions_list`'s `QUEUE_SQL`). Inline SQL keeps the new `/api/dq/audit` route statically
+typecheckable and unit-testable with zero external dependency, at the cost of not benefiting from
+the query registry's auto-generated types for this one endpoint.
+
+**Decision 2 — audit trail: reuse `ra.case_notes`, no new table.**
+
+*Options considered:*
+- **(a) New `ra.agent_runs` table** (+ a read-only route) recording every agent invocation
+  independent of whether a human applied it.
+- **(b) Reuse the existing append-only `ra.case_notes`** table via the existing
+  `POST /api/cases/:exceptionId/notes` route, writing a structured
+  `[Agent: <name>] run_at=… · inputs={…} · output={…}` note only when a human clicks "Apply."
+
+*Choice:* **(b)**. Every agent recommendation in this workbench is already exception-scoped, which
+is exactly `case_notes`' shape (`exception_id` FK, append-only, timestamped, authored). A new table
+would duplicate that shape for no benefit and would need its own schema-bootstrap, route, and
+typegen. The trade-off: (b) only records a run when a human applies it — an agent recommendation a
+user *saw but didn't act on* leaves no trace. That is intentional for a demo scoped to "human
+approval before any mutation": the audit trail should show what was *done*, and by whom, not every
+recommendation a panel happened to render.
+
+**Consequence.** No new Postgres schema objects, no new named-query typegen dependency, and no
+change to the mutation surface: the only writes the Agent Workbench performs are the same
+`assign`/`status`/`notes` calls the Queue and Cases pages already make, via the same `casesApi`
+client. This keeps the "existing App API is the only mutation gateway" constraint mechanically true
+rather than merely documented.
