@@ -7,6 +7,7 @@
 > - ❌ **Was:** ~610 open exceptions, $1.42M/mo. ✅ **Now:** Real scale: ~48K exceptions in `gold_leakage_summary`, estimated ~$601M impact, 7 check-types (contract_price_mismatch, unauthorized_discount, expired_quote_active, ar_collection_risk, rev_rec_timing_mismatch, doc_contract_mismatch, doc_invoice_mismatch). Native `tmf_enterprise.revenue_assurance_violation` (~10K rows, ~$540M) is context only.
 > - ✅ **Kept:** Personas (Dana, Marcus, Priya), UI structure (Overview/Queue/My Cases, Exception Detail, Case management), Genie natural-language surface, and the New→Investigating→Recovering workflow.
 > - ✅ **2026-08 correction applied:** AppKit (React/TypeScript) Databricks App architecture; READ path via analytics plugin over SQL warehouse → `gold_leakage_summary` + `gold_reconciliation_scorecard`; WRITE path via lakebase plugin → `ra.cases`/`ra.case_notes`; exception_id synthesis at SQL read time; dashboard exists as `Lakelink Fiber — Revenue Assurance Command Center.lvdash.json`; Genie side-panel marked future/planned.
+> - ✅ **2026-08-31 addition:** Agent Workbench tab (§5.5) — four deterministic, rule-based panels (Pipeline Reliability, Exception Investigation, Smart Prioritization & Routing, Recovery Playbook) added to the Console. No LLM/model-serving endpoint is used; every agent-computed value is labeled "Deterministic · rule-based" or "Demo data" in the UI. All mutations still go through the existing `ra.cases`/`ra.case_notes` API — see ADR-015.
 
 **Demo:** Revenue Assurance Lakehouse for Lumen Technologies | **Surfaces covered:** the **RA Exceptions Console** Databricks AppKit (analyst — Marcus Chen) and the **AI/BI leakage dashboard** (exec — Dana Whitfield), plus Genie natural-language Q&A (future: side panel). | **Data source:** Unity Catalog `cdm_tmforum`, schema `cdm_tmforum.revenue_assurance` (7 silver MVs + 4 gold MVs); simulated `*_source` schemas; case state in **Lakebase Postgres** project `ra-console-lakebase`, schema `ra`. All reads via SQL warehouse → analytics plugin; case writes via lakebase plugin → `ra.cases`/`ra.case_notes`.
 
@@ -31,6 +32,9 @@
 | Forecast variance line | Dashboard (Dana) | `gold_revenue_forecast_anomalies`: actual_revenue vs forecast_revenue vs budget_amount; `anomaly_status` | Monthly GL revenue (acct 4000) via `ai_forecast`; shaded variance band |
 | Top exceptions table (dashboard) | Dashboard (Dana) | `gold_leakage_summary` ORDER BY amount_at_risk DESC; join `ra.cases` for status | Drill → RA Exceptions Console Queue filtered by check_type/customer_id |
 | Genie Q&A input | Genie surface | Scoped to `cdm_tmforum.revenue_assurance.*`, `tmf_enterprise.*`, `_metrics.*` | Future/planned side-panel in Console; standalone Genie space available; PII masking applied to account_name |
+| Agent Workbench tabs | Agent Workbench | Pipeline: `dq_audit` (new `/api/dq/audit` route). Investigation: `exception_detail`. Prioritization: `gold_leakage_summary` + `ra.cases`. Recovery: same exception row, no new data. | 4 sub-tabs (Pipeline reliability, Investigate, Prioritize & route, Recovery playbook); every computed value carries a "Deterministic · rule-based" or "Demo data" badge |
+| Pipeline health gate | Agent Workbench (all 4 tabs) | `dq_audit.status`, `observed_at` freshness vs. 72h threshold | Blocks Investigation/Prioritization/Recovery with a destructive alert when RED or unavailable; soft warning banner when stale but green |
+| Apply-recommendation buttons | Agent Workbench (Investigate, Prioritize, Recovery) | N/A (writes via existing case API) | Every "Apply" requires an explicit click after review; calls the same `POST /api/cases/:id/assign\|status\|notes` routes the Queue/Cases pages use — no new mutation surface |
 
 ---
 
@@ -53,6 +57,12 @@
                        │        │ manage case         │
                        │        ▼                     │
                        │  Case (status/assign/notes)  │
+                       │                              │
+                       │  Agent Workbench             │
+                       │   ├ Pipeline reliability      │
+                       │   ├ Investigate               │
+                       │   ├ Prioritize & route        │
+                       │   └ Recovery playbook         │
                        │                              │
                        │  Genie Q&A (side panel)      │
                        └─────────────────────────────┘
@@ -196,6 +206,61 @@ Allowed transitions:
 - **Save error:** toast "Couldn't save to Lakebase (ra.cases) — check write permission or connection. Change reverted."  
 - **Concurrent edit:** "This case was updated by someone else. Reloaded to latest." (re-fetch from Lakebase)  
 - **Terminal status:** action bar disabled with "This case is closed (Recovered/WrittenOff)."
+
+---
+
+## 5.5. Screen — Agent Workbench (Marcus)
+
+Single tab in the Console, four sub-tabs, one shared "selected exception" so switching between Investigate and Recovery playbook keeps context. Every agent here is deterministic TypeScript over data the app already reads — **there is no LLM or model-serving endpoint behind any of these panels.** See ADR-015.
+
+### Wireframe
+
+```
+┌ Agent Workbench ──────────────────────────────────────────────────┐
+│ [Pipeline reliability] [Investigate] [Prioritize & route] [Recovery]│
+│                                                                     │
+│ Pipeline reliability tab:                                          │
+│  ┌ Pipeline evidence is fresh and green ────────────────────────┐  │
+│  │ Pipeline DQ checks are green and fresh.                       │  │
+│  └────────────────────────────────────────────────────────────────┘│
+│  ┌ DQ audit snapshot ─────────────────────────────────────────────┐│
+│  │  14 green   0 red   Freshest: 2026-08-31 08:03                 ││
+│  └──────────────────────────────────────────────────────────────────┘│
+│                                                                     │
+│ Investigate tab:                                                   │
+│  ┌ Search box + ranked results ┐  ┌ Root-cause hypothesis ──────┐  │
+│  │  Acme Fiber  contract_price │  │ check_type=…, risk_tier=RED,│  │
+│  │  ...                         │  │ price_accuracy_score=42.3   │  │
+│  └──────────────────────────────┘  │ Confidence: 92/100           │  │
+│                                     │ [Deterministic · rule-based]│  │
+│                                     │ [Add hypothesis as note]    │  │
+│                                     └──────────────────────────────┘│
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Data binding
+
+| Tab | Source | Notes |
+| :---- | :---- | :---- |
+| Pipeline reliability | `cdm_tmforum.revenue_assurance.dq_audit` via new `GET /api/dq/audit` (inline SQL, no named query — see ADR-015) | Summarized client-side into `unavailable`/`red`/`stale`/`ok`; freshness threshold 72h |
+| Investigate | `exception_detail` named query (existing) | Deterministic hypothesis: cites `check_type`, `source_table`, `risk_tier`, and the check-type-mapped scorecard field; confidence = detection-method base + known-leakage/risk-tier bonuses, capped [0,100] |
+| Prioritize & route | `exceptions_list`-equivalent (`analyticsApi.exceptions`) + `ra.cases` (via `casesApi.list`) | Score = amount (35) + severity (25) + case age (20) + evidence quality (20); routing uses a fixed 3-analyst demo roster, not live capacity |
+| Recovery playbook | Same exception row already fetched | 7-entry check-type-keyed template (action, recovery %, owner role, deadline); no new data source |
+
+### Interactions & writes
+
+- **Pipeline gate:** if `dq_audit` is `RED` or unreachable, the Investigate/Prioritize/Recovery tabs render only a destructive "Blocked by Pipeline Reliability agent" alert — no recommendation is computed, no Apply button renders. If `stale` (freshest observation > 72h old), a warning banner shows but recommendations still render (a human is still approving).
+- **Apply as note (Investigate):** `POST /api/cases/:id/notes` with a body prefixed `[Agent: Exception Investigation] run_at=… · inputs={…} · output={…}` — the existing append-only `ra.case_notes` table doubles as the agent-run audit trail (see ADR-015). Requires an explicit click; nothing is written on page load.
+- **Apply: assign (Prioritize & route):** `POST /api/cases/:id/assign` to the recommended analyst, followed by the same structured `[Agent: …]` note.
+- **Apply: move to Recovering (Recovery playbook):** walks the existing `New → Investigating → Recovering` transition guard (assigning first if needed) via `POST /api/cases/:id/assign` then `POST /api/cases/:id/status`, attaching the structured note on the final transition. No new mutation route is introduced anywhere in this tab.
+
+### States & copy
+
+- **Loading:** `LoadingRegion` + skeletons, matching Queue/Cases.
+- **Blocked:** `Alert variant="destructive"` — "Blocked by Pipeline Reliability agent" + the specific DQ failure reason.
+- **Stale (soft warn):** `Alert variant="default"` — "Pipeline evidence may be stale" + hours since freshest observation.
+- **Empty (no exception selected):** "Select an exception to see a cited root-cause hypothesis." / "…to draft a recovery plan."
+- **Apply error:** inline `ErrorRegion` with retry, same pattern as the case-action bar in §5.
 
 ---
 
