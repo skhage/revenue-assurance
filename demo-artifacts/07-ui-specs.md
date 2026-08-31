@@ -1,7 +1,7 @@
 # RA Demo — UI Interaction Specs
 
 > **Scrutiny summary**
-> 
+>
 > - ❌ **Was:** `lumen_ra` catalog with invented `gold.reconciliation_exceptions` and `gold.exception_case` tables. ✅ **Now:** Data binds to `cdm_tmforum.revenue_assurance.gold_leakage_summary` (~48K rows, 7 check_types, ~$601M at-risk register), case state in **Lakebase Postgres** (`ra.cases`/`ra.case_notes`, not Delta), and `_metrics.*` KPI views (71 pre-built). Single unified `cdm_tmforum.revenue_assurance` schema (no `ra_silver`/`ra_gold` split).
 > - ❌ **Was:** Invented columns like `leakage_amount_usd`, `gold.leakage_kpis`, `root_cause`, `service_instance` materialized bridge. ✅ **Now:** Real columns in `gold_leakage_summary`: `check_type`, `severity`, `amount_at_risk`, `source_table`, `detection_method`, `known_leakage_flag`, `reference_id`; identity resolved inline per check (no bridge); KPIs from `_metrics.enterprise_revenue_assurance_*` views; `exception_id` synthesized at read-time as md5(check_type|reference_id|customer_id|amount_at_risk).
 > - ❌ **Was:** ~610 open exceptions, $1.42M/mo. ✅ **Now:** Real scale: ~48K exceptions in `gold_leakage_summary`, estimated ~$601M impact, 7 check-types (contract_price_mismatch, unauthorized_discount, expired_quote_active, ar_collection_risk, rev_rec_timing_mismatch, doc_contract_mismatch, doc_invoice_mismatch). Native `tmf_enterprise.revenue_assurance_violation` (~10K rows, ~$540M) is context only.
@@ -15,26 +15,26 @@
 
 ## 1. Component inventory
 
-| Component | Used on | Bound data | Notes |
-| :---- | :---- | :---- | :---- |
-| Global header (persona badge, catalog indicator, refresh) | App (all screens) | — | Shows signed-in identity (e.g. `marcus.chen`); catalog = `cdm_tmforum`; workspace = `demo-workspace` |
-| Exceptions data grid | Exceptions Queue | `cdm_tmforum.revenue_assurance.gold_leakage_summary` (7 check_types, ~48K rows); case state from Lakebase `ra.cases` (LEFT JOIN on synthesized `exception_id`) | Sortable, paginated, virtualized; `exception_id = md5(check_type\|reference_id\|customer_id\|amount_at_risk)` synthesized at read time |
-| Filter bar (chips + selects) | Exceptions Queue | `check_type` (7 enum values), `severity` (HIGH/MEDIUM), case `status` from Lakebase | Multi-select; `check_type`: contract_price_mismatch, unauthorized_discount, expired_quote_active, ar_collection_risk, rev_rec_timing_mismatch, doc_contract_mismatch, doc_invoice_mismatch |
-| Severity badge | Queue, Detail | `gold_leakage_summary.severity` (HIGH / MEDIUM) | High=red, Medium=amber |
-| Leakage $ pill | Queue, Detail, Dashboard | `gold_leakage_summary.amount_at_risk` | Right-aligned, currency-formatted |
-| Status chip | Queue, Detail, Case | `ra.cases.status` (Lakebase Postgres): New → Investigating → Recovering → Recovered / WrittenOff | 5 states with transition guards (see §4); terminal states read-only |
-| Evidence panel | Exception Detail | `gold_leakage_summary` row detail + linked source evidence (e.g. `salesforce_source.contract_line_item` + `tmf_customer.bill` for contract-price checks); `source_table` + `reference_id` point to originating evidence | Identity resolved inline per check; shows detection method (rule_based or ai_extracted); `known_leakage_flag` indicates ground-truth seeded leakage |
-| Case action bar (Assign, Change Status, Add Note) | Exception Detail / Case | Writes to Lakebase: `ra.cases` (assignee, status, updated_at) + `ra.case_notes` append | Async to SQL warehouse; optimistic UI updates; reverts on write failure |
-| Notes timeline | Exception Detail / Case | `ra.case_notes` (append-only: id, exception_id FK, author, body, created_at) | Newest-first; author resolved from `/api/whoami` (x-forwarded-email header) |
-| KPI tile | Dashboard (Dana) | `gold_leakage_summary`: SUM(`amount_at_risk`), COUNT(*) by severity, distinct check_types | Total at-risk ($601M), open count (~48K), high-severity count |
-| Root-cause bar chart | Dashboard (Dana) | `gold_leakage_summary.check_type` grouped; SUM(`amount_at_risk`) or COUNT(*) per type | Click = filter Console Queue to that check_type; shows $ or count |
-| Account health scorecard | Dashboard (Dana) | `gold_reconciliation_scorecard`: `composite_health_score`, `risk_tier` (GREEN/AMBER/RED), component scores | Per-customer scores; detail Drawer shows price_accuracy, discount_compliance, collection_efficiency, doc_consistency |
-| Forecast variance line | Dashboard (Dana) | `gold_revenue_forecast_anomalies`: actual_revenue vs forecast_revenue vs budget_amount; `anomaly_status` | Monthly GL revenue (acct 4000) via `ai_forecast`; shaded variance band |
-| Top exceptions table (dashboard) | Dashboard (Dana) | `gold_leakage_summary` ORDER BY amount_at_risk DESC; join `ra.cases` for status | Drill → RA Exceptions Console Queue filtered by check_type/customer_id |
-| Genie Q&A input | Genie surface | Scoped to `cdm_tmforum.revenue_assurance.*`, `tmf_enterprise.*`, `_metrics.*` | Future/planned side-panel in Console; standalone Genie space available; PII masking applied to account_name |
-| Agent Workbench tabs | Agent Workbench | Pipeline: `dq_audit` (new `/api/dq/audit` route). Investigation: `exception_detail`. Prioritization: `gold_leakage_summary` + `ra.cases`. Recovery: same exception row, no new data. | 4 sub-tabs (Pipeline reliability, Investigate, Prioritize & route, Recovery playbook); every computed value carries a "Deterministic · rule-based" or "Demo data" badge |
-| Pipeline health gate | Agent Workbench (all 4 tabs) | `dq_audit.status`, `observed_at` freshness vs. 72h threshold | Blocks Investigation/Prioritization/Recovery with a destructive alert when RED or unavailable; soft warning banner when stale but green |
-| Apply-recommendation buttons | Agent Workbench (Investigate, Prioritize, Recovery) | N/A (writes via existing case API) | Every "Apply" requires an explicit click after review; calls the same `POST /api/cases/:id/assign\|status\|notes` routes the Queue/Cases pages use — no new mutation surface |
+| Component                                                 | Used on                                             | Bound data                                                                                                                                                                                                              | Notes                                                                                                                                                                                      |
+| :-------------------------------------------------------- | :-------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Global header (persona badge, catalog indicator, refresh) | App (all screens)                                   | —                                                                                                                                                                                                                       | Shows signed-in identity (e.g. `marcus.chen`); catalog = `cdm_tmforum`; workspace = `demo-workspace`                                                                                       |
+| Exceptions data grid                                      | Exceptions Queue                                    | `cdm_tmforum.revenue_assurance.gold_leakage_summary` (7 check_types, ~48K rows); case state from Lakebase `ra.cases` (LEFT JOIN on synthesized `exception_id`)                                                          | Sortable, paginated, virtualized; `exception_id = md5(check_type\|reference_id\|customer_id\|amount_at_risk)` synthesized at read time                                                     |
+| Filter bar (chips + selects)                              | Exceptions Queue                                    | `check_type` (7 enum values), `severity` (HIGH/MEDIUM), case `status` from Lakebase                                                                                                                                     | Multi-select; `check_type`: contract_price_mismatch, unauthorized_discount, expired_quote_active, ar_collection_risk, rev_rec_timing_mismatch, doc_contract_mismatch, doc_invoice_mismatch |
+| Severity badge                                            | Queue, Detail                                       | `gold_leakage_summary.severity` (HIGH / MEDIUM)                                                                                                                                                                         | High=red, Medium=amber                                                                                                                                                                     |
+| Leakage $ pill                                            | Queue, Detail, Dashboard                            | `gold_leakage_summary.amount_at_risk`                                                                                                                                                                                   | Right-aligned, currency-formatted                                                                                                                                                          |
+| Status chip                                               | Queue, Detail, Case                                 | `ra.cases.status` (Lakebase Postgres): New → Investigating → Recovering → Recovered / WrittenOff                                                                                                                        | 5 states with transition guards (see §4); terminal states read-only                                                                                                                        |
+| Evidence panel                                            | Exception Detail                                    | `gold_leakage_summary` row detail + linked source evidence (e.g. `salesforce_source.contract_line_item` + `tmf_customer.bill` for contract-price checks); `source_table` + `reference_id` point to originating evidence | Identity resolved inline per check; shows detection method (rule_based or ai_extracted); `known_leakage_flag` indicates ground-truth seeded leakage                                        |
+| Case action bar (Assign, Change Status, Add Note)         | Exception Detail / Case                             | Writes to Lakebase: `ra.cases` (assignee, status, updated_at) + `ra.case_notes` append                                                                                                                                  | Async to SQL warehouse; optimistic UI updates; reverts on write failure                                                                                                                    |
+| Notes timeline                                            | Exception Detail / Case                             | `ra.case_notes` (append-only: id, exception_id FK, author, body, created_at)                                                                                                                                            | Newest-first; author resolved from `/api/whoami` (x-forwarded-email header)                                                                                                                |
+| KPI tile                                                  | Dashboard (Dana)                                    | `gold_leakage_summary`: SUM(`amount_at_risk`), COUNT(\*) by severity, distinct check_types                                                                                                                              | Total at-risk ($601M), open count (~48K), high-severity count                                                                                                                              |
+| Root-cause bar chart                                      | Dashboard (Dana)                                    | `gold_leakage_summary.check_type` grouped; SUM(`amount_at_risk`) or COUNT(\*) per type                                                                                                                                  | Click = filter Console Queue to that check_type; shows $ or count                                                                                                                          |
+| Account health scorecard                                  | Dashboard (Dana)                                    | `gold_reconciliation_scorecard`: `composite_health_score`, `risk_tier` (GREEN/AMBER/RED), component scores                                                                                                              | Per-customer scores; detail Drawer shows price_accuracy, discount_compliance, collection_efficiency, doc_consistency                                                                       |
+| Forecast variance line                                    | Dashboard (Dana)                                    | `gold_revenue_forecast_anomalies`: actual_revenue vs forecast_revenue vs budget_amount; `anomaly_status`                                                                                                                | Monthly GL revenue (acct 4000) via `ai_forecast`; shaded variance band                                                                                                                     |
+| Top exceptions table (dashboard)                          | Dashboard (Dana)                                    | `gold_leakage_summary` ORDER BY amount_at_risk DESC; join `ra.cases` for status                                                                                                                                         | Drill → RA Exceptions Console Queue filtered by check_type/customer_id                                                                                                                     |
+| Genie Q&A input                                           | Genie surface                                       | Scoped to `cdm_tmforum.revenue_assurance.*`, `tmf_enterprise.*`, `_metrics.*`                                                                                                                                           | Future/planned side-panel in Console; standalone Genie space available; PII masking applied to account_name                                                                                |
+| Agent Workbench tabs                                      | Agent Workbench                                     | Pipeline: `dq_audit` (new `/api/dq/audit` route). Investigation: `exception_detail`. Prioritization: `gold_leakage_summary` + `ra.cases`. Recovery: same exception row, no new data.                                    | 4 sub-tabs (Pipeline reliability, Investigate, Prioritize & route, Recovery playbook); every computed value carries a "Deterministic · rule-based" or "Demo data" badge                    |
+| Pipeline health gate                                      | Agent Workbench (all 4 tabs)                        | `dq_audit.status`, `observed_at` freshness vs. 72h threshold                                                                                                                                                            | Blocks Investigation/Prioritization/Recovery with a destructive alert when RED or unavailable; soft warning banner when stale but green                                                    |
+| Apply-recommendation buttons                              | Agent Workbench (Investigate, Prioritize, Recovery) | N/A (writes via existing case API)                                                                                                                                                                                      | Every "Apply" requires an explicit click after review; calls the same `POST /api/cases/:id/assign\|status\|notes` routes the Queue/Cases pages use — no new mutation surface               |
 
 ---
 
@@ -97,29 +97,29 @@ Primary triage surface. Lists open violations ranked by estimated revenue impact
 
 ### Data binding
 
-| Element | Table.column |
-| :---- | :---- |
-| Row set | `cdm_tmforum.revenue_assurance.gold_leakage_summary` LEFT JOIN Lakebase `ra.cases` ON `exception_id` |
-| SEV | `gold_leakage_summary.severity` (HIGH / MEDIUM) |
+| Element           | Table.column                                                                                                                                                                                               |
+| :---------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Row set           | `cdm_tmforum.revenue_assurance.gold_leakage_summary` LEFT JOIN Lakebase `ra.cases` ON `exception_id`                                                                                                       |
+| SEV               | `gold_leakage_summary.severity` (HIGH / MEDIUM)                                                                                                                                                            |
 | TYPE (Check type) | `gold_leakage_summary.check_type` (7 enum: contract_price_mismatch, unauthorized_discount, expired_quote_active, ar_collection_risk, rev_rec_timing_mismatch, doc_contract_mismatch, doc_invoice_mismatch) |
-| IMPACT$ | `gold_leakage_summary.amount_at_risk` |
-| REFERENCE | `gold_leakage_summary.reference_id` (contract #, quote id, invoice #, or business key) |
-| ACCOUNT | `gold_leakage_summary.account_name` (masked by UC column policy) |
-| STATUS | `ra.cases.status` (New / Investigating / Recovering / Recovered / WrittenOff); null or absent → "New" |
-| ASGN | `ra.cases.assignee` (e.g. "Marcus Chen" or internal email); null → "—" |
-| Header counts | `COUNT(*)` rows, `SUM(amount_at_risk)` over filtered set |
+| IMPACT$           | `gold_leakage_summary.amount_at_risk`                                                                                                                                                                      |
+| REFERENCE         | `gold_leakage_summary.reference_id` (contract #, quote id, invoice #, or business key)                                                                                                                     |
+| ACCOUNT           | `gold_leakage_summary.account_name` (masked by UC column policy)                                                                                                                                           |
+| STATUS            | `ra.cases.status` (New / Investigating / Recovering / Recovered / WrittenOff); null or absent → "New"                                                                                                      |
+| ASGN              | `ra.cases.assignee` (e.g. "Marcus Chen" or internal email); null → "—"                                                                                                                                     |
+| Header counts     | `COUNT(*)` rows, `SUM(amount_at_risk)` over filtered set                                                                                                                                                   |
 
 ### Interactions
 
-- **Filter:** each chip/select adds a WHERE predicate; header counts recompute.  
-- **Sort:** default `estimated_revenue_impact_amount DESC`; column headers toggle sort.  
+- **Filter:** each chip/select adds a WHERE predicate; header counts recompute.
+- **Sort:** default `estimated_revenue_impact_amount DESC`; column headers toggle sort.
 - **Open row:** navigates to Exception Detail (`exception_id`).
 
 ### States & copy
 
-- **Loading:** skeleton rows; "Loading violations…"  
-- **Empty (no matches):** "No violations match these filters. Try clearing them." + [Clear filters]  
-- **Empty (nothing open):** "🎉 No open violations. All detected leakage has been worked."  
+- **Loading:** skeleton rows; "Loading violations…"
+- **Empty (no matches):** "No violations match these filters. Try clearing them." + [Clear filters]
+- **Empty (nothing open):** "🎉 No open violations. All detected leakage has been worked."
 - **Error:** "Couldn't load violations from `cdm_tmforum.tmf_enterprise`. Retry?" + [Retry] (logs warehouse/query error).
 
 ---
@@ -151,21 +151,21 @@ Shows one violation, the identity-resolution evidence, and the case action bar.
 
 ### Data binding
 
-| Element | Source |
-| :---- | :---- |
-| Header ($, check_type, severity, detected_at) | `gold_leakage_summary` row; `check_type` + `reference_id` identify the violation |
-| Detection evidence | Per-check detail from source: e.g. for `contract_price_mismatch`: `salesforce_source.contract_line_item.UnitPrice` vs `tmf_customer.bill` actual charged; for `ar_collection_risk`: `oracle_erp_source.ar_payment_schedules_all` DSO/aging; for `doc_invoice_mismatch`: `ai_parse_document` parsed vs system-of-record from `oracle_erp_source.ra_customer_trx_all` |
-| Customer / Account context | `tmf_customer.customer` + `salesforce_source.account` (joined via `TMF_Customer_Id__c`); `account_name` masked by UC column policy |
-| Reference business object | `gold_leakage_summary.reference_id` (contract #, quote id, invoice #, DSO period, GL period, or PDF doc reference) + `source_table` pointer |
-| Known leakage indicator | `gold_leakage_summary.known_leakage_flag` (TRUE for seeded/ground-truth exceptions) |
-| Case block | Lakebase `ra.cases` row (status, assignee, created_at, updated_at); `ra.case_notes` append-only notes timeline |
+| Element                                       | Source                                                                                                                                                                                                                                                                                                                                                              |
+| :-------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Header ($, check_type, severity, detected_at) | `gold_leakage_summary` row; `check_type` + `reference_id` identify the violation                                                                                                                                                                                                                                                                                    |
+| Detection evidence                            | Per-check detail from source: e.g. for `contract_price_mismatch`: `salesforce_source.contract_line_item.UnitPrice` vs `tmf_customer.bill` actual charged; for `ar_collection_risk`: `oracle_erp_source.ar_payment_schedules_all` DSO/aging; for `doc_invoice_mismatch`: `ai_parse_document` parsed vs system-of-record from `oracle_erp_source.ra_customer_trx_all` |
+| Customer / Account context                    | `tmf_customer.customer` + `salesforce_source.account` (joined via `TMF_Customer_Id__c`); `account_name` masked by UC column policy                                                                                                                                                                                                                                  |
+| Reference business object                     | `gold_leakage_summary.reference_id` (contract #, quote id, invoice #, DSO period, GL period, or PDF doc reference) + `source_table` pointer                                                                                                                                                                                                                         |
+| Known leakage indicator                       | `gold_leakage_summary.known_leakage_flag` (TRUE for seeded/ground-truth exceptions)                                                                                                                                                                                                                                                                                 |
+| Case block                                    | Lakebase `ra.cases` row (status, assignee, created_at, updated_at); `ra.case_notes` append-only notes timeline                                                                                                                                                                                                                                                      |
 
 Evidence panel is **violation-type aware** — e.g. Contract-price mismatch shows committed amount vs billed amount side by side; Usage–billing variance shows usage series vs flat billing.
 
 ### States & copy
 
-- **Loading:** "Loading violation VIO-… and linked records…"  
-- **Empty evidence (unresolved identity):** "Identity could not be fully resolved (match_confidence < 0.8). Some links are missing — review before actioning." (amber banner)  
+- **Loading:** "Loading violation VIO-… and linked records…"
+- **Empty evidence (unresolved identity):** "Identity could not be fully resolved (match_confidence < 0.8). Some links are missing — review before actioning." (amber banner)
 - **Error:** "Couldn't load this violation. It may have been reprocessed. [Back to queue]"
 
 ---
@@ -185,26 +185,26 @@ Status lifecycle (stored in Lakebase `ra.cases.status`):
 
 Allowed transitions:
 
-| From | To (allowed) | Guard / UI copy |
-| :---- | :---- | :---- |
-| New | Investigating | requires an assignee — "Assign the case before investigating." |
+| From          | To (allowed)           | Guard / UI copy                                                    |
+| :------------ | :--------------------- | :----------------------------------------------------------------- |
+| New           | Investigating          | requires an assignee — "Assign the case before investigating."     |
 | Investigating | Recovering, WrittenOff | Recovering: "Move to recovery — back-billing / dispute initiated." |
-| Recovering | Recovered, WrittenOff | Recovered: "Confirm recovered amount." (prompts recovered_usd) |
-| Recovered | (terminal) | read-only chip |
-| WrittenOff | (terminal) | requires a note — "Add a reason before writing off." |
+| Recovering    | Recovered, WrittenOff  | Recovered: "Confirm recovered amount." (prompts recovered_usd)     |
+| Recovered     | (terminal)             | read-only chip                                                     |
+| WrittenOff    | (terminal)             | requires a note — "Add a reason before writing off."               |
 
 ### Interactions & writes
 
-- **Assign to me:** upserts/updates `ra.cases` row: sets `assignee = <current user>` (from `/api/whoami` x-forwarded-email), `updated_at = now()`; if status = New, enables Investigating transition.  
-- **Change status:** dropdown offers only allowed next states (per transition table); on select, upserts `ra.cases.status`; respects guard conditions (e.g. Investigating requires assignee ≠ null).  
-- **Add note:** creates new row in `ra.case_notes` (exception_id FK, author, body, created_at); shown newest-first in the timeline.  
+- **Assign to me:** upserts/updates `ra.cases` row: sets `assignee = <current user>` (from `/api/whoami` x-forwarded-email), `updated_at = now()`; if status = New, enables Investigating transition.
+- **Change status:** dropdown offers only allowed next states (per transition table); on select, upserts `ra.cases.status`; respects guard conditions (e.g. Investigating requires assignee ≠ null).
+- **Add note:** creates new row in `ra.case_notes` (exception_id FK, author, body, created_at); shown newest-first in the timeline.
 - **Optimistic UI:** chip updates immediately; on Lakebase write failure, reverts + toast with permission/connection details.
 
 ### States & copy
 
-- **Save success:** toast "Case status → Recovering. Saved."  
-- **Save error:** toast "Couldn't save to Lakebase (ra.cases) — check write permission or connection. Change reverted."  
-- **Concurrent edit:** "This case was updated by someone else. Reloaded to latest." (re-fetch from Lakebase)  
+- **Save success:** toast "Case status → Recovering. Saved."
+- **Save error:** toast "Couldn't save to Lakebase (ra.cases) — check write permission or connection. Change reverted."
+- **Concurrent edit:** "This case was updated by someone else. Reloaded to latest." (re-fetch from Lakebase)
 - **Terminal status:** action bar disabled with "This case is closed (Recovered/WrittenOff)."
 
 ---
@@ -240,12 +240,12 @@ Single tab in the Console, four sub-tabs, one shared "selected exception" so swi
 
 ### Data binding
 
-| Tab | Source | Notes |
-| :---- | :---- | :---- |
-| Pipeline reliability | `cdm_tmforum.revenue_assurance.dq_audit` via new `GET /api/dq/audit` (inline SQL, no named query — see ADR-015) | Summarized client-side into `unavailable`/`red`/`stale`/`ok`; freshness threshold 72h |
-| Investigate | `exception_detail` named query (existing) | Deterministic hypothesis: cites `check_type`, `source_table`, `risk_tier`, and the check-type-mapped scorecard field; confidence = detection-method base + known-leakage/risk-tier bonuses, capped [0,100] |
-| Prioritize & route | `exceptions_list`-equivalent (`analyticsApi.exceptions`) + `ra.cases` (via `casesApi.list`) | Score = amount (35) + severity (25) + case age (20) + evidence quality (20); routing uses a fixed 3-analyst demo roster, not live capacity |
-| Recovery playbook | Same exception row already fetched | 7-entry check-type-keyed template (action, recovery %, owner role, deadline); no new data source |
+| Tab                  | Source                                                                                                          | Notes                                                                                                                                                                                                      |
+| :------------------- | :-------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pipeline reliability | `cdm_tmforum.revenue_assurance.dq_audit` via new `GET /api/dq/audit` (inline SQL, no named query — see ADR-015) | Summarized client-side into `unavailable`/`red`/`stale`/`ok`; freshness threshold 72h                                                                                                                      |
+| Investigate          | `exception_detail` named query (existing)                                                                       | Deterministic hypothesis: cites `check_type`, `source_table`, `risk_tier`, and the check-type-mapped scorecard field; confidence = detection-method base + known-leakage/risk-tier bonuses, capped [0,100] |
+| Prioritize & route   | `exceptions_list`-equivalent (`analyticsApi.exceptions`) + `ra.cases` (via `casesApi.list`)                     | Score = amount (35) + severity (25) + case age (20) + evidence quality (20); routing uses a fixed 3-analyst demo roster, not live capacity                                                                 |
+| Recovery playbook    | Same exception row already fetched                                                                              | 7-entry check-type-keyed template (action, recovery %, owner role, deadline); no new data source                                                                                                           |
 
 ### Interactions & writes
 
@@ -296,23 +296,23 @@ Executive quantification surface (Databricks SQL / AI-BI). Read-only.
 
 ### Data binding
 
-| Element | Source |
-| :---- | :---- |
-| KPI tiles (leakage, exceptions count, high-severity count, accounts affected) | `gold_leakage_summary`: SUM(amount_at_risk), COUNT(*), COUNT(*) WHERE severity='HIGH', COUNT(DISTINCT customer_id) |
-| Check-type root-cause bar ($ / count) | `gold_leakage_summary` grouped by `check_type` (7 types); SUM(amount_at_risk) or COUNT(*) per bar |
-| Account health scorecard | `gold_reconciliation_scorecard`: composite_health_score, risk_tier (GREEN/AMBER/RED), component scores (price_accuracy, discount_compliance, collection_efficiency, doc_consistency) |
-| Forecast variance line | `gold_revenue_forecast_anomalies` (monthly actual_revenue vs forecast_revenue vs budget_amount; shaded variance band) — GL revenue account 4000 via `ai_forecast` |
-| Exception drill table | `gold_leakage_summary` ORDER BY amount_at_risk DESC (top 10–20); columns: check_type, account, reference_id, severity, amount_at_risk |
+| Element                                                                       | Source                                                                                                                                                                               |
+| :---------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| KPI tiles (leakage, exceptions count, high-severity count, accounts affected) | `gold_leakage_summary`: `SUM(amount_at_risk)`, `COUNT(*)`, `COUNT(*) WHERE severity='HIGH'`, `COUNT(DISTINCT customer_id)`                                                           |
+| Check-type root-cause bar ($ / count)                                         | `gold_leakage_summary` grouped by `check_type` (7 types); SUM(amount_at_risk) or COUNT(\*) per bar                                                                                   |
+| Account health scorecard                                                      | `gold_reconciliation_scorecard`: composite_health_score, risk_tier (GREEN/AMBER/RED), component scores (price_accuracy, discount_compliance, collection_efficiency, doc_consistency) |
+| Forecast variance line                                                        | `gold_revenue_forecast_anomalies` (monthly actual_revenue vs forecast_revenue vs budget_amount; shaded variance band) — GL revenue account 4000 via `ai_forecast`                    |
+| Exception drill table                                                         | `gold_leakage_summary` ORDER BY amount_at_risk DESC (top 10–20); columns: check_type, account, reference_id, severity, amount_at_risk                                                |
 
 ### Interactions (drill)
 
-- **Check-type bar click → cross-filter** the dashboard and drill table.  
+- **Check-type bar click → cross-filter** the dashboard and drill table.
 - **"Open in App ↗"** and exception row click → deep-link to RA Exceptions Console Queue pre-filtered by `check_type` and/or `customer_id`, enabling Dana (exec) → Marcus (analyst) handoff.
 
 ### States & copy
 
-- **Loading:** tile shimmer.  
-- **Empty (reconciliation not run):** "No leakage detected for this period. Confirm the reconciliation job has run."  
+- **Loading:** tile shimmer.
+- **Empty (reconciliation not run):** "No leakage detected for this period. Confirm the reconciliation job has run."
 - **Error:** "Dashboard query failed against `cdm_tmforum.tmf_enterprise`. Check the SQL warehouse."
 
 ---
@@ -337,15 +337,15 @@ Natural-language questions over `cdm_tmforum` governed by Unity Catalog. Current
 └─────────────────────────────────────────────────────────────┘
 ```
 
-- **Binding:** Scoped to `cdm_tmforum.revenue_assurance.*`, `tmf_enterprise.*`, `_metrics.*`; answers respect UC grants + PII masking on account_name.  
-- **Trust:** every answer exposes the generated SQL and the source tables used.  
+- **Binding:** Scoped to `cdm_tmforum.revenue_assurance.*`, `tmf_enterprise.*`, `_metrics.*`; answers respect UC grants + PII masking on account_name.
+- **Trust:** every answer exposes the generated SQL and the source tables used.
 - **Handoff:** "Show in Exception Queue" deep-links filtered results into the App Queue.
 
 ### States & copy
 
-- **Loading:** "Analyzing RA data…"  
-- **Low confidence / ambiguous:** "I'm not sure which check type you mean. Did you mean exceptions with `ar_collection_risk` (AR aging/DSO high)?"  
-- **Error / no answer:** "I couldn't answer that from the RA data. Try asking about check types, customers, severity, or amounts at risk (e.g. 'Which customers have the highest contract_price_mismatch exposure?')."  
+- **Loading:** "Analyzing RA data…"
+- **Low confidence / ambiguous:** "I'm not sure which check type you mean. Did you mean exceptions with `ar_collection_risk` (AR aging/DSO high)?"
+- **Error / no answer:** "I couldn't answer that from the RA data. Try asking about check types, customers, severity, or amounts at risk (e.g. 'Which customers have the highest contract_price_mismatch exposure?')."
 - **Future (side panel):** Will be integrated into the Console as a right-side panel for ad-hoc analysis during case investigation.
 
 ---
