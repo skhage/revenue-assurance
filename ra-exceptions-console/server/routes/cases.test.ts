@@ -7,7 +7,7 @@
 // safe to retry after a lost response, a client remount, or a full reload
 // — the guarantee lives in the database, not in any client-side flag.
 import { describe, it, expect } from 'vitest';
-import type { Application } from 'express';
+import express, { type Application } from 'express';
 import { setupCaseRoutes } from './cases';
 
 interface FakeReq {
@@ -44,6 +44,7 @@ function fakeRes(): FakeRes {
 }
 
 interface CaseRow {
+  [key: string]: unknown;
   exception_id: string;
   reference_id: string | null;
   account_name: string | null;
@@ -57,6 +58,7 @@ interface CaseRow {
 }
 
 interface NoteRow {
+  [key: string]: unknown;
   id: number;
   exception_id: string;
   author: string | null;
@@ -125,7 +127,7 @@ function createFakeLakebase() {
     if (/^SELECT .* FROM ra\.cases WHERE exception_id = \$1$/i.test(sql)) {
       const [exceptionId] = params as [string];
       const row = cases.get(exceptionId);
-      return { rows: row ? [row as unknown as Record<string, unknown>] : [] };
+      return { rows: row ? [row] : [] };
     }
 
     if (/^UPDATE ra\.cases SET assignee/i.test(sql)) {
@@ -189,7 +191,7 @@ function createFakeLakebase() {
 
     if (/^SELECT id, author, body, created_at FROM ra\.case_notes/i.test(sql)) {
       const [exceptionId] = params as [string];
-      return { rows: notes.filter((n) => n.exception_id === exceptionId) as unknown as Record<string, unknown>[] };
+      return { rows: notes.filter((n) => n.exception_id === exceptionId) };
     }
 
     if (/^SELECT body FROM ra\.case_notes WHERE exception_id = \$1 AND idempotency_key = \$2/i.test(sql)) {
@@ -215,14 +217,19 @@ interface RouteHandler {
 async function setupCaseRoutesWithFakeApp() {
   const routes = new Map<string, RouteHandler>();
   const lakebase = createFakeLakebase();
-  const fakeApp = {
-    get(path: string, handler: RouteHandler) {
-      routes.set(`GET ${path}`, handler);
+  const fakeApp = express();
+  Object.defineProperties(fakeApp, {
+    get: {
+      value(path: string, handler: RouteHandler) {
+        routes.set(`GET ${path}`, handler);
+      },
     },
-    post(path: string, handler: RouteHandler) {
-      routes.set(`POST ${path}`, handler);
+    post: {
+      value(path: string, handler: RouteHandler) {
+        routes.set(`POST ${path}`, handler);
+      },
     },
-  };
+  });
   // `setupCaseRoutes` only ever calls `app.get`/`app.post` with two
   // arguments and never touches any other Express `Application` member, so
   // this minimal fake is behaviorally complete for what's under test; the
@@ -232,7 +239,7 @@ async function setupCaseRoutesWithFakeApp() {
     lakebase,
     server: {
       extend(fn: (app: Application) => void) {
-        fn(fakeApp as unknown as Application);
+        fn(fakeApp);
       },
     },
   });
