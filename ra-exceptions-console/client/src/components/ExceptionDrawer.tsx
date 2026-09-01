@@ -21,10 +21,136 @@ import { sql } from '@databricks/appkit-ui/js';
 import { useEffect, useState } from 'react';
 import { SeverityBadge, StatusChip } from './badges';
 import { LoadingRegion, ErrorRegion } from './StatusRegion';
+import { FileText, ExternalLink } from 'lucide-react';
 import { usd, num, checkLabel, accountLabel, detectionLabel, sourceLabel } from '../lib/format';
 import { casesApi, NEXT_STATUS, type CasePayload, type Status, type ExceptionMeta } from '../lib/cases';
+import { evidenceApi, type EvidencePayload, type EvidenceRow, type EvidenceFormat } from '../lib/evidence';
 import { useWhoAmI } from '../lib/whoami';
 import type { ExceptionRow } from '../lib/types';
+
+function fmtEvidence(v: unknown, format?: EvidenceFormat): string {
+  if (v === null || v === undefined || v === '') return '—';
+  switch (format) {
+    case 'usd':
+      return usd(typeof v === 'number' ? v : Number(v));
+    case 'int':
+      return num(typeof v === 'number' ? v : Number(v));
+    case 'bool':
+      return v === true || v === 'true' ? 'Yes' : 'No';
+    case 'pct': {
+      const n = typeof v === 'number' ? v : Number(v);
+      if (!Number.isFinite(n)) return String(v);
+      const pct = Math.abs(n) <= 1 ? n * 100 : n; // ratios (0.15) → 15%, percent-points (30) → 30%
+      return `${(Math.round(pct * 10) / 10).toLocaleString()}%`;
+    }
+    default:
+      return String(v);
+  }
+}
+
+function EvidenceSection({ exception }: { exception: ExceptionRow }) {
+  const [data, setData] = useState<EvidencePayload | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    setLoading(true);
+    setError(false);
+    evidenceApi
+      .get(
+        { check_type: exception.check_type, reference_id: exception.reference_id, customer_id: exception.customer_id },
+        ctrl.signal
+      )
+      .then((p) => setData(p))
+      .catch(() => {
+        if (!ctrl.signal.aborted) setError(true);
+      })
+      .finally(() => {
+        if (!ctrl.signal.aborted) setLoading(false);
+      });
+    return () => ctrl.abort();
+  }, [exception.check_type, exception.reference_id, exception.customer_id, reloadKey]);
+
+  if (loading) {
+    return (
+      <LoadingRegion label="Loading evidence">
+        <Skeleton className="h-24 w-full" />
+      </LoadingRegion>
+    );
+  }
+  if (error) {
+    return <ErrorRegion message="Couldn't load detection evidence." onRetry={() => setReloadKey((k) => k + 1)} className="p-0" />;
+  }
+  if (!data || data.rows.length === 0) {
+    return (
+      <div role="status" className="text-sm text-muted-foreground">
+        {data?.note ?? 'No additional detection evidence for this exception.'}
+      </div>
+    );
+  }
+
+  const comp = data.comparison;
+  const compRows = data.rows.filter((r) => r.left !== undefined || r.right !== undefined);
+  const kvRows = data.rows.filter((r) => r.left === undefined && r.right === undefined);
+
+  return (
+    <div className="flex flex-col gap-3">
+      {comp && compRows.length > 0 && (
+        <div className="overflow-hidden rounded-lg border border-border">
+          <div className="grid grid-cols-[1.1fr_1fr_1fr] gap-2 border-b border-border bg-muted/50 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <span />
+            <span className="text-right">{comp.leftLabel}</span>
+            <span className="text-right">{comp.rightLabel}</span>
+          </div>
+          {compRows.map((r: EvidenceRow) => (
+            <div
+              key={r.label}
+              className={`grid grid-cols-[1.1fr_1fr_1fr] items-baseline gap-2 px-3 py-1.5 text-sm ${
+                r.mismatch ? 'bg-destructive/5' : ''
+              }`}
+            >
+              <span className="text-muted-foreground">{r.label}</span>
+              <span
+                className={`text-right font-medium tabular-nums ${r.mismatch ? 'text-destructive' : 'text-foreground'}`}
+              >
+                {fmtEvidence(r.left, r.format)}
+              </span>
+              <span className="text-right font-medium tabular-nums text-foreground">
+                {fmtEvidence(r.right, r.format)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {kvRows.map((r: EvidenceRow) => (
+        <KV key={r.label} k={r.label} v={fmtEvidence(r.value, r.format)} />
+      ))}
+      {data.document && (
+        <div className="mt-1">
+          {data.document.url ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => window.open(data.document!.url!, '_blank', 'noopener,noreferrer')}
+            >
+              <FileText className="mr-1.5 h-4 w-4" />
+              {data.document.label}
+              <ExternalLink className="ml-1.5 h-3.5 w-3.5 opacity-60" />
+            </Button>
+          ) : (
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <FileText className="h-3.5 w-3.5" />
+              <span className="font-mono">{data.document.fileName}</span>
+            </div>
+          )}
+        </div>
+      )}
+      {data.note && <p className="text-xs leading-relaxed text-muted-foreground">{data.note}</p>}
+    </div>
+  );
+}
 
 function KV({ k, v }: { k: string; v: React.ReactNode }) {
   return (
@@ -157,8 +283,16 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
             <KV k="Check" v={checkLabel(exception.check_type)} />
             <KV k="Method" v={detectionLabel(exception.detection_method)} />
             <KV k="Source system" v={<span className="text-xs">{sourceLabel(exception.source_table)}</span>} />
-            <KV k="Known leakage" v={exception.known_leakage_flag ? 'Yes (ground truth)' : 'Model-flagged'} />
+            <KV k="Known leakage" v={exception.known_leakage_flag ? 'Yes (seeded ground truth)' : 'No'} />
             <KV k="Customer ID" v={exception.customer_id ? num(exception.customer_id) : '—'} />
+          </div>
+
+          <Separator />
+
+          {/* Check-type-aware reconciliation evidence */}
+          <div className="flex flex-col gap-2.5">
+            <SectionTitle>Reconciliation evidence</SectionTitle>
+            <EvidenceSection key={exception.exception_id} exception={exception} />
           </div>
 
           <Separator />
