@@ -84,6 +84,13 @@ export function setupAnalyticsRoutes(appkit: AppKitWithAnalyticsAndLakebase) {
           row_offset: sql.int(filters.row_offset),
         });
 
+        // Diagnostic: log the shape of the warehouse result so we can see
+        // what the analytics plugin actually returns.
+        console.log('[analytics] exceptions result keys:', Object.keys(warehouseResult ?? {}),
+          'data_array length:', (warehouseResult as any)?.data_array?.length ?? 'MISSING',
+          'rows length:', (warehouseResult as any)?.rows?.length ?? 'MISSING',
+          'data length:', (warehouseResult as any)?.data?.length ?? 'MISSING');
+
         const rows = (warehouseResult.data_array ?? []).map((row) => ({
           exception_id: stringValue(row[0]),
           reference_id: stringValue(row[1]),

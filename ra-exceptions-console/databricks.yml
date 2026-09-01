@@ -64,6 +64,7 @@ resources:
         started: true
       user_api_scopes:
         - sql
+        - dashboards.genie
 
       # The resources which this app has access to.
       resources:
