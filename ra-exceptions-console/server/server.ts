@@ -1,11 +1,11 @@
-import { createApp, analytics, lakebase, server } from '@databricks/appkit';
+import { createApp, analytics, lakebase, server, genie } from '@databricks/appkit';
 import { setupAnalyticsRoutes } from './routes/analytics';
 import { setupEvidenceRoutes } from './routes/evidence';
 import { setupCaseRoutes } from './routes/cases';
 import { setupArchitectureRoutes } from './routes/architecture';
 
 createApp({
-  plugins: [analytics(), lakebase(), server()],
+  plugins: [analytics(), lakebase(), server(), genie()],
   async onPluginsReady(appkit) {
     await setupCaseRoutes(appkit);
     setupAnalyticsRoutes(appkit);

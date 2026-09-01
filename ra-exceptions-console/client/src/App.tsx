@@ -12,6 +12,7 @@ import {
   Zap,
   Waypoints,
   Lightbulb,
+  Sparkles,
   type LucideIcon,
 } from 'lucide-react';
 import { OverviewPage } from './pages/OverviewPage';
@@ -19,6 +20,7 @@ import { QueuePage } from './pages/QueuePage';
 import { CasesPage } from './pages/CasesPage';
 import { ArchitecturePage } from './pages/ArchitecturePage';
 import { WhyItMattersPage } from './pages/WhyItMattersPage';
+import { GeniePage } from './pages/GeniePage';
 import { LakelinkMark } from './components/LakelinkMark';
 import { DatabricksLogo } from './components/DatabricksLogo';
 import { useTheme } from './lib/useTheme';
@@ -29,6 +31,7 @@ const NAV = [
   { to: '/', label: 'Overview', icon: LayoutGrid, end: true },
   { to: '/queue', label: 'Exception queue', icon: ListChecks, end: false },
   { to: '/cases', label: 'My cases', icon: Briefcase, end: false },
+  { to: '/ask', label: 'Ask (Genie)', icon: Sparkles, end: false },
 ];
 
 const SECONDARY_NAV = [
@@ -40,6 +43,7 @@ const TITLES: Record<string, { title: string; sub: string }> = {
   '/': { title: 'Overview', sub: 'Revenue leakage across all reconciliation checks' },
   '/queue': { title: 'Exception queue', sub: 'Triage detected leakage, highest impact first' },
   '/cases': { title: 'My cases', sub: 'Cases you are investigating and recovering' },
+  '/ask': { title: 'Ask (Genie)', sub: 'Natural-language questions over the governed RA data' },
   '/why': { title: 'Why RA matters', sub: 'The business case, the challenges, and why Databricks — before the demo' },
   '/architecture': { title: 'Architecture', sub: 'The demo mapped onto the Databricks Data + AI Platform' },
 };
@@ -213,6 +217,7 @@ const router = createBrowserRouter([
       { path: '/', element: <OverviewPage /> },
       { path: '/queue', element: <QueuePage /> },
       { path: '/cases', element: <CasesPage /> },
+      { path: '/ask', element: <GeniePage /> },
       { path: '/why', element: <WhyItMattersPage /> },
       { path: '/architecture', element: <ArchitecturePage /> },
     ],
