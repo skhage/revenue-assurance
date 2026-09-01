@@ -192,6 +192,12 @@ function createFakeLakebase() {
       return { rows: notes.filter((n) => n.exception_id === exceptionId) as unknown as Record<string, unknown>[] };
     }
 
+    if (/^SELECT body FROM ra\.case_notes WHERE exception_id = \$1 AND idempotency_key = \$2/i.test(sql)) {
+      const [exceptionId, idempotencyKey] = params as [string, string];
+      const match = notes.find((n) => n.exception_id === exceptionId && n.idempotency_key === idempotencyKey);
+      return { rows: match ? [{ body: match.body }] : [] };
+    }
+
     throw new Error(`createFakeLakebase: unhandled query: ${sql}`);
   }
 
@@ -302,5 +308,34 @@ describe('POST /api/cases/:exceptionId/notes — server-enforced idempotency', (
     const { routes } = await setupCaseRoutesWithFakeApp();
     const res = await callNotesRoute(routes, 'exc-1', {});
     expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects reuse of an idempotency key with a different note body, rather than silently treating it as the same note', async () => {
+    const { routes, lakebase } = await setupCaseRoutesWithFakeApp();
+    const key = 'agent:recovery-playbook:exc-1:11111111-1111-1111-1111-111111111111';
+    const first = await callNotesRoute(routes, 'exc-1', { body: 'first output', idempotencyKey: key });
+    expect(first.statusCode).toBe(200);
+
+    // Same key, but the body has changed — e.g. a stale/reused key from an
+    // unrelated run, not a retry of the same approved action.
+    const second = await callNotesRoute(routes, 'exc-1', { body: 'a totally different output', idempotencyKey: key });
+
+    expect(second.statusCode).toBe(409);
+    // The original note is untouched — no corruption, no second insert.
+    expect(lakebase.notes().filter((n) => n.exception_id === 'exc-1' && n.idempotency_key === key)).toHaveLength(1);
+    expect(lakebase.notes().find((n) => n.idempotency_key === key)?.body).toBe('first output');
+  });
+
+  it('an exact retry (same key, same body) still dedupes as a safe no-op after the payload-mismatch check', async () => {
+    const { routes, lakebase } = await setupCaseRoutesWithFakeApp();
+    const key = 'agent:smart-prioritization:exc-1:22222222-2222-2222-2222-222222222222';
+    const body = { body: 'identical output', idempotencyKey: key };
+    const first = await callNotesRoute(routes, 'exc-1', body);
+    const retry = await callNotesRoute(routes, 'exc-1', body);
+
+    expect(first.statusCode).toBe(200);
+    expect(retry.statusCode).toBe(200);
+    expect((retry.body as { deduped?: boolean }).deduped).toBe(true);
+    expect(lakebase.notes().filter((n) => n.exception_id === 'exc-1' && n.idempotency_key === key)).toHaveLength(1);
   });
 });

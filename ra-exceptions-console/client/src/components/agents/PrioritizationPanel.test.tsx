@@ -180,6 +180,33 @@ describe('PrioritizationPanel — failure-atomic mutation ordering', () => {
     expect(calls.some((c) => c.path.endsWith('/assign'))).toBe(false);
   });
 
+  it('never assigns if the note write is rejected for an idempotency-key/payload mismatch (409)', async () => {
+    // A stale/reused idempotency key colliding with a different body is
+    // rejected outright by the server (409), not silently deduped — the
+    // panel must not proceed to any assignment mutation in that case.
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      if (url.startsWith('/api/analytics/exceptions')) return jsonResponse(EXCEPTIONS);
+      if (url === '/api/cases' || url === '/api/cases?mine=1') return jsonResponse([]);
+      if (url.match(/^\/api\/cases\/[^/]+\/notes$/) && method === 'POST') {
+        return jsonResponse({ error: 'This idempotency key was already used with a different note body.' }, 409);
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const user = userEvent.setup();
+    render(<PrioritizationPanel health={OK_HEALTH} selected={null} onSelect={() => {}} />);
+
+    const applyButtons = await screen.findAllByRole('button', { name: /Apply: assign/i });
+    await user.click(applyButtons[0]);
+
+    await waitFor(() => {
+      expect(screen.getByText(/already used with a different note body/i)).toBeInTheDocument();
+    });
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith('/assign'))).toBe(false);
+  });
+
   it('retrying after a failed assignment never results in more than one durable note (server-enforced dedup, not client memory)', async () => {
     let assignShouldFail = true;
     const { fetchMock, notesByExceptionAndKey } = makeTrackedFetch({

@@ -13,6 +13,7 @@
 > - ✅ **Verified:** All product names (Lakeflow Declarative Pipelines, Unity Catalog, Genie, MLflow, Databricks Apps, DABs, serverless) are current and correctly cited per README and web-verifiable Databricks docs.
 > - ✅ **2026-09-01 correction:** ADR-015 Agent Workbench refinements after cross-review — `stale` DQ evidence is now a hard block (not a soft warning) via a single `isBlocked()` gate every panel calls; the DQ route now fails closed on any null/unrecognized/inconsistent status row (never defaults to GREEN); every "Apply" writes its audit note _before_ the case mutation and never re-writes it on retry; Recovery Playbook's recovery %/owner/deadline are now labeled "Demo data" (the earlier "no invented facts" framing overstated it); selection is now shared across Investigate, Prioritize & route, _and_ Recovery playbook (previously Prioritize & route was disconnected). See the addendum at the end of this file.
 > - ✅ **2026-09-01 second correction:** ADR-015 refinements after a second round of cross-review — DQ freshness is now evaluated per required check (not by a single global freshest timestamp, which let one fresh check mask another stale/timestamp-less one); note-write deduplication moved from a client-local `ref` to a server-enforced Postgres unique index keyed on `(exception_id, idempotency_key)`, durable across component remounts, page reloads, and ambiguous lost-response retries; Prioritize & route now explicitly merges and scores the selected exception so it is always visible and actionable, even when absent from the default batch or ranked outside the visible top 20. See the second addendum at the end of this file.
+> - ✅ **2026-09-01 third correction:** ADR-015 refinements after a third round of cross-review — the idempotency key is now minted per human-approved run (`agent:<slug>:<exception_id>:<run_id>`, persisted in `localStorage` until that run's mutation succeeds), not a constant per (agent, exception), so a later independent approval is no longer silently suppressed by an earlier one; the server now rejects (`409`) reuse of an idempotency key with a different note body instead of silently deduping it, closing a latent audit-trail-corruption gap. See the third addendum at the end of this file.
 
 ---
 
@@ -603,3 +604,33 @@ doesn't already contain it (no second network round-trip — the full row is alr
 `selected`), and always renders it: if its rank places it outside the top 20, it is appended below
 the top 20 (never spliced in, so the visible ordering of the top 20 is unaffected) with an explicit
 "(rank #N, outside top 20)" label, and its "Apply: assign" action remains enabled.
+
+---
+
+## 2026-09-01 third addendum: per-approved-run idempotency keys and payload-mismatch rejection
+
+**Status:** Accepted, refines Decision 9 above.
+
+**Decision 11 — the idempotency key is per approved run, not a constant per (agent, exception).**
+
+Decision 9 introduced a stable key of the form `agent:<slug>:<exception_id>`. That key never
+changes for a given (agent, exception) pair, which has an unintended side effect: it suppresses
+every future independent approval of the same recommendation for that exception, not just retries
+of one in-flight approval — a second, later, deliberate "Apply" click would silently dedupe against
+the first click's note forever. The key now includes a per-run UUID
+(`agent:<slug>:<exception_id>:<run_id>`), minted once per human approval and persisted in
+`localStorage` (`client/src/lib/agents/approvedRun.ts`) until that run's mutation succeeds. Retrying
+the same approval (lost response, remount, reload) resumes the same pending run and reuses its key;
+clicking "Apply" again only after that run completed mints a genuinely new run and a new key, so a
+second real approval produces a second, independent note.
+
+**Decision 12 — the server rejects idempotency-key reuse with a different payload instead of silently deduping.**
+
+The `ON CONFLICT ... DO NOTHING` insert alone cannot distinguish "this is the same retried note" from
+"this key collided with an unrelated note" — both look like a no-op insert. `POST
+/api/cases/:exceptionId/notes` now looks up any existing note for the given
+`(exception_id, idempotency_key)` before inserting: if one exists with the _same_ body, the request
+is treated as an exact retry and deduped as before; if one exists with a _different_ body, the
+request is rejected with `409` and the case is never mutated. This closes a latent correctness gap
+where a stale or reused key could have silently attributed the wrong recommendation to an existing
+audit note.
