@@ -76,10 +76,10 @@ export function setupEvidenceRoutes(appkit: AppKitAnalytics) {
         res.status(400).json({ error: 'Invalid evidence request' });
         return;
       }
-      const { check_type, reference_id, customer_id } = parsed.data;
+      const { check_type, reference_id } = parsed.data;
 
       try {
-        const payload = await buildEvidence(appkit, check_type, reference_id, customer_id);
+        const payload = await buildEvidence(appkit, check_type, reference_id);
         res.json(payload);
       } catch (err) {
         console.error('[evidence] failed for', check_type, err);
@@ -101,10 +101,11 @@ async function one(
 async function buildEvidence(
   appkit: AppKitAnalytics,
   check: string,
-  ref: string,
-  cid: string
+  ref: string
 ): Promise<EvidencePayload> {
-  const p = { ref: sql.string(ref), cid: sql.string(cid) };
+  // Only :ref is referenced by the per-check SQL below — do NOT bind extra
+  // params (Databricks rejects a supplied-but-unused parameter marker).
+  const p = { ref: sql.string(ref) };
 
   // ---- Contract price family -------------------------------------------------
   if (check === 'contract_price_mismatch' || check === 'contract_price_missing_erp') {
