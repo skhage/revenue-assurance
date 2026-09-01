@@ -11,6 +11,7 @@
 > - ✅ **Now:** ADR-007 acknowledges cloud is FEVM at deploy time; Rogers narrative is _reference_, not an assertion about this demo's cloud.
 > - ✅ **Added:** ADR-013 (build `ra_silver`/`ra_gold` in `cdm_tmforum` vs. separate `lumen_ra` catalog) — reflects ground truth that `tmf_*` are read-only, new schemas stay in same catalog.
 > - ✅ **Verified:** All product names (Lakeflow Declarative Pipelines, Unity Catalog, Genie, MLflow, Databricks Apps, DABs, serverless) are current and correctly cited per README and web-verifiable Databricks docs.
+> - ✅ **2026-09-01 correction:** ADR-015 Agent Workbench refinements after cross-review — `stale` DQ evidence is now a hard block (not a soft warning) via a single `isBlocked()` gate every panel calls; the DQ route now fails closed on any null/unrecognized/inconsistent status row (never defaults to GREEN); every "Apply" writes its audit note _before_ the case mutation and never re-writes it on retry; Recovery Playbook's recovery %/owner/deadline are now labeled "Demo data" (the earlier "no invented facts" framing overstated it); selection is now shared across Investigate, Prioritize & route, _and_ Recovery playbook (previously Prioritize & route was disconnected). See the addendum at the end of this file.
 
 ---
 
@@ -495,3 +496,58 @@ change to the mutation surface: the only writes the Agent Workbench performs are
 `assign`/`status`/`notes` calls the Queue and Cases pages already make, via the same `casesApi`
 client. This keeps the "existing App API is the only mutation gateway" constraint mechanically true
 rather than merely documented.
+
+---
+
+## 2026-09-01 — ADR-015 addendum: fail-closed gating and audit-before-mutation ordering
+
+**Status:** Accepted, supersedes the original blocking/audit behavior described above. Prompted by
+cross-review of the initial implementation.
+
+**Decision 3 — stale evidence is a hard block, not a soft warning.**
+
+The first cut treated `stale` (freshest DQ observation older than the 72h threshold) as a
+soft-warning state: panels still rendered recommendations, just with a warning banner. Cross-review
+correctly identified this as inconsistent with the gate's own purpose — recommending against
+evidence that might be out of date is exactly the failure mode a reliability gate exists to prevent.
+`stale` now blocks identically to `red`/`unavailable`: `isBlocked()` in
+`client/src/lib/agents/types.ts` is the single source of truth every panel calls, so no panel can
+independently decide to treat staleness as advisory.
+
+**Decision 4 — the DQ status parser fails closed, never defaults to GREEN.**
+
+The original `parseDqAuditRows` treated anything other than the literal string `'RED'` as GREEN —
+so a null, missing, or unrecognized status from the warehouse silently passed as healthy.
+`resolveStatus()` in `server/routes/dqAudit.ts` now requires the exact literal `'GREEN'` _and_
+internally consistent, present, non-negative counts (`passed_records + failed_records ==
+observed_records`, `failed_records == 0`) before returning GREEN; anything else — null, empty,
+unrecognized, lowercase, numeric, boolean, missing counts, or a status/count mismatch — resolves to
+RED. A single malformed row therefore fails the whole pipeline closed via `summarizePipelineHealth`,
+rather than being silently absorbed as one more "healthy" row.
+
+**Decision 5 — every "Apply" writes its audit note before, not after, the case mutation.**
+
+The original ordering assigned/transitioned the case first and logged the `[Agent: …]` note
+afterward (or, in one panel, with an empty `meta` object, since the case row already existed by
+then). That meant a human-approved recommendation could be silently lost if the note write failed
+after a real mutation had already happened. Recovery Playbook and Prioritization now write the note
+first; the case mutation is only attempted once the note has landed. A per-exception "already
+noted" flag (a `ref` keyed to the exception, reset when the exception selection changes) prevents a
+retry after a failed mutation step from writing a duplicate note — retrying resumes at the mutation,
+not the audit record.
+
+**Decision 6 — Recovery Playbook's numbers are demo data, not "no invented facts."**
+
+The original card description claimed "no invented facts," but the recovery %, owner role, and
+deadline are fixed template assumptions, not measured recovery-rate history — a materially different
+claim from the cited evidence fields (`check_type`, `source_table`, `amount_at_risk`) that _are_
+real. The card now carries a visible `Demo data` badge and an explicit caveat next to those three
+values; the "no invented facts" line was removed.
+
+**Decision 7 — Prioritize & route now shares the same selected-exception state as the other two tabs.**
+
+Originally only Investigate and Recovery playbook shared a selection; Prioritize & route ranked
+exceptions independently with no way to carry a row forward. It now accepts the same
+`selected`/`onSelect` props, highlights the shared selection in its table, and exposes a "Carry
+forward" action per row — so a single exception can flow through the whole
+Investigate → Prioritize & route → Recovery playbook loop.

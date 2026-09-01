@@ -18,8 +18,11 @@ const FALLBACK_HEALTH = {
 /**
  * Single entry point for the four demo agents. Tell (pipeline health) → show
  * (evidence/ranking) → tell (recommendation + citation), one tab per agent.
- * Selection of "the current exception" is shared across the Investigation
- * and Recovery Playbook tabs so switching between them keeps context.
+ * Selection of "the current exception" is shared across Investigate,
+ * Prioritize & route, and Recovery playbook so a single exception can flow
+ * through the whole loop — pick it in Investigate (or "Carry forward" it
+ * from a ranked row in Prioritize & route), and Recovery playbook opens
+ * already showing it.
  */
 export function AgentWorkbenchPage() {
   const [searchParams] = useSearchParams();
@@ -64,7 +67,7 @@ export function AgentWorkbenchPage() {
         </TabsContent>
 
         <TabsContent value="prioritize">
-          <PrioritizationPanel health={health} />
+          <PrioritizationPanel health={health} selected={selected} onSelect={setSelected} />
         </TabsContent>
 
         <TabsContent value="recovery">

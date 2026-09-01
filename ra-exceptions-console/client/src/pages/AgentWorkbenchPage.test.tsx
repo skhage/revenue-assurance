@@ -168,4 +168,135 @@ describe('AgentWorkbenchPage', () => {
       ).toBeGreaterThan(0);
     });
   });
+
+  describe('stale pipeline evidence blocks every downstream panel', () => {
+    const STALE_HEALTH: PipelineHealth = {
+      state: 'stale',
+      reason: 'Freshest DQ observation is 100h old (threshold 72h).',
+      rows: [],
+      freshestObservedAt: null,
+    };
+
+    it('blocks Investigate when stale', async () => {
+      vi.stubGlobal('fetch', stubFetch(STALE_HEALTH));
+      renderPage();
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('tab', { name: 'Investigate' }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Blocked by Pipeline Reliability agent')).toBeInTheDocument();
+      });
+      expect(screen.queryByLabelText('Search exceptions to investigate')).not.toBeInTheDocument();
+    });
+
+    it('blocks Prioritize & route when stale', async () => {
+      vi.stubGlobal('fetch', stubFetch(STALE_HEALTH));
+      renderPage();
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('tab', { name: 'Prioritize & route' }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Blocked by Pipeline Reliability agent')).toBeInTheDocument();
+      });
+      expect(screen.queryByText('Ranked exceptions')).not.toBeInTheDocument();
+    });
+
+    it('blocks Recovery playbook when stale', async () => {
+      vi.stubGlobal('fetch', stubFetch(STALE_HEALTH));
+      renderPage();
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('tab', { name: 'Recovery playbook' }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Blocked by Pipeline Reliability agent')).toBeInTheDocument();
+      });
+      expect(screen.queryByLabelText('Search exceptions to investigate')).not.toBeInTheDocument();
+    });
+
+    it('shows the Pipeline reliability tab itself as blocked (destructive), not a soft warning', async () => {
+      vi.stubGlobal('fetch', stubFetch(STALE_HEALTH));
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByText('Pipeline evidence is stale')).toBeInTheDocument();
+      });
+    });
+  });
+
+  describe('shared selection carries one exception through the full Investigate → Prioritize → Recovery loop', () => {
+    it('selecting in Investigate is reflected in Prioritize & route, and Recovery playbook opens already showing it', async () => {
+      vi.stubGlobal(
+        'fetch',
+        stubFetch({ state: 'ok', reason: 'green', rows: [], freshestObservedAt: new Date().toISOString() })
+      );
+      renderPage();
+
+      const user = userEvent.setup();
+
+      // 1. Pick the exception on the Investigate tab.
+      await user.click(await screen.findByRole('tab', { name: 'Investigate' }));
+      await user.click(await screen.findByRole('button', { name: /Select exception REF-100/i }));
+      await waitFor(() => {
+        expect(screen.getByText(/check_type=contract_price_mismatch/)).toBeInTheDocument();
+      });
+
+      // 2. Switch to Prioritize & route — the same exception is highlighted.
+      await user.click(await screen.findByRole('tab', { name: 'Prioritize & route' }));
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /Selected/i })).toBeInTheDocument();
+      });
+      const row = screen.getByText('Acme Fiber').closest('tr');
+      expect(row).toHaveAttribute('data-state', 'selected');
+
+      // 3. Switch to Recovery playbook — it opens already showing that exception's plan.
+      await user.click(await screen.findByRole('tab', { name: 'Recovery playbook' }));
+      await waitFor(() => {
+        expect(screen.getByText(/Templated action by check_type/)).toBeInTheDocument();
+      });
+      expect(screen.getByText(/check_type=contract_price_mismatch/)).toBeInTheDocument();
+      expect(screen.queryByText('Select an exception to draft a recovery plan.')).not.toBeInTheDocument();
+    });
+
+    it('carrying forward from a ranked row in Prioritize & route seeds Recovery playbook with that exception', async () => {
+      vi.stubGlobal(
+        'fetch',
+        stubFetch({ state: 'ok', reason: 'green', rows: [], freshestObservedAt: new Date().toISOString() })
+      );
+      renderPage();
+
+      const user = userEvent.setup();
+
+      await user.click(await screen.findByRole('tab', { name: 'Prioritize & route' }));
+      await user.click(await screen.findByRole('button', { name: /Carry forward/i }));
+
+      await user.click(await screen.findByRole('tab', { name: 'Recovery playbook' }));
+      await waitFor(() => {
+        expect(screen.getByText(/Templated action by check_type/)).toBeInTheDocument();
+      });
+      expect(screen.queryByText('Select an exception to draft a recovery plan.')).not.toBeInTheDocument();
+    });
+  });
+
+  it('supports keyboard-only navigation to select an exception in Investigate', async () => {
+    vi.stubGlobal(
+      'fetch',
+      stubFetch({ state: 'ok', reason: 'green', rows: [], freshestObservedAt: new Date().toISOString() })
+    );
+    renderPage();
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('tab', { name: 'Investigate' }));
+
+    const pickButton = await screen.findByRole('button', { name: /Select exception REF-100/i });
+    pickButton.focus();
+    expect(pickButton).toHaveFocus();
+    await user.keyboard('{Enter}');
+
+    await waitFor(() => {
+      expect(screen.getByText(/check_type=contract_price_mismatch/)).toBeInTheDocument();
+    });
+  });
 });

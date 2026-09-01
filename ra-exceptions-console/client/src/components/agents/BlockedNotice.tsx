@@ -3,9 +3,9 @@ import type { PipelineHealth } from '../../lib/agents/types';
 
 /**
  * Renders in place of an agent panel's recommendation when the Pipeline
- * Reliability agent has vetoed downstream output (state === 'unavailable' |
- * 'red'). No recommendation is computed in this state — this is the veto
- * made visible, not just a generic error.
+ * Reliability agent has vetoed downstream output (isBlocked(state) is true —
+ * unavailable, red, or stale evidence). No recommendation is computed in
+ * this state — this is the veto made visible, not just a generic error.
  */
 export function BlockedNotice({ health }: { health: PipelineHealth }) {
   return (
