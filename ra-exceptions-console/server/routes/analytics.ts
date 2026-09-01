@@ -1,13 +1,14 @@
 import { sql } from '@databricks/appkit';
 import { z } from 'zod';
 import type { Application } from 'express';
+import { resultRows, type WarehouseResult } from '../warehouse-result';
 
 interface AppKitWithAnalyticsAndLakebase {
   analytics: {
     query(
       text: string,
       params?: Record<string, ReturnType<(typeof sql)['string']> | ReturnType<(typeof sql)['int']>>
-    ): Promise<{ data_array?: unknown[][] }>;
+    ): Promise<WarehouseResult>;
   };
   lakebase: {
     query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
@@ -84,14 +85,7 @@ export function setupAnalyticsRoutes(appkit: AppKitWithAnalyticsAndLakebase) {
           row_offset: sql.int(filters.row_offset),
         });
 
-        // Diagnostic: log the shape of the warehouse result so we can see
-        // what the analytics plugin actually returns.
-        console.log('[analytics] exceptions result keys:', Object.keys(warehouseResult ?? {}),
-          'data_array length:', (warehouseResult as any)?.data_array?.length ?? 'MISSING',
-          'rows length:', (warehouseResult as any)?.rows?.length ?? 'MISSING',
-          'data length:', (warehouseResult as any)?.data?.length ?? 'MISSING');
-
-        const rows = (warehouseResult.data_array ?? []).map((row) => ({
+        const rows = resultRows(warehouseResult).map((row) => ({
           exception_id: stringValue(row[0]),
           reference_id: stringValue(row[1]),
           account_name: stringValue(row[2]),
@@ -164,7 +158,7 @@ export function setupAnalyticsRoutes(appkit: AppKitWithAnalyticsAndLakebase) {
             COUNT(DISTINCT account_name) AS accounts_affected
           FROM exceptions
         `);
-        const row = warehouseResult.data_array?.[0] ?? [];
+        const row = resultRows(warehouseResult)[0] ?? [];
 
         res.json({
           open_exceptions: numberValue(row[0]),

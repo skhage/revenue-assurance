@@ -1,6 +1,7 @@
 import { sql } from '@databricks/appkit';
 import { z } from 'zod';
 import type { Application } from 'express';
+import { resultRows, type WarehouseResult } from '../warehouse-result';
 
 /**
  * Check-type-aware evidence (Gap 2 + document reconciliation, Gap 1).
@@ -22,7 +23,7 @@ interface AppKitAnalytics {
     query(
       text: string,
       params?: Record<string, ReturnType<(typeof sql)['string']>>
-    ): Promise<{ data_array?: unknown[][] }>;
+    ): Promise<WarehouseResult>;
   };
   server: { extend(fn: (app: Application) => void): void };
 }
@@ -94,7 +95,7 @@ async function one(
   params: Record<string, ReturnType<(typeof sql)['string']>>
 ): Promise<unknown[] | null> {
   const r = await appkit.analytics.query(text, params);
-  return r.data_array?.[0] ?? null;
+  return resultRows(r)[0] ?? null;
 }
 
 async function buildEvidence(
