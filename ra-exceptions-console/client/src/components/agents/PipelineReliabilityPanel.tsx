@@ -12,7 +12,7 @@ import {
 import { useEffect, useState } from 'react';
 import { LoadingRegion, ErrorRegion } from '../StatusRegion';
 import { dqAuditApi } from '../../lib/dqAudit';
-import type { PipelineHealth } from '../../lib/agents/types';
+import { isBlocked, type PipelineHealth } from '../../lib/agents/types';
 
 export interface UsePipelineHealthResult {
   health: PipelineHealth | null;
@@ -65,7 +65,7 @@ export function usePipelineHealth(): UsePipelineHealthResult {
 const STATE_COPY: Record<PipelineHealth['state'], { title: string; variant: 'default' | 'destructive' }> = {
   unavailable: { title: 'Pipeline evidence unavailable', variant: 'destructive' },
   red: { title: 'Pipeline DQ checks are failing', variant: 'destructive' },
-  stale: { title: 'Pipeline evidence may be stale', variant: 'default' },
+  stale: { title: 'Pipeline evidence is stale', variant: 'destructive' },
   ok: { title: 'Pipeline evidence is fresh and green', variant: 'default' },
 };
 
@@ -122,7 +122,7 @@ export function PipelineReliabilityPanel({ result }: { result: UsePipelineHealth
         </CardContent>
       </Card>
 
-      {(health.state === 'red' || health.state === 'unavailable') && (
+      {isBlocked(health.state) && (
         <p className="text-sm text-muted-foreground" role="status">
           Investigation, Prioritization, and Recovery Playbook recommendations are blocked until this clears — a human
           can still browse the queue directly, but no agent recommendation will render.

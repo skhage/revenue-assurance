@@ -71,7 +71,12 @@ export interface Recommendation {
   rationale: string;
 }
 
-/** Blocks downstream agent panels — the Pipeline Reliability agent's veto. */
+/**
+ * Blocks downstream agent panels — the Pipeline Reliability agent's veto.
+ * `stale` is included: recommending against evidence that might be out of
+ * date is exactly the failure mode this gate exists to prevent, so stale
+ * evidence fails closed (blocked) rather than rendering with a soft warning.
+ */
 export function isBlocked(state: PipelineState): boolean {
-  return state === 'unavailable' || state === 'red';
+  return state === 'unavailable' || state === 'red' || state === 'stale';
 }
