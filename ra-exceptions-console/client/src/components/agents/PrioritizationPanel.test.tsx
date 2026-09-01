@@ -136,6 +136,7 @@ function distinctNoteInserts(notesByExceptionAndKey: Map<string, Set<string>>, e
 
 describe('PrioritizationPanel — failure-atomic mutation ordering', () => {
   afterEach(() => {
+    localStorage.clear();
     vi.unstubAllGlobals();
   });
 
@@ -157,7 +158,7 @@ describe('PrioritizationPanel — failure-atomic mutation ordering', () => {
     const assignIndex = calls.findIndex((c) => c.method === 'POST' && c.path.endsWith('/assign'));
     expect(noteIndex).toBeGreaterThanOrEqual(0);
     expect(assignIndex).toBeGreaterThan(noteIndex);
-    expect(calls[noteIndex].body?.idempotencyKey).toBe('agent:smart-prioritization:exc-1');
+    expect(calls[noteIndex].body?.idempotencyKey).toMatch(/^agent:smart-prioritization:exc-1:/);
   });
 
   it('never assigns if the audit note write fails', async () => {
@@ -290,10 +291,32 @@ describe('PrioritizationPanel — failure-atomic mutation ordering', () => {
 
     expect(distinctNoteInserts(notesByExceptionAndKey, 'exc-1')).toBe(1);
   });
+
+  it('a new approved run after a completed run creates a second distinct durable note', async () => {
+    const { fetchMock, notesByExceptionAndKey } = makeTrackedFetch({ enforceNoteIdempotency: true });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const user = userEvent.setup();
+    const first = render(<PrioritizationPanel health={OK_HEALTH} selected={null} onSelect={() => {}} />);
+    await user.click((await screen.findAllByRole('button', { name: /Apply: assign/i }))[0]);
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /Assigned/i }).length).toBeGreaterThan(0);
+    });
+
+    first.unmount();
+    render(<PrioritizationPanel health={OK_HEALTH} selected={null} onSelect={() => {}} />);
+    await user.click((await screen.findAllByRole('button', { name: /Apply: assign/i }))[0]);
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /Assigned/i }).length).toBeGreaterThan(0);
+    });
+
+    expect(distinctNoteInserts(notesByExceptionAndKey, 'exc-1')).toBe(2);
+  });
 });
 
 describe('PrioritizationPanel — shared selection', () => {
   afterEach(() => {
+    localStorage.clear();
     vi.unstubAllGlobals();
   });
 

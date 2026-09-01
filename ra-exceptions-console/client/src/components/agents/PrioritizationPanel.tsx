@@ -21,6 +21,7 @@ import { checkLabel, accountLabel, usd } from '../../lib/format';
 import { analyticsApi } from '../../lib/analytics';
 import { casesApi, type CaseRow, type ExceptionMeta } from '../../lib/cases';
 import { rankExceptions } from '../../lib/agents/scoring';
+import { beginApprovedRun, completeApprovedRun } from '../../lib/agents/approvedRun';
 import { isBlocked, type PipelineHealth, type PriorityScore } from '../../lib/agents/types';
 import type { ExceptionRow } from '../../lib/types';
 
@@ -38,9 +39,9 @@ interface Props {
   onSelect: (row: ExceptionRow) => void;
 }
 
-function auditNote(item: RankedRow): string {
+function auditNote(item: RankedRow, approvedAt: string): string {
   return (
-    `[Agent: Smart Prioritization & Routing] run_at=${new Date().toISOString()} · ` +
+    `[Agent: Smart Prioritization & Routing] run_at=${approvedAt} · ` +
     `inputs={exception_id=${item.row.exception_id}} · ` +
     `output={score=${item.score.score}, recommended_analyst=${item.score.recommendedAnalyst}, recommended_queue=${item.score.recommendedQueue}}`
   );
@@ -122,17 +123,14 @@ export function PrioritizationPanel({ health, selected, onSelect }: Props) {
       severity: item.row.severity,
       amount_at_risk: item.row.amount_at_risk,
     };
-    // Stable per (agent, exception) — the server enforces at most one note
-    // per (exception_id, idempotencyKey) pair, so this call is safe to
-    // retry after a lost response, a component remount, or a full page
-    // reload without ever risking a duplicate audit note.
-    const idempotencyKey = `agent:smart-prioritization:${item.row.exception_id}`;
     try {
+      const run = beginApprovedRun('smart-prioritization', item.row.exception_id);
       // Record the recommendation as an audit note BEFORE the assignment
       // mutation — a human-approved recommendation is never lost even if
       // the assignment call below fails.
-      await casesApi.addNote(item.row.exception_id, auditNote(item), meta, idempotencyKey);
+      await casesApi.addNote(item.row.exception_id, auditNote(item, run.approvedAt), meta, run.idempotencyKey);
       await casesApi.assign(item.row.exception_id, item.score.recommendedAnalyst, meta);
+      completeApprovedRun('smart-prioritization', item.row.exception_id, run.idempotencyKey);
       setAppliedIds((prev) => new Set(prev).add(item.row.exception_id));
     } catch (e) {
       setApplyError(e instanceof Error ? e.message : 'Failed to assign');

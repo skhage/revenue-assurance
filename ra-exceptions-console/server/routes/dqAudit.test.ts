@@ -98,6 +98,20 @@ describe('summarizePipelineHealth', () => {
     expect(health.state).toBe('stale');
   });
 
+  it.each(['DQ-1', 'DQ-5'])('allows documented timestamp-exempt check type %s', (checkType) => {
+    const health = summarizePipelineHealth([row({ check_type: checkType, observed_at: null })]);
+    expect(health.state).toBe('ok');
+  });
+
+  it.each(['', 'DQ-2', 'UNKNOWN', 'inline', ' DQ-1 '])(
+    'fails closed for unsupported or malformed check type %j',
+    (checkType) => {
+      const health = summarizePipelineHealth([row({ check_type: checkType, observed_at: null })]);
+      expect(health.state).toBe('stale');
+      expect(health.reason).toContain('unsupported check_type');
+    }
+  );
+
   it('prioritizes red over stale when both conditions are present', () => {
     const old = new Date(Date.now() - 1000 * 60 * 60 * 100).toISOString();
     const health = summarizePipelineHealth([row({ observed_at: old, status: 'RED' })], 72);
@@ -149,6 +163,22 @@ describe('summarizePipelineHealth — per-check authoritative freshness (fails c
     expect(health.reason).toMatch(/100h old/);
   });
 
+  it('does not discard a null-timestamp row when the same check also has a fresh row', () => {
+    const fresh = row({ update_id: 'u2' });
+    const indeterminate = row({ update_id: 'u1', observed_at: null });
+    const health = summarizePipelineHealth([fresh, indeterminate], 72);
+    expect(health.state).toBe('stale');
+    expect(health.reason).toContain('no observation timestamp');
+  });
+
+  it('does not discard a malformed-timestamp row when the same check also has a fresh row', () => {
+    const fresh = row({ update_id: 'u2' });
+    const indeterminate = row({ update_id: 'u1', observed_at: 'not-a-timestamp' });
+    const health = summarizePipelineHealth([fresh, indeterminate], 72);
+    expect(health.state).toBe('stale');
+    expect(health.reason).toContain('no observation timestamp');
+  });
+
   it('is ok when every distinct required check has its own fresh, valid-timestamp row', () => {
     const a = row({ dataset: 'salesforce_source.contract', expectation_name: 'dq1_a' });
     const b = row({ dataset: 'oracle_erp_source.gl_je_lines', expectation_name: 'dq1_b' });
@@ -160,9 +190,7 @@ describe('summarizePipelineHealth — per-check authoritative freshness (fails c
   it('DQ-1/DQ-5 (non-INLINE, no timestamp concept) rows do not trigger staleness on their own', () => {
     const dq1Row = row({ check_type: 'DQ-1', dataset: 'mdm_source.customer_crosswalk', observed_at: null });
     const health = summarizePipelineHealth([dq1Row], 72);
-    // No INLINE (required) rows present at all -> falls back to the
-    // "no observation timestamp available" stale reason, not an exception.
-    expect(health.state).toBe('stale');
+    expect(health.state).toBe('ok');
   });
 
   it('a stale INLINE check still fails closed even alongside fresh, always-GREEN DQ-1/DQ-5 rows', () => {
