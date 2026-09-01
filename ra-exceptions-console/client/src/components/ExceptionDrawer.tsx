@@ -55,6 +55,7 @@ function EvidenceSection({ exception }: { exception: ExceptionRow }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const [showPdf, setShowPdf] = useState(false);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -130,22 +131,39 @@ function EvidenceSection({ exception }: { exception: ExceptionRow }) {
         <KV key={r.label} k={r.label} v={fmtEvidence(r.value, r.format)} />
       ))}
       {data.document && (
-        <div className="mt-1">
-          {data.document.url ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => window.open(data.document!.url!, '_blank', 'noopener,noreferrer')}
-            >
+        <div className="mt-1 flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant={showPdf ? 'default' : 'outline'} size="sm" onClick={() => setShowPdf((v) => !v)}>
               <FileText className="mr-1.5 h-4 w-4" />
-              {data.document.label}
-              <ExternalLink className="ml-1.5 h-3.5 w-3.5 opacity-60" />
+              {showPdf ? 'Hide PDF' : 'View PDF'}
             </Button>
-          ) : (
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <FileText className="h-3.5 w-3.5" />
-              <span className="font-mono">{data.document.fileName}</span>
-            </div>
+            {data.document.url && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => window.open(data.document!.url!, '_blank', 'noopener,noreferrer')}
+              >
+                Open in workspace
+                <ExternalLink className="ml-1.5 h-3.5 w-3.5 opacity-60" />
+              </Button>
+            )}
+          </div>
+          {showPdf && (
+            <object
+              data={`/api/documents?path=${encodeURIComponent(data.document.fileName)}`}
+              type="application/pdf"
+              className="h-[26rem] w-full rounded-md border border-border"
+              aria-label="Source document PDF"
+            >
+              <div className="p-3 text-xs text-muted-foreground">
+                Can’t display the PDF inline.{' '}
+                {data.document.url && (
+                  <a href={data.document.url} target="_blank" rel="noopener noreferrer" className="text-primary underline">
+                    Open it in the workspace
+                  </a>
+                )}
+              </div>
+            </object>
           )}
         </div>
       )}
