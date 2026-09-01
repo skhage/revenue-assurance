@@ -35,12 +35,20 @@ export function num(v: number | null | undefined): string {
 }
 
 // Human labels for the reconciliation check types (gold_leakage_summary.check_type).
+// Keep in sync with the deployed gold_leakage_summary union — the register carries
+// FX and contract-completeness variants beyond the original seven.
 const CHECK_LABELS: Record<string, string> = {
   ar_collection_risk: 'AR collection risk',
   rev_rec_timing_mismatch: 'Revenue recognition timing',
   unauthorized_discount: 'Unauthorized discount',
   contract_price_mismatch: 'Contract price mismatch',
+  contract_price_missing_erp: 'Contracted, not billed (ERP)',
+  contract_price_missing_salesforce: 'Billed, no contract on file',
   expired_quote_active: 'Expired quote active',
+  fx_rate_mismatch: 'FX rate mismatch',
+  fx_unsupported_currency: 'FX unsupported currency',
+  fx_missing_market_rate: 'FX missing market rate',
+  fx_missing_applied_rate: 'FX missing applied rate',
   doc_contract_mismatch: 'Doc vs contract mismatch',
   doc_invoice_mismatch: 'Doc vs invoice mismatch',
 };

@@ -157,7 +157,7 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
             <KV k="Check" v={checkLabel(exception.check_type)} />
             <KV k="Method" v={detectionLabel(exception.detection_method)} />
             <KV k="Source system" v={<span className="text-xs">{sourceLabel(exception.source_table)}</span>} />
-            <KV k="Known leakage" v={exception.known_leakage_flag ? 'Yes (ground truth)' : 'Model-flagged'} />
+            <KV k="Known leakage" v={exception.known_leakage_flag ? 'Yes (seeded ground truth)' : 'No'} />
             <KV k="Customer ID" v={exception.customer_id ? num(exception.customer_id) : '—'} />
           </div>
 
