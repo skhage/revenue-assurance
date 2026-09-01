@@ -12,6 +12,7 @@
 > - ✅ **Added:** ADR-013 (build `ra_silver`/`ra_gold` in `cdm_tmforum` vs. separate `lumen_ra` catalog) — reflects ground truth that `tmf_*` are read-only, new schemas stay in same catalog.
 > - ✅ **Verified:** All product names (Lakeflow Declarative Pipelines, Unity Catalog, Genie, MLflow, Databricks Apps, DABs, serverless) are current and correctly cited per README and web-verifiable Databricks docs.
 > - ✅ **2026-09-01 correction:** ADR-015 Agent Workbench refinements after cross-review — `stale` DQ evidence is now a hard block (not a soft warning) via a single `isBlocked()` gate every panel calls; the DQ route now fails closed on any null/unrecognized/inconsistent status row (never defaults to GREEN); every "Apply" writes its audit note _before_ the case mutation and never re-writes it on retry; Recovery Playbook's recovery %/owner/deadline are now labeled "Demo data" (the earlier "no invented facts" framing overstated it); selection is now shared across Investigate, Prioritize & route, _and_ Recovery playbook (previously Prioritize & route was disconnected). See the addendum at the end of this file.
+> - ✅ **2026-09-01 second correction:** ADR-015 refinements after a second round of cross-review — DQ freshness is now evaluated per required check (not by a single global freshest timestamp, which let one fresh check mask another stale/timestamp-less one); note-write deduplication moved from a client-local `ref` to a server-enforced Postgres unique index keyed on `(exception_id, idempotency_key)`, durable across component remounts, page reloads, and ambiguous lost-response retries; Prioritize & route now explicitly merges and scores the selected exception so it is always visible and actionable, even when absent from the default batch or ranked outside the visible top 20. See the second addendum at the end of this file.
 
 ---
 
@@ -551,3 +552,54 @@ exceptions independently with no way to carry a row forward. It now accepts the 
 `selected`/`onSelect` props, highlights the shared selection in its table, and exposes a "Carry
 forward" action per row — so a single exception can flow through the whole
 Investigate → Prioritize & route → Recovery playbook loop.
+
+---
+
+## 2026-09-01 second addendum: per-check freshness, server-enforced idempotency, guaranteed visibility
+
+**Status:** Accepted, refines Decisions 4, 5, and 7 above after a second round of cross-review.
+
+**Decision 8 — DQ freshness is evaluated per required check, not globally.**
+
+Decision 4 made the _status_ parser fail closed, but `summarizePipelineHealth`'s _freshness_ check
+still took the single freshest valid timestamp across every row and compared only that one value to
+the threshold. That is fail-open for freshness specifically: one recently-run required check (an
+`INLINE` row from the pipeline event log) could mask a different required check that is genuinely
+stale, or has no timestamp at all, because only the maximum mattered. `summarizePipelineHealth` now
+groups `INLINE` rows by `(dataset, expectation_name)` — the identity of one required check — picks
+each check's authoritative row (its own latest valid timestamp, not the batch's), and evaluates
+every check's freshness independently. If _any_ required check's authoritative row is missing a
+parseable timestamp or older than the threshold, the whole pipeline reports `stale`, regardless of
+how fresh any other check is. `DQ-1`/`DQ-5` rows (live set-level checks with no per-run timestamp
+concept) are excluded from this per-check freshness evaluation — their correctness is already fully
+captured by the status/count fail-closed logic from Decision 4.
+
+**Decision 9 — note deduplication moved from client-local state to a server-enforced idempotency key.**
+
+Decision 5's "already noted" guard was a `ref` living in the React component — it does not survive
+a component remount (selecting a different exception and back), a full page reload, or a lost HTTP
+response after the server had already committed the note. Any of those leaves the guard blind to a
+note that already exists, and a retry could double-write it. The fix moves the guarantee into
+Lakebase itself: `ra.case_notes` gained a nullable `idempotency_key` column and a unique partial
+index on `(exception_id, idempotency_key) WHERE idempotency_key IS NOT NULL`. Callers that write an
+audit note before a mutation now pass a caller-supplied key (convention:
+`agent:<slug>:<exception_id>`); the insert becomes `... ON CONFLICT (exception_id, idempotency_key)
+WHERE idempotency_key IS NOT NULL DO NOTHING`, and the route reports back whether the insert was
+`deduped`. Manual, human-authored notes pass no key and are correctly never deduped (two identical
+manual notes are not a bug). This makes the guarantee durable across exactly the failure modes
+Decision 5 didn't cover — remounts, reloads, and ambiguous lost-response retries — because it no
+longer depends on any client-held memory of "did I already send this."
+
+**Decision 10 — Prioritize & route explicitly merges and scores the selected exception, and never hides it.**
+
+Decision 7 gave Prioritize & route the `selected` prop and a highlight, but the ranked table was
+still built purely from a fixed top-N-by-amount warehouse batch and only ever rendered its own
+top 20. An exception a user is actively investigating (via Investigate, or a deep link) could be
+absent from that batch outright, or present but ranked outside the visible top 20 — in both cases it
+silently had no "Carry forward"/"Apply: assign" affordance, breaking the promised
+Investigate → Prioritize & route → Recovery playbook loop for exactly the exception a user cares
+about. The panel now merges the `selected` row into the scored set client-side whenever the batch
+doesn't already contain it (no second network round-trip — the full row is already held in
+`selected`), and always renders it: if its rank places it outside the top 20, it is appended below
+the top 20 (never spliced in, so the visible ordering of the top 20 is unaffected) with an explicit
+"(rank #N, outside top 20)" label, and its "Apply: assign" action remains enabled.
