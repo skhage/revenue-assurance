@@ -26,6 +26,7 @@ import { FileText, ExternalLink } from 'lucide-react';
 import { usd, num, checkLabel, accountLabel, detectionLabel, sourceLabel } from '../lib/format';
 import { casesApi, NEXT_STATUS, type CasePayload, type Status, type ExceptionMeta } from '../lib/cases';
 import { evidenceApi, type EvidencePayload, type EvidenceRow, type EvidenceFormat } from '../lib/evidence';
+import { architectureApi, exploreDataUrl, type ArchitectureConfig } from '../lib/architecture';
 import { useWhoAmI } from '../lib/whoami';
 import type { ExceptionRow } from '../lib/types';
 
@@ -219,6 +220,22 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
   const [actionError, setActionError] = useState<string | null>(null);
   const [pendingRecovered, setPendingRecovered] = useState(false);
   const [recoveredInput, setRecoveredInput] = useState('');
+  const [ucCfg, setUcCfg] = useState<ArchitectureConfig | null>(null);
+
+  useEffect(() => {
+    if (!open || ucCfg) return;
+    architectureApi
+      .config()
+      .then(setUcCfg)
+      .catch(() => {
+        /* lineage link stays hidden if config is unavailable */
+      });
+  }, [open, ucCfg]);
+
+  const sourceUcUrl =
+    ucCfg && exception?.source_table
+      ? exploreDataUrl(ucCfg, `${ucCfg.catalog}/${exception.source_table.replace('.', '/')}`)
+      : null;
 
   const meta: ExceptionMeta = exception
     ? {
@@ -290,6 +307,17 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
             <KV k="Source system" v={<span className="text-xs">{sourceLabel(exception.source_table)}</span>} />
             <KV k="Known leakage" v={exception.known_leakage_flag ? 'Yes (seeded ground truth)' : 'No'} />
             <KV k="Customer ID" v={exception.customer_id ? num(exception.customer_id) : '—'} />
+            {sourceUcUrl && (
+              <a
+                href={sourceUcUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-0.5 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+              >
+                View source in Unity Catalog (lineage)
+                <ExternalLink className="h-3.5 w-3.5 opacity-70" />
+              </a>
+            )}
           </div>
 
           <Separator />
