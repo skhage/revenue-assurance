@@ -13,7 +13,7 @@ import {
   TableHead,
   TableCell,
 } from '@databricks/appkit-ui/react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { BlockedNotice } from './BlockedNotice';
 import { DemoBadge } from '../DemoBadge';
 import { LoadingRegion, ErrorRegion } from '../StatusRegion';
@@ -25,6 +25,7 @@ import { isBlocked, type PipelineHealth, type PriorityScore } from '../../lib/ag
 import type { ExceptionRow } from '../../lib/types';
 
 const BATCH_SIZE = 100;
+const TOP_N = 20;
 
 interface RankedRow {
   row: ExceptionRow;
@@ -46,7 +47,8 @@ function auditNote(item: RankedRow): string {
 }
 
 export function PrioritizationPanel({ health, selected, onSelect }: Props) {
-  const [ranked, setRanked] = useState<RankedRow[]>([]);
+  const [batch, setBatch] = useState<ExceptionRow[]>([]);
+  const [createdAtById, setCreatedAtById] = useState<Map<string, string | null>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -54,11 +56,6 @@ export function PrioritizationPanel({ health, selected, onSelect }: Props) {
   const [appliedIds, setAppliedIds] = useState<Set<string>>(new Set());
   const [applyError, setApplyError] = useState<string | null>(null);
   const selectedRowRef = useRef<HTMLTableRowElement | null>(null);
-  // Tracks which exceptions already have their audit note durably written,
-  // so retrying a failed assignment never writes a duplicate note — the
-  // note is recorded exactly once per approved recommendation, before the
-  // assignment mutation, and a retry resumes at the mutation step only.
-  const notedIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (isBlocked(health.state)) return;
@@ -73,17 +70,8 @@ export function PrioritizationPanel({ health, selected, onSelect }: Props) {
       casesApi.list(false).catch(() => [] as CaseRow[]),
     ])
       .then(([rows, cases]) => {
-        const createdAtById = new Map<string, string | null>(cases.map((c) => [c.exception_id, c.created_at ?? null]));
-        const scores = rankExceptions(rows, createdAtById);
-        const byId = new Map(rows.map((r) => [r.exception_id, r]));
-        setRanked(
-          scores
-            .map((score) => {
-              const row = byId.get(score.exception_id);
-              return row ? { row, score } : null;
-            })
-            .filter((r): r is RankedRow => r != null)
-        );
+        setBatch(rows);
+        setCreatedAtById(new Map(cases.map((c) => [c.exception_id, c.created_at ?? null])));
       })
       .catch((e) => {
         if (e instanceof Error && e.name !== 'AbortError') setError(e.message);
@@ -93,6 +81,26 @@ export function PrioritizationPanel({ health, selected, onSelect }: Props) {
       });
     return () => controller.abort();
   }, [health.state, refreshKey]);
+
+  const ranked = useMemo<RankedRow[]>(() => {
+    // The default batch is a fixed top-N-by-amount page from the warehouse
+    // — the exception a user is actively investigating may not be in it at
+    // all (different sort order, page boundary, or a filter mismatch). We
+    // already hold its full row in `selected` (set by the picker or a
+    // prior "Carry forward"), so merge it in client-side rather than
+    // issuing a second network call: this guarantees it is scored and
+    // rankable even when the batch alone would never have surfaced it.
+    const rows =
+      selected && !batch.some((r) => r.exception_id === selected.exception_id) ? [...batch, selected] : batch;
+    const scores = rankExceptions(rows, createdAtById);
+    const byId = new Map(rows.map((r) => [r.exception_id, r]));
+    return scores
+      .map((score) => {
+        const row = byId.get(score.exception_id);
+        return row ? { row, score } : null;
+      })
+      .filter((r): r is RankedRow => r != null);
+  }, [batch, createdAtById, selected]);
 
   useEffect(() => {
     // scrollIntoView is absent in jsdom and some older embedded webviews —
@@ -114,15 +122,16 @@ export function PrioritizationPanel({ health, selected, onSelect }: Props) {
       severity: item.row.severity,
       amount_at_risk: item.row.amount_at_risk,
     };
+    // Stable per (agent, exception) — the server enforces at most one note
+    // per (exception_id, idempotencyKey) pair, so this call is safe to
+    // retry after a lost response, a component remount, or a full page
+    // reload without ever risking a duplicate audit note.
+    const idempotencyKey = `agent:smart-prioritization:${item.row.exception_id}`;
     try {
       // Record the recommendation as an audit note BEFORE the assignment
       // mutation — a human-approved recommendation is never lost even if
-      // the assignment call below fails. Skipped on retry once it has
-      // already landed (notedIdsRef), so retrying never double-notes.
-      if (!notedIdsRef.current.has(item.row.exception_id)) {
-        await casesApi.addNote(item.row.exception_id, auditNote(item), meta);
-        notedIdsRef.current.add(item.row.exception_id);
-      }
+      // the assignment call below fails.
+      await casesApi.addNote(item.row.exception_id, auditNote(item), meta, idempotencyKey);
       await casesApi.assign(item.row.exception_id, item.score.recommendedAnalyst, meta);
       setAppliedIds((prev) => new Set(prev).add(item.row.exception_id));
     } catch (e) {
@@ -131,6 +140,18 @@ export function PrioritizationPanel({ health, selected, onSelect }: Props) {
       setApplyingId(null);
     }
   }
+
+  const topRanked = ranked.slice(0, TOP_N);
+  const selectedRanked = selected ? ranked.find((r) => r.row.exception_id === selected.exception_id) : undefined;
+  const selectedInTop = selectedRanked
+    ? topRanked.some((r) => r.row.exception_id === selectedRanked.row.exception_id)
+    : true;
+  // Always render the selected exception, even when its score ranks it
+  // outside the top N shown by default — appended (not spliced in), so the
+  // visible top-N ordering itself is unaffected and the selected row is
+  // never silently hidden or unactionable.
+  const displayRows = selectedRanked && !selectedInTop ? [...topRanked, selectedRanked] : topRanked;
+  const selectedRank = selectedRanked ? ranked.indexOf(selectedRanked) + 1 : null;
 
   return (
     <Card className="shadow-sm">
@@ -179,8 +200,9 @@ export function PrioritizationPanel({ health, selected, onSelect }: Props) {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {ranked.slice(0, 20).map((item) => {
+                  {displayRows.map((item) => {
                     const isSelected = selected?.exception_id === item.row.exception_id;
+                    const isPinnedBelow = isSelected && !selectedInTop;
                     return (
                       <TableRow
                         key={item.row.exception_id}
@@ -188,7 +210,14 @@ export function PrioritizationPanel({ health, selected, onSelect }: Props) {
                         data-state={isSelected ? 'selected' : undefined}
                         className={isSelected ? 'bg-primary/5' : undefined}
                       >
-                        <TableCell className="max-w-40 truncate">{accountLabel(item.row.account_name)}</TableCell>
+                        <TableCell className="max-w-40 truncate">
+                          {accountLabel(item.row.account_name)}
+                          {isPinnedBelow && (
+                            <span className="ml-2 text-xs text-muted-foreground">
+                              (rank #{selectedRank}, outside top {TOP_N})
+                            </span>
+                          )}
+                        </TableCell>
                         <TableCell className="text-muted-foreground">{checkLabel(item.row.check_type)}</TableCell>
                         <TableCell className="text-right font-mono tabular-nums text-destructive">
                           {usd(item.row.amount_at_risk)}
@@ -225,9 +254,10 @@ export function PrioritizationPanel({ health, selected, onSelect }: Props) {
                 </TableBody>
               </Table>
             </div>
-            {ranked.length > 20 && (
+            {ranked.length > TOP_N && (
               <p className="mt-2 text-xs text-muted-foreground">
-                Showing top 20 of {ranked.length} scored exceptions (batch capped at {BATCH_SIZE}).
+                Showing top {TOP_N} of {ranked.length} scored exceptions (batch capped at {BATCH_SIZE})
+                {selectedRanked && !selectedInTop ? ', plus the selected exception pinned below' : ''}.
               </p>
             )}
           </>

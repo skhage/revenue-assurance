@@ -105,6 +105,80 @@ describe('summarizePipelineHealth', () => {
   });
 });
 
+describe('summarizePipelineHealth — per-check authoritative freshness (fails closed on mixed fresh/stale/null)', () => {
+  it('a stale required check is NOT masked by a fresh required check (mixed fresh + stale)', () => {
+    const fresh = row({ dataset: 'salesforce_source.contract', expectation_name: 'dq1_a' });
+    const staleAt = new Date(Date.now() - 1000 * 60 * 60 * 100).toISOString(); // 100h old
+    const stale = row({ dataset: 'oracle_erp_source.gl_je_lines', expectation_name: 'dq1_b', observed_at: staleAt });
+    const health = summarizePipelineHealth([fresh, stale], 72);
+    expect(health.state).toBe('stale');
+    expect(health.reason).toContain('oracle_erp_source.gl_je_lines');
+  });
+
+  it('a required check with a null timestamp is NOT masked by a fresh required check (mixed fresh + null)', () => {
+    const fresh = row({ dataset: 'salesforce_source.contract', expectation_name: 'dq1_a' });
+    const nullTs = row({ dataset: 'oracle_erp_source.gl_je_lines', expectation_name: 'dq1_b', observed_at: null });
+    const health = summarizePipelineHealth([fresh, nullTs], 72);
+    expect(health.state).toBe('stale');
+    expect(health.reason).toContain('oracle_erp_source.gl_je_lines');
+    expect(health.reason).toContain('no observation timestamp');
+  });
+
+  it('the global freshestObservedAt still reflects the single freshest valid timestamp, even while stale overall', () => {
+    const freshAt = new Date().toISOString();
+    const fresh = row({ dataset: 'salesforce_source.contract', expectation_name: 'dq1_a', observed_at: freshAt });
+    const nullTs = row({ dataset: 'oracle_erp_source.gl_je_lines', expectation_name: 'dq1_b', observed_at: null });
+    const health = summarizePipelineHealth([fresh, nullTs], 72);
+    expect(health.state).toBe('stale');
+    expect(health.freshestObservedAt).toBe(freshAt);
+  });
+
+  it('picks the latest-timestamped row as authoritative per check when a check has multiple rows, and still fails if that authoritative row is stale', () => {
+    const staleAt = new Date(Date.now() - 1000 * 60 * 60 * 100).toISOString();
+    const evenOlderAt = new Date(Date.now() - 1000 * 60 * 60 * 200).toISOString();
+    // Two rows for the SAME check — the newer of the two (still stale) must be the one evaluated.
+    const olderRow = row({
+      dataset: 'oracle_erp_source.gl_je_lines',
+      expectation_name: 'dq1_b',
+      observed_at: evenOlderAt,
+    });
+    const newerRow = row({ dataset: 'oracle_erp_source.gl_je_lines', expectation_name: 'dq1_b', observed_at: staleAt });
+    const health = summarizePipelineHealth([olderRow, newerRow], 72);
+    expect(health.state).toBe('stale');
+    // Reason cites ~100h (the newer/authoritative row), not ~200h (the older one).
+    expect(health.reason).toMatch(/100h old/);
+  });
+
+  it('is ok when every distinct required check has its own fresh, valid-timestamp row', () => {
+    const a = row({ dataset: 'salesforce_source.contract', expectation_name: 'dq1_a' });
+    const b = row({ dataset: 'oracle_erp_source.gl_je_lines', expectation_name: 'dq1_b' });
+    const c = row({ dataset: 'refinitiv_fx_source.gl_daily_rates', expectation_name: 'dq1_c' });
+    const health = summarizePipelineHealth([a, b, c], 72);
+    expect(health.state).toBe('ok');
+  });
+
+  it('DQ-1/DQ-5 (non-INLINE, no timestamp concept) rows do not trigger staleness on their own', () => {
+    const dq1Row = row({ check_type: 'DQ-1', dataset: 'mdm_source.customer_crosswalk', observed_at: null });
+    const health = summarizePipelineHealth([dq1Row], 72);
+    // No INLINE (required) rows present at all -> falls back to the
+    // "no observation timestamp available" stale reason, not an exception.
+    expect(health.state).toBe('stale');
+  });
+
+  it('a stale INLINE check still fails closed even alongside fresh, always-GREEN DQ-1/DQ-5 rows', () => {
+    const freshInline = row({ dataset: 'salesforce_source.contract', expectation_name: 'dq1_a' });
+    const staleAt = new Date(Date.now() - 1000 * 60 * 60 * 100).toISOString();
+    const staleInline = row({
+      dataset: 'oracle_erp_source.gl_je_lines',
+      expectation_name: 'dq1_b',
+      observed_at: staleAt,
+    });
+    const dq1 = row({ check_type: 'DQ-1', dataset: 'mdm_source.customer_crosswalk', observed_at: null });
+    const health = summarizePipelineHealth([freshInline, staleInline, dq1], 72);
+    expect(health.state).toBe('stale');
+  });
+});
+
 describe('parseDqAuditRows — happy path', () => {
   it('parses a well-formed GREEN row into typed objects', () => {
     const parsed = parseDqAuditRows([rawRow()]);

@@ -33,25 +33,34 @@ ADR-015 for the full design rationale.
 
 **Safety controls, all enforced in code, not just documented:**
 
-- **Pipeline gate.** If `dq_audit` reports `red`, is unreachable, **or is `stale`** (freshest
-  observation older than 72h), the Investigate/Prioritize/Recovery tabs render only a blocking
-  alert — no recommendation is computed, no "Apply" button renders. Stale evidence is a hard block,
-  not a soft warning: `isBlocked()` in `client/src/lib/agents/types.ts` is the single source of
-  truth every panel calls, so this can't drift per-panel. The DQ route itself also fails closed —
-  any row with a null/unrecognized/inconsistent status is treated as failing, never GREEN.
+- **Pipeline gate, evaluated per required check.** If `dq_audit` reports `red`, is unreachable, or
+  is `stale`, the Investigate/Prioritize/Recovery tabs render only a blocking alert — no
+  recommendation is computed, no "Apply" button renders. Stale evidence is a hard block, not a soft
+  warning: `isBlocked()` in `client/src/lib/agents/types.ts` is the single source of truth every
+  panel calls. Freshness is checked **per required check**, not by a single global freshest
+  timestamp — one recently-run check can never mask a different required check that is stale or has
+  no timestamp at all (`summarizePipelineHealth` in `server/routes/dqAudit.ts`). The DQ route itself
+  also fails closed on status — any row with a null/unrecognized/inconsistent status is treated as
+  failing, never GREEN.
 - **Human approval before any mutation.** Every recommendation is inert until a user clicks "Apply."
   There is no auto-apply, no background write, no polling loop.
 - **Existing API is the only mutation gateway.** "Apply" buttons call the same
   `POST /api/cases/:id/assign|status|notes` routes the Queue and Cases pages already use — no new
   mutation route was added for this feature.
-- **Audit-before-mutation, not audit-after.** Every "Apply" writes its structured
+- **Audit-before-mutation, durably deduped by the server.** Every "Apply" writes its structured
   `[Agent: <name>] run_at=… · inputs={…} · output={…}` note **before** attempting any case-lifecycle
-  mutation. If the note write fails, no mutation is attempted at all. If a later mutation step fails,
-  the note has already landed, so a human reviewing the case sees exactly what was approved even if
-  the transition didn't finish; retrying resumes at the mutation step without re-writing the note.
-- **Shared selection across the loop.** Investigate, Prioritize & route, and Recovery playbook share
-  one "selected exception" — pick it in Investigate, or "Carry forward" a ranked row in Prioritize &
-  route, and Recovery playbook opens already showing it.
+  mutation, tagged with a stable idempotency key (`agent:<slug>:<exception_id>`). If the note write
+  fails, no mutation is attempted at all. The server enforces at most one note per
+  `(exception_id, idempotency_key)` via a Postgres unique index — not a client-side flag — so a
+  duplicate is impossible even across a lost response, a component remount, or a full page reload;
+  `POST /api/cases/:id/notes` returns `{ deduped: true }` when a retry's key already exists.
+- **Shared selection across the loop, with guaranteed visibility.** Investigate, Prioritize & route,
+  and Recovery playbook share one "selected exception" — pick it in Investigate, or "Carry forward"
+  a ranked row in Prioritize & route, and Recovery playbook opens already showing it. Prioritize &
+  route explicitly merges the selected exception into its scored set and always renders it, even
+  when it's absent from the default batch or its score ranks it outside the visible top 20 (shown
+  pinned below the top 20 with a "(rank #N, outside top 20)" label, never displacing the top-20
+  ordering itself).
 
 ### Demo script (~3 minutes)
 
