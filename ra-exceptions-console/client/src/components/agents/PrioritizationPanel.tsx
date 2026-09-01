@@ -124,11 +124,13 @@ export function PrioritizationPanel({ health, selected, onSelect }: Props) {
       amount_at_risk: item.row.amount_at_risk,
     };
     try {
-      const run = beginApprovedRun('smart-prioritization', item.row.exception_id);
+      const run = beginApprovedRun('smart-prioritization', item.row.exception_id, (approvedAt) =>
+        auditNote(item, approvedAt)
+      );
       // Record the recommendation as an audit note BEFORE the assignment
       // mutation — a human-approved recommendation is never lost even if
       // the assignment call below fails.
-      await casesApi.addNote(item.row.exception_id, auditNote(item, run.approvedAt), meta, run.idempotencyKey);
+      await casesApi.addNote(item.row.exception_id, run.noteBody, meta, run.idempotencyKey);
       await casesApi.assign(item.row.exception_id, item.score.recommendedAnalyst, meta);
       completeApprovedRun('smart-prioritization', item.row.exception_id, run.idempotencyKey);
       setAppliedIds((prev) => new Set(prev).add(item.row.exception_id));

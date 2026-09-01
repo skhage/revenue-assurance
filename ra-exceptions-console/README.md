@@ -51,13 +51,16 @@ ADR-015 for the full design rationale.
 - **Audit-before-mutation, durably deduped by the server.** Every "Apply" writes its structured
   `[Agent: <name>] run_at=… · inputs={…} · output={…}` note **before** attempting any case-lifecycle
   mutation, tagged with a per-approved-run idempotency key
-  (`agent:<slug>:<exception_id>:<run_id>`). A pending run record in browser storage preserves that
-  key across retries/remounts and is retired only after the mutation succeeds, so a later independent
-  approval receives a new key. If the note write fails, no mutation is attempted at all. The server
-  enforces at most one note per
+  (`agent:<slug>:<exception_id>:<run_id>`). A pending run record in browser storage preserves both
+  that key and the exact approved note across retries/remounts and is retired only after the mutation
+  succeeds. An exact retry therefore reuses both; if the recommendation or note text materially
+  changes, the next approval receives a distinct key instead of colliding with the pending run. If
+  the note write fails, no mutation is attempted at all. The server enforces at most one note per
   `(exception_id, idempotency_key)` via a Postgres unique index — not a client-side flag — so a
-  duplicate is impossible even across a lost response, a component remount, or a full page reload;
-  `POST /api/cases/:id/notes` returns `{ deduped: true }` when a retry's key already exists.
+  duplicate is impossible even across a lost response, a component remount, or a full page reload.
+  One conditional `INSERT ... ON CONFLICT` statement atomically accepts an exact retry or rejects a
+  different body with `409`, so simultaneous mismatched requests cannot both pass;
+  `POST /api/cases/:id/notes` returns `{ deduped: true }` for an exact retry.
 - **Shared selection across the loop, with guaranteed visibility.** Investigate, Prioritize & route,
   and Recovery playbook share one "selected exception" — pick it in Investigate, or "Carry forward"
   a ranked row in Prioritize & route, and Recovery playbook opens already showing it. Prioritize &

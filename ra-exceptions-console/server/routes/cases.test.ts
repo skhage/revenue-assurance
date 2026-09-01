@@ -1,11 +1,9 @@
 // Exercises the /api/cases/:exceptionId/notes route directly against a
-// fake Lakebase connection that faithfully reproduces the one behavior this
-// route depends on for durable idempotency: a unique constraint violation
-// on (exception_id, idempotency_key) is swallowed by `ON CONFLICT ... DO
-// NOTHING`, so a repeated insert with the same key returns zero rows
-// instead of throwing or inserting twice. This is what makes note creation
-// safe to retry after a lost response, a client remount, or a full reload
-// — the guarantee lives in the database, not in any client-side flag.
+// fake Lakebase connection that reproduces the atomic conditional upsert the
+// route depends on for durable idempotency. The fake deliberately preserves
+// async yield points between queries, allowing Promise.all tests to expose a
+// check-then-insert race while the single-statement implementation remains
+// serialized by the unique-key conflict decision, as it is in Postgres.
 import { describe, it, expect } from 'vitest';
 import express, { type Application } from 'express';
 import { setupCaseRoutes } from './cases';
@@ -159,9 +157,9 @@ function createFakeLakebase() {
 
     if (/^INSERT INTO ra\.case_notes \(exception_id, author, body, idempotency_key\)/i.test(sql)) {
       const [exceptionId, author, body, idempotencyKey] = params as [string, string | null, string, string];
-      const conflict = notes.some((n) => n.exception_id === exceptionId && n.idempotency_key === idempotencyKey);
+      const conflict = notes.find((n) => n.exception_id === exceptionId && n.idempotency_key === idempotencyKey);
       if (conflict) {
-        return { rows: [] }; // ON CONFLICT ... DO NOTHING — the real unique-index behavior.
+        return conflict.body === body ? { rows: [{ id: conflict.id, inserted: false }] } : { rows: [] };
       }
       const row: NoteRow = {
         id: nextNoteId++,
@@ -172,7 +170,7 @@ function createFakeLakebase() {
         created_at: new Date().toISOString(),
       };
       notes.push(row);
-      return { rows: [{ id: row.id }] };
+      return { rows: [{ id: row.id, inserted: true }] };
     }
 
     if (/^INSERT INTO ra\.case_notes \(exception_id, author, body\) VALUES/i.test(sql)) {
@@ -331,6 +329,23 @@ describe('POST /api/cases/:exceptionId/notes — server-enforced idempotency', (
     // The original note is untouched — no corruption, no second insert.
     expect(lakebase.notes().filter((n) => n.exception_id === 'exc-1' && n.idempotency_key === key)).toHaveLength(1);
     expect(lakebase.notes().find((n) => n.idempotency_key === key)?.body).toBe('first output');
+  });
+
+  it('atomically rejects one of two simultaneous different payloads using the same idempotency key', async () => {
+    const { routes, lakebase } = await setupCaseRoutesWithFakeApp();
+    const key = 'agent:recovery-playbook:exc-concurrent:33333333-3333-3333-3333-333333333333';
+
+    const [first, second] = await Promise.all([
+      callNotesRoute(routes, 'exc-concurrent', { body: 'approved output A', idempotencyKey: key }),
+      callNotesRoute(routes, 'exc-concurrent', { body: 'approved output B', idempotencyKey: key }),
+    ]);
+
+    expect([first.statusCode, second.statusCode].sort()).toEqual([200, 409]);
+    const stored = lakebase
+      .notes()
+      .filter((note) => note.exception_id === 'exc-concurrent' && note.idempotency_key === key);
+    expect(stored).toHaveLength(1);
+    expect(['approved output A', 'approved output B']).toContain(stored[0].body);
   });
 
   it('an exact retry (same key, same body) still dedupes as a safe no-op after the payload-mismatch check', async () => {

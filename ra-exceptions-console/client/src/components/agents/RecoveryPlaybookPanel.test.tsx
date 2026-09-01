@@ -41,6 +41,7 @@ function jsonResponse(body: unknown, status = 200) {
 
 interface RequestBody {
   idempotencyKey?: string;
+  body?: string;
 }
 
 function parseBody(raw: BodyInit | null | undefined): RequestBody | undefined {
@@ -266,6 +267,38 @@ describe('RecoveryPlaybookPanel — failure-atomic mutation ordering', () => {
     });
 
     expect(distinctNoteInserts(notesByExceptionAndKey, 'exc-1')).toBe(1);
+  });
+
+  it('mints a distinct pending-run identity when the approved recommendation changes after a partial failure', async () => {
+    let assignShouldFail = true;
+    const { fetchMock, calls, notesByExceptionAndKey } = makeTrackedFetch({
+      caseStatus: 'New',
+      enforceNoteIdempotency: true,
+      failOn: (path, method) => assignShouldFail && path === '/api/cases/exc-1/assign' && method === 'POST',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const user = userEvent.setup();
+    const { rerender } = render(<RecoveryPlaybookPanel health={OK_HEALTH} selected={EXCEPTION} onSelect={() => {}} />);
+
+    await user.click(await screen.findByRole('button', { name: /Apply: move case to Recovering/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/simulated failure/i)).toBeInTheDocument();
+    });
+
+    assignShouldFail = false;
+    const changedRecommendation = { ...EXCEPTION, amount_at_risk: EXCEPTION.amount_at_risk + 1000 };
+    rerender(<RecoveryPlaybookPanel health={OK_HEALTH} selected={changedRecommendation} onSelect={() => {}} />);
+    await user.click(await screen.findByRole('button', { name: /Apply: move case to Recovering/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Moved to Recovering/i })).toBeInTheDocument();
+    });
+
+    const noteCalls = calls.filter((call) => call.path === '/api/cases/exc-1/notes');
+    expect(noteCalls).toHaveLength(2);
+    expect(noteCalls[1].body?.idempotencyKey).not.toBe(noteCalls[0].body?.idempotencyKey);
+    expect(noteCalls[1].body?.body).not.toBe(noteCalls[0].body?.body);
+    expect(distinctNoteInserts(notesByExceptionAndKey, 'exc-1')).toBe(2);
   });
 
   it('a new approved run after a completed run creates a second distinct durable note', async () => {

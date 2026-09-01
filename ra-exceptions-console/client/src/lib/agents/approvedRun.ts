@@ -1,6 +1,7 @@
 export interface ApprovedRun {
   idempotencyKey: string;
   approvedAt: string;
+  noteBody: string;
 }
 
 function storageKey(agentSlug: string, exceptionId: string): string {
@@ -11,23 +12,31 @@ function readRun(value: string | null): ApprovedRun | null {
   if (value == null) return null;
   try {
     const parsed = JSON.parse(value) as Partial<ApprovedRun>;
-    return typeof parsed.idempotencyKey === 'string' && typeof parsed.approvedAt === 'string'
-      ? { idempotencyKey: parsed.idempotencyKey, approvedAt: parsed.approvedAt }
+    return typeof parsed.idempotencyKey === 'string' &&
+      typeof parsed.approvedAt === 'string' &&
+      typeof parsed.noteBody === 'string'
+      ? { idempotencyKey: parsed.idempotencyKey, approvedAt: parsed.approvedAt, noteBody: parsed.noteBody }
       : null;
   } catch {
     return null;
   }
 }
 
-export function beginApprovedRun(agentSlug: string, exceptionId: string): ApprovedRun {
+export function beginApprovedRun(
+  agentSlug: string,
+  exceptionId: string,
+  buildNoteBody: (approvedAt: string) => string
+): ApprovedRun {
   const key = storageKey(agentSlug, exceptionId);
   const existing = readRun(localStorage.getItem(key));
-  if (existing) return existing;
+  if (existing && existing.noteBody === buildNoteBody(existing.approvedAt)) return existing;
 
   const runId = crypto.randomUUID();
+  const approvedAt = new Date().toISOString();
   const run = {
     idempotencyKey: `agent:${agentSlug}:${exceptionId}:${runId}`,
-    approvedAt: new Date().toISOString(),
+    approvedAt,
+    noteBody: buildNoteBody(approvedAt),
   };
   localStorage.setItem(key, JSON.stringify(run));
   return run;

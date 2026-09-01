@@ -62,16 +62,19 @@ function RecoveryCard({ selected }: { selected: ExceptionRow }) {
     };
     let run: ApprovedRun;
     try {
-      run = beginApprovedRun('recovery-playbook', selected.exception_id);
+      run = beginApprovedRun('recovery-playbook', selected.exception_id, (approvedAt) => {
+        const approvedRecommendation = buildRecommendation(selected, Date.parse(approvedAt));
+        return (
+          `[Agent: Recovery Playbook] run_at=${approvedAt} · ` +
+          `inputs={exception_id=${selected.exception_id}} · ` +
+          `output={action="${approvedRecommendation.entry.action}", expected_recovery_usd=${approvedRecommendation.expectedRecoveryUsd}, owner=${approvedRecommendation.entry.ownerRole}, deadline=${approvedRecommendation.deadline}}`
+        );
+      });
     } catch (e) {
       setApplyState('error');
       setApplyError(e instanceof Error ? e.message : 'Failed to persist approved run');
       return;
     }
-    const note =
-      `[Agent: Recovery Playbook] run_at=${run.approvedAt} · ` +
-      `inputs={exception_id=${selected.exception_id}} · ` +
-      `output={action="${rec.entry.action}", expected_recovery_usd=${rec.expectedRecoveryUsd}, owner=${rec.entry.ownerRole}, deadline=${rec.deadline}}`;
     try {
       // Record the human-approved recommendation BEFORE attempting any case
       // mutation. If this write fails, no mutation is attempted at all — a
@@ -81,7 +84,7 @@ function RecoveryCard({ selected }: { selected: ExceptionRow }) {
       // lifecycle transition didn't finish; retrying resumes at the
       // mutation, and the server-side unique index guarantees the note
       // itself is never duplicated no matter how many times this call runs.
-      await casesApi.addNote(selected.exception_id, note, meta, run.idempotencyKey);
+      await casesApi.addNote(selected.exception_id, run.noteBody, meta, run.idempotencyKey);
 
       // The case lifecycle only allows New→Investigating→Recovering (see
       // server/routes/cases.ts TRANSITIONS); walk that chain instead of

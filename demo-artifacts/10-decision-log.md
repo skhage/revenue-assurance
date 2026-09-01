@@ -14,6 +14,7 @@
 > - ✅ **2026-09-01 correction:** ADR-015 Agent Workbench refinements after cross-review — `stale` DQ evidence is now a hard block (not a soft warning) via a single `isBlocked()` gate every panel calls; the DQ route now fails closed on any null/unrecognized/inconsistent status row (never defaults to GREEN); every "Apply" writes its audit note _before_ the case mutation and never re-writes it on retry; Recovery Playbook's recovery %/owner/deadline are now labeled "Demo data" (the earlier "no invented facts" framing overstated it); selection is now shared across Investigate, Prioritize & route, _and_ Recovery playbook (previously Prioritize & route was disconnected). See the addendum at the end of this file.
 > - ✅ **2026-09-01 second correction:** ADR-015 refinements after a second round of cross-review — DQ freshness is now evaluated per required check (not by a single global freshest timestamp, which let one fresh check mask another stale/timestamp-less one); note-write deduplication moved from a client-local `ref` to a server-enforced Postgres unique index keyed on `(exception_id, idempotency_key)`, durable across component remounts, page reloads, and ambiguous lost-response retries; Prioritize & route now explicitly merges and scores the selected exception so it is always visible and actionable, even when absent from the default batch or ranked outside the visible top 20. See the second addendum at the end of this file.
 > - ✅ **2026-09-01 third correction:** ADR-015 refinements after a third round of cross-review — the idempotency key is now minted per human-approved run (`agent:<slug>:<exception_id>:<run_id>`, persisted in `localStorage` until that run's mutation succeeds), not a constant per (agent, exception), so a later independent approval is no longer silently suppressed by an earlier one; the server now rejects (`409`) reuse of an idempotency key with a different note body instead of silently deduping it, closing a latent audit-trail-corruption gap. See the third addendum at the end of this file.
+> - ✅ **2026-09-01 fourth correction:** ADR-015 concurrency/retry hardening after independent review — payload matching and insertion now happen in one conditional Postgres upsert, so simultaneous different bodies sharing a key cannot both pass; pending approved runs persist their exact note body, so exact retries remain stable while a materially changed recommendation/note receives a new durable key instead of wedging on `409`. See the fourth addendum at the end of this file.
 
 ---
 
@@ -628,9 +629,34 @@ second real approval produces a second, independent note.
 
 The `ON CONFLICT ... DO NOTHING` insert alone cannot distinguish "this is the same retried note" from
 "this key collided with an unrelated note" — both look like a no-op insert. `POST
-/api/cases/:exceptionId/notes` now looks up any existing note for the given
-`(exception_id, idempotency_key)` before inserting: if one exists with the _same_ body, the request
-is treated as an exact retry and deduped as before; if one exists with a _different_ body, the
-request is rejected with `409` and the case is never mutated. This closes a latent correctness gap
-where a stale or reused key could have silently attributed the wrong recommendation to an existing
-audit note.
+/api/cases/:exceptionId/notes` therefore compares the stored and submitted bodies as part of its
+conflict decision: the _same_ body is treated as an exact retry, while a _different_ body is rejected
+with `409` and the case is never mutated. This closes a latent correctness gap where a stale or reused
+key could have silently attributed the wrong recommendation to an existing audit note. Decision 13
+below records the concurrency-safe single-statement implementation of that rule.
+
+## 2026-09-01 fourth addendum: atomic conflicts and note-bound pending approvals
+
+**Status:** Accepted, supersedes Decision 12's check-then-insert implementation detail and refines Decision 11.
+
+**Decision 13 — payload matching and note insertion are one atomic Postgres conflict decision.**
+
+The pre-insert lookup in Decision 12 left a time-of-check/time-of-use race: two simultaneous
+requests with the same key and different bodies could both observe no existing row, after which one
+inserted and the other was silently treated as a deduped success. The route now issues one
+conditional `INSERT ... ON CONFLICT ... DO UPDATE ... WHERE ra.case_notes.body = EXCLUDED.body`
+statement. A new key inserts; an exact retry locks and returns the existing row; a conflicting body
+fails the conditional update and returns no row, producing `409`. The unique index and payload
+comparison therefore participate in the same database statement, so simultaneous mismatched
+requests cannot both pass.
+
+**Decision 14 — a pending approval is bound to its exact audit-note body.**
+
+Persisting only the run key and timestamp meant a recommendation or note-template change during a
+pending run reused the old key with a new body, causing every retry to receive `409` indefinitely.
+The browser's pending-run record now also stores the exact approved note. Reconstructing the same
+note resumes the existing key and safely retries it; reconstructing materially different text
+replaces the pending record with a fresh per-run UUID and durable note identity. Recovery deadlines
+are anchored to the original approval timestamp, preventing clock drift across rerenders or reloads
+from being mistaken for a changed recommendation. Audit-before-mutation ordering and fail-closed DQ
+gating remain unchanged.
