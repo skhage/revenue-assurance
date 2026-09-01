@@ -74,8 +74,8 @@ export const casesApi = {
    * response was lost, the calling component remounted, or the page was
    * reloaded before the mutation that follows the note completed. Callers
    * that write an audit note before a case-lifecycle mutation should always
-   * pass one — see agents/* panels for the convention
-   * `agent:<slug>:<exception_id>`.
+   * pass one — see agents/* panels for the per-approved-run convention
+   * `agent:<slug>:<exception_id>:<run_id>`.
    */
   addNote: (id: string, body: string, meta: ExceptionMeta, idempotencyKey?: string) =>
     fetch(`/api/cases/${id}/notes`, {

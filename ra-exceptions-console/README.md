@@ -40,8 +40,9 @@ ADR-015 for the full design rationale.
   panel calls. Freshness is checked **per required check**, not by a single global freshest
   timestamp — one recently-run check can never mask a different required check that is stale or has
   no timestamp at all (`summarizePipelineHealth` in `server/routes/dqAudit.ts`). The DQ route itself
-  also fails closed on status — any row with a null/unrecognized/inconsistent status is treated as
-  failing, never GREEN.
+  also fails closed on status and category — any row with a null/unrecognized/inconsistent status,
+  or a `check_type` other than timestamp-required `INLINE` or documented timestamp-exempt `DQ-1`/
+  `DQ-5`, blocks downstream agents.
 - **Human approval before any mutation.** Every recommendation is inert until a user clicks "Apply."
   There is no auto-apply, no background write, no polling loop.
 - **Existing API is the only mutation gateway.** "Apply" buttons call the same
@@ -49,8 +50,11 @@ ADR-015 for the full design rationale.
   mutation route was added for this feature.
 - **Audit-before-mutation, durably deduped by the server.** Every "Apply" writes its structured
   `[Agent: <name>] run_at=… · inputs={…} · output={…}` note **before** attempting any case-lifecycle
-  mutation, tagged with a stable idempotency key (`agent:<slug>:<exception_id>`). If the note write
-  fails, no mutation is attempted at all. The server enforces at most one note per
+  mutation, tagged with a per-approved-run idempotency key
+  (`agent:<slug>:<exception_id>:<run_id>`). A pending run record in browser storage preserves that
+  key across retries/remounts and is retired only after the mutation succeeds, so a later independent
+  approval receives a new key. If the note write fails, no mutation is attempted at all. The server
+  enforces at most one note per
   `(exception_id, idempotency_key)` via a Postgres unique index — not a client-side flag — so a
   duplicate is impossible even across a lost response, a component remount, or a full page reload;
   `POST /api/cases/:id/notes` returns `{ deduped: true }` when a retry's key already exists.
