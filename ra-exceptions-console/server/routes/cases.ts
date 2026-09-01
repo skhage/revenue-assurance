@@ -171,6 +171,19 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase) {
     return rows;
   }
 
+  // Looks up the body already stored under (exceptionId, idempotencyKey), if
+  // any. Used to distinguish an exact retry (safe no-op) from a genuine key
+  // collision with a different payload (must be rejected, not silently
+  // treated as the same note) — the ON CONFLICT DO NOTHING insert alone
+  // can't tell those apart since it never reports what it collided with.
+  async function findNoteByIdempotencyKey(exceptionId: string, idempotencyKey: string) {
+    const { rows } = await appkit.lakebase.query(
+      `SELECT body FROM ra.case_notes WHERE exception_id = $1 AND idempotency_key = $2 LIMIT 1`,
+      [exceptionId, idempotencyKey]
+    );
+    return (rows[0]?.body as string | undefined) ?? null;
+  }
+
   appkit.server.extend((app) => {
     // Signed-in identity (real headers on Databricks Apps; fallback locally).
     app.get('/api/whoami', (req, res) => {
@@ -302,8 +315,15 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase) {
 
     // Append an investigation note. When idempotencyKey is supplied, the
     // insert is a no-op if a note with that (exception_id, idempotencyKey)
-    // pair already exists — safe to retry after a lost response, a
-    // component remount, or a page reload without ever double-writing.
+    // pair already exists AND carries the same body — safe to retry after a
+    // lost response, a component remount, or a page reload without ever
+    // double-writing. If the key already exists with a DIFFERENT body, this
+    // is a genuine collision (e.g. a stale/reused key from an unrelated run)
+    // rather than a retry, and is rejected outright — silently treating it
+    // as "the same note" would associate the wrong output with that key and
+    // corrupt the audit trail. Rejecting here also blocks any mutation the
+    // caller intended to make dependent on this note, preserving
+    // audit-before-mutation ordering.
     app.post('/api/cases/:exceptionId/notes', async (req, res) => {
       try {
         const parsed = NoteBody.safeParse(req.body);
@@ -313,7 +333,19 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase) {
         }
         const { exceptionId } = req.params;
         const { idempotencyKey } = parsed.data;
+        const trimmedBody = parsed.data.body.trim();
         await ensureCase(exceptionId, parsed.data.meta);
+
+        if (idempotencyKey) {
+          const existingBody = await findNoteByIdempotencyKey(exceptionId, idempotencyKey);
+          if (existingBody !== null && existingBody !== trimmedBody) {
+            res.status(409).json({
+              error: 'This idempotency key was already used with a different note body.',
+            });
+            return;
+          }
+        }
+
         const { rows: inserted } = await appkit.lakebase.query(
           idempotencyKey
             ? `INSERT INTO ra.case_notes (exception_id, author, body, idempotency_key) VALUES ($1, $2, $3, $4)
@@ -321,8 +353,8 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase) {
                RETURNING id`
             : `INSERT INTO ra.case_notes (exception_id, author, body) VALUES ($1, $2, $3) RETURNING id`,
           idempotencyKey
-            ? [exceptionId, currentUser(req), parsed.data.body.trim(), idempotencyKey]
-            : [exceptionId, currentUser(req), parsed.data.body.trim()]
+            ? [exceptionId, currentUser(req), trimmedBody, idempotencyKey]
+            : [exceptionId, currentUser(req), trimmedBody]
         );
         // Only bump updated_at when a note was actually inserted — a
         // deduped retry should be a true no-op, not a fresh "touch".

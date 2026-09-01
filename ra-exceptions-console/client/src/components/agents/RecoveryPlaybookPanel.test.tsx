@@ -292,6 +292,37 @@ describe('RecoveryPlaybookPanel — failure-atomic mutation ordering', () => {
     expect(distinctNoteInserts(notesByExceptionAndKey, 'exc-1')).toBe(2);
   });
 
+  it('never mutates the case if the note write is rejected for an idempotency-key/payload mismatch (409)', async () => {
+    // Simulates a stale/reused idempotency key colliding with a different
+    // body — the server rejects it outright (409) rather than silently
+    // deduping, and the panel must not proceed to any case mutation.
+    const { fetchMock, calls } = makeTrackedFetch({
+      caseStatus: 'New',
+      failOn: () => false,
+    });
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      if (url === '/api/cases/exc-1/notes' && method === 'POST') {
+        return jsonResponse({ error: 'This idempotency key was already used with a different note body.' }, 409);
+      }
+      if (url === '/api/cases/exc-1' && method === 'GET') return jsonResponse({ case: null, notes: [] });
+      if (url === '/api/whoami') return jsonResponse({ user: 'analyst@demo' });
+      return jsonResponse({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const user = userEvent.setup();
+    render(<RecoveryPlaybookPanel health={OK_HEALTH} selected={EXCEPTION} onSelect={() => {}} />);
+
+    await user.click(await screen.findByRole('button', { name: /Apply: move case to Recovering/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/already used with a different note body/i)).toBeInTheDocument();
+    });
+
+    expect(calls.some((c) => c.path === '/api/cases/exc-1/assign')).toBe(false);
+    expect(calls.some((c) => c.path === '/api/cases/exc-1/status')).toBe(false);
+  });
+
   it('resets apply state when the selected exception changes', async () => {
     const { fetchMock } = makeTrackedFetch({ caseStatus: 'New', enforceNoteIdempotency: true });
     vi.stubGlobal('fetch', fetchMock);
