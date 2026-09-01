@@ -24,39 +24,51 @@ agent-computed value in the UI carries a "Deterministic · rule-based" or "Demo 
 that's never ambiguous. See `demo-artifacts/07-ui-specs.md` §5.5 and `demo-artifacts/10-decision-log.md`
 ADR-015 for the full design rationale.
 
-| Tab                      | What it shows                                                               | Computed how                                                                                                                                                   |
-| :----------------------- | :-------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Pipeline reliability** | Freshness/quality of the reconciliation pipeline (`dq_audit`)               | Reads `cdm_tmforum.revenue_assurance.dq_audit`; summarized into `ok`/`stale`/`red`/`unavailable` (`server/routes/dqAudit.ts`)                                  |
-| **Investigate**          | A cited root-cause hypothesis + confidence for a selected exception         | `client/src/lib/agents/hypothesis.ts` — cites literal evidence fields from `exception_detail`, never invents facts                                             |
-| **Prioritize & route**   | A ranked queue with a recommended analyst/queue                             | `client/src/lib/agents/scoring.ts` (amount 35 + severity 25 + age 20 + evidence 20) + a small **demo** analyst roster (`roster.ts`) — not a live capacity feed |
-| **Recovery playbook**    | A check-type-specific recovery action, expected recovery $, owner, deadline | `client/src/lib/agents/playbook.ts` — a fixed 7-entry template table, one row per reconciliation check_type                                                    |
+| Tab                      | What it shows                                                                           | Computed how                                                                                                                                                                            |
+| :----------------------- | :-------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Pipeline reliability** | Freshness/quality of the reconciliation pipeline (`dq_audit`)                           | Reads `cdm_tmforum.revenue_assurance.dq_audit`; summarized server-side into `ok`/`stale`/`red`/`unavailable` (`server/routes/dqAudit.ts`, `summarizePipelineHealth`)                    |
+| **Investigate**          | A cited root-cause hypothesis + confidence for a selected exception                     | `client/src/lib/agents/hypothesis.ts` — cites literal evidence fields from `exception_detail`                                                                                           |
+| **Prioritize & route**   | A ranked queue with a recommended analyst/queue; carries the selected exception forward | `client/src/lib/agents/scoring.ts` (amount 35 + severity 25 + age 20 + evidence 20) + a small **demo** analyst roster (`roster.ts`) — not a live capacity feed                          |
+| **Recovery playbook**    | A check-type-specific recovery action, expected recovery $, owner, deadline             | `client/src/lib/agents/playbook.ts` — a fixed 7-entry template table, one row per reconciliation check_type; recovery %/owner/deadline are labeled **demo data**, not measured outcomes |
 
 **Safety controls, all enforced in code, not just documented:**
 
-- **Pipeline gate.** If `dq_audit` reports `red` or is unreachable, the Investigate/Prioritize/Recovery
-  tabs render only a blocking alert — no recommendation is computed, no "Apply" button renders.
+- **Pipeline gate.** If `dq_audit` reports `red`, is unreachable, **or is `stale`** (freshest
+  observation older than 72h), the Investigate/Prioritize/Recovery tabs render only a blocking
+  alert — no recommendation is computed, no "Apply" button renders. Stale evidence is a hard block,
+  not a soft warning: `isBlocked()` in `client/src/lib/agents/types.ts` is the single source of
+  truth every panel calls, so this can't drift per-panel. The DQ route itself also fails closed —
+  any row with a null/unrecognized/inconsistent status is treated as failing, never GREEN.
 - **Human approval before any mutation.** Every recommendation is inert until a user clicks "Apply."
   There is no auto-apply, no background write, no polling loop.
 - **Existing API is the only mutation gateway.** "Apply" buttons call the same
   `POST /api/cases/:id/assign|status|notes` routes the Queue and Cases pages already use — no new
   mutation route was added for this feature.
-- **Audit trail via existing case notes.** Every applied recommendation writes a structured
-  `[Agent: <name>] run_at=… · inputs={…} · output={…}` note through the existing notes route, so the
-  append-only `ra.case_notes` table doubles as an immutable agent-run record — no new schema.
+- **Audit-before-mutation, not audit-after.** Every "Apply" writes its structured
+  `[Agent: <name>] run_at=… · inputs={…} · output={…}` note **before** attempting any case-lifecycle
+  mutation. If the note write fails, no mutation is attempted at all. If a later mutation step fails,
+  the note has already landed, so a human reviewing the case sees exactly what was approved even if
+  the transition didn't finish; retrying resumes at the mutation step without re-writing the note.
+- **Shared selection across the loop.** Investigate, Prioritize & route, and Recovery playbook share
+  one "selected exception" — pick it in Investigate, or "Carry forward" a ranked row in Prioritize &
+  route, and Recovery playbook opens already showing it.
 
 ### Demo script (~3 minutes)
 
 1. Open **Agent Workbench → Pipeline reliability**. Point out the green/fresh status and the
-   `dq_audit` snapshot — this is the gate the other three tabs respect.
+   `dq_audit` snapshot — this is the gate the other three tabs respect (and note that `stale`, not
+   just `red`/unreachable, blocks them too).
 2. Switch to **Investigate**, search for an account, select an exception. Read the hypothesis aloud
-   and point at the literal `check_type=…`, `source_table=…`, `risk_tier=…` values it cites — nothing
-   here is invented, and the "Deterministic · rule-based" badge is not decoration.
-3. Switch to **Prioritize & route**. Show the ranked table and the recommended analyst/queue column;
-   call out the "Demo data" badge on the roster — this is illustrative routing, not live capacity.
-4. Switch to **Recovery playbook** with the same exception still selected. Show the templated action,
-   expected recovery $, owner, and deadline; click **Apply** and narrate that this is the exact same
-   status-change call a human would make from the Cases page — then open the case's notes timeline
-   to show the `[Agent: Recovery Playbook]` audit note that was just written.
+   and point at the literal `check_type=…`, `source_table=…`, `risk_tier=…` values it cites, and the
+   "Deterministic · rule-based" badge.
+3. Switch to **Prioritize & route** — the same exception is highlighted in the ranked table. Show the
+   recommended analyst/queue column; call out the "Demo data" badge on the roster — this is
+   illustrative routing, not live capacity.
+4. Switch to **Recovery playbook** — it opens already showing that exception's plan. Show the
+   templated action, expected recovery $, owner, and deadline (all under a "Demo data" caveat); click
+   **Apply** and narrate that this is the exact same status-change call a human would make from the
+   Cases page — then open the case's notes timeline to show the `[Agent: Recovery Playbook]` audit
+   note, written before the status change, that was just recorded.
 
 ## Prerequisites
 

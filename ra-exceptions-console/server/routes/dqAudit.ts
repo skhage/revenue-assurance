@@ -62,30 +62,70 @@ function stringOrNull(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
-function numberValue(value: unknown): number {
-  const parsed = Number(value ?? 0);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
 function stringValue(value: unknown): string {
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   return '';
 }
 
+/** Parses a count field, returning null (rather than defaulting to 0) when the value is missing or unparseable — a malformed count must be distinguishable from a legitimate zero so it can fail the row closed. */
+function parseCount(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+/**
+ * Resolves the true GREEN/RED status for a row, failing closed on anything
+ * the warehouse sends that isn't an unambiguous, internally-consistent pass.
+ * This is the only place status is decided — `parseDqAuditRows` and
+ * `summarizePipelineHealth` both trust its output, so a bug here is a
+ * silent false-GREEN, not a visible error. Fails closed (RED) when:
+ *   - the raw status string is anything other than the exact literal
+ *     'GREEN' (null, '', lowercase, 'RED', a number, an unrecognized
+ *     string, etc. — there is no allowlist of "safe" alternatives);
+ *   - any of observed/passed/failed_records is missing or unparseable;
+ *   - any count is negative;
+ *   - failed_records is nonzero (a real failure, regardless of what the
+ *     status string claims); or
+ *   - passed_records + failed_records doesn't reconcile with
+ *     observed_records (an internally inconsistent row).
+ */
+function resolveStatus(
+  rawStatus: unknown,
+  observed: number | null,
+  passed: number | null,
+  failed: number | null
+): 'GREEN' | 'RED' {
+  if (rawStatus !== 'GREEN') return 'RED';
+  if (observed === null || passed === null || failed === null) return 'RED';
+  if (observed < 0 || passed < 0 || failed < 0) return 'RED';
+  if (failed !== 0) return 'RED';
+  if (passed + failed !== observed) return 'RED';
+  return 'GREEN';
+}
+
 export function parseDqAuditRows(dataArray: unknown[][]): DqAuditRow[] {
-  return dataArray.map((row) => ({
-    check_type: stringValue(row[0]),
-    dataset: stringValue(row[1]),
-    expectation_name: stringValue(row[2]),
-    update_id: stringOrNull(row[3]),
-    observed_at: stringOrNull(row[4]),
-    observed_records: numberValue(row[5]),
-    passed_records: numberValue(row[6]),
-    failed_records: numberValue(row[7]),
-    status: stringValue(row[8]) === 'RED' ? 'RED' : 'GREEN',
-    expected_condition: stringValue(row[9]),
-  }));
+  return dataArray.map((row) => {
+    const observed = parseCount(row[5]);
+    const passed = parseCount(row[6]);
+    const failed = parseCount(row[7]);
+    return {
+      check_type: stringValue(row[0]),
+      dataset: stringValue(row[1]),
+      expectation_name: stringValue(row[2]),
+      update_id: stringOrNull(row[3]),
+      observed_at: stringOrNull(row[4]),
+      observed_records: observed ?? 0,
+      passed_records: passed ?? 0,
+      failed_records: failed ?? 0,
+      status: resolveStatus(row[8], observed, passed, failed),
+      expected_condition: stringValue(row[9]),
+    };
+  });
 }
 
 /**
