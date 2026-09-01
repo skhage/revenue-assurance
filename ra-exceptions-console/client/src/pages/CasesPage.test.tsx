@@ -29,6 +29,9 @@ describe('CasesPage row-open flow', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn((url: string) => {
+        if (url.startsWith('/api/analytics/evidence')) {
+          return jsonResponse({ rows: [], note: 'No additional detection evidence for this exception.' });
+        }
         if (url.startsWith('/api/cases/exc-1')) {
           return jsonResponse({ case: { ...CASE, status: 'New' }, notes: [] });
         }
