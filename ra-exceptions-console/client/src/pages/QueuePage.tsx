@@ -17,7 +17,7 @@ import {
   TableCell,
 } from '@databricks/appkit-ui/react';
 import { sql } from '@databricks/appkit-ui/js';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Search } from 'lucide-react';
 import { SeverityBadge, StatusChip } from '../components/badges';
 import { ExceptionDrawer } from '../components/ExceptionDrawer';
@@ -45,7 +45,16 @@ export function QueuePage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   // Debounce the free-text search.
+  // Skip the initial mount — the first fetch is already triggered by the
+  // filters memo. Without this guard the 300ms timer can fire *after* the
+  // initial fetch resolves, setting loading=true with no filter change to
+  // trigger a re-fetch, which strands the table in a permanent loading state.
+  const searchMounted = useRef(false);
   useEffect(() => {
+    if (!searchMounted.current) {
+      searchMounted.current = true;
+      return;
+    }
     const t = setTimeout(() => {
       setLoading(true);
       setError(null);

@@ -143,11 +143,11 @@ extracted AS (
 SELECT
   e.file_name,
   e.parse_succeeded,
-  e.extracted_data:contract_number::STRING AS doc_contract_number,
-  e.extracted_data:sla_tier::STRING AS doc_sla_tier,
-  e.extracted_data:term_months::INT AS doc_term_months,
-  e.extracted_data:auto_renew::BOOLEAN AS doc_auto_renew,
-  e.extracted_data:status::STRING AS doc_status,
+  e.extracted_data:response:contract_number:value::STRING AS doc_contract_number,
+  e.extracted_data:response:sla_tier:value::STRING AS doc_sla_tier,
+  e.extracted_data:response:term_months:value::INT AS doc_term_months,
+  e.extracted_data:response:auto_renew:value::BOOLEAN AS doc_auto_renew,
+  e.extracted_data:response:status:value::STRING AS doc_status,
   c.ContractNumber AS db_contract_number,
   c.SLA_Tier__c AS db_sla_tier,
   c.ContractTerm AS db_term_months,
@@ -156,17 +156,17 @@ SELECT
   c.TMF_Customer_Id__c AS customer_id,
   a.Name AS account_name,
   -- Mismatch flags
-  CASE WHEN e.extracted_data:sla_tier::STRING != c.SLA_Tier__c THEN TRUE ELSE FALSE END AS sla_mismatch,
-  CASE WHEN e.extracted_data:term_months::INT != c.ContractTerm THEN TRUE ELSE FALSE END AS term_mismatch,
-  CASE WHEN e.extracted_data:auto_renew::BOOLEAN != c.Auto_Renew__c THEN TRUE ELSE FALSE END AS auto_renew_mismatch,
-  CASE WHEN e.extracted_data:status::STRING != c.Status THEN TRUE ELSE FALSE END AS status_mismatch,
-  (CASE WHEN e.extracted_data:sla_tier::STRING != c.SLA_Tier__c THEN 1 ELSE 0 END
-   + CASE WHEN e.extracted_data:term_months::INT != c.ContractTerm THEN 1 ELSE 0 END
-   + CASE WHEN e.extracted_data:auto_renew::BOOLEAN != c.Auto_Renew__c THEN 1 ELSE 0 END
-   + CASE WHEN e.extracted_data:status::STRING != c.Status THEN 1 ELSE 0 END) AS total_mismatches
+  CASE WHEN e.extracted_data:response:sla_tier:value::STRING != c.SLA_Tier__c THEN TRUE ELSE FALSE END AS sla_mismatch,
+  CASE WHEN e.extracted_data:response:term_months:value::INT != c.ContractTerm THEN TRUE ELSE FALSE END AS term_mismatch,
+  CASE WHEN e.extracted_data:response:auto_renew:value::BOOLEAN != c.Auto_Renew__c THEN TRUE ELSE FALSE END AS auto_renew_mismatch,
+  CASE WHEN e.extracted_data:response:status:value::STRING != c.Status THEN TRUE ELSE FALSE END AS status_mismatch,
+  (CASE WHEN e.extracted_data:response:sla_tier:value::STRING != c.SLA_Tier__c THEN 1 ELSE 0 END
+   + CASE WHEN e.extracted_data:response:term_months:value::INT != c.ContractTerm THEN 1 ELSE 0 END
+   + CASE WHEN e.extracted_data:response:auto_renew:value::BOOLEAN != c.Auto_Renew__c THEN 1 ELSE 0 END
+   + CASE WHEN e.extracted_data:response:status:value::STRING != c.Status THEN 1 ELSE 0 END) AS total_mismatches
 FROM extracted e
 LEFT JOIN salesforce_source.contract c
-  ON c.ContractNumber = e.extracted_data:contract_number::STRING
+  ON c.ContractNumber = e.extracted_data:response:contract_number:value::STRING
 LEFT JOIN salesforce_source.account a
   ON c.AccountId = a.Id;
 
@@ -218,20 +218,20 @@ extracted AS (
 SELECT
   e.file_name,
   e.parse_succeeded,
-  e.extracted_data:invoice_number::STRING AS doc_invoice_number,
-  e.extracted_data:total_amount::DOUBLE AS doc_total_amount,
-  e.extracted_data:tax_amount::DOUBLE AS doc_tax_amount,
-  e.extracted_data:customer_name::STRING AS doc_customer_name,
+  e.extracted_data:response:invoice_number:value::STRING AS doc_invoice_number,
+  e.extracted_data:response:total_amount:value::DOUBLE AS doc_total_amount,
+  e.extracted_data:response:tax_amount:value::DOUBLE AS doc_tax_amount,
+  e.extracted_data:response:customer_name:value::STRING AS doc_customer_name,
   t.TRX_NUMBER AS db_invoice_number,
   t.INVOICE_AMOUNT AS db_invoice_amount,
   t.TAX_AMOUNT AS db_tax_amount,
   t.TMF_BILL_ID,
   -- Amount mismatch detection (tolerance: $0.01)
   CASE
-    WHEN ABS(COALESCE(e.extracted_data:total_amount::DOUBLE, 0) - COALESCE(t.INVOICE_AMOUNT, 0)) > 0.01
+    WHEN ABS(COALESCE(e.extracted_data:response:total_amount:value::DOUBLE, 0) - COALESCE(t.INVOICE_AMOUNT, 0)) > 0.01
     THEN TRUE ELSE FALSE
   END AS amount_mismatch,
-  ABS(COALESCE(e.extracted_data:total_amount::DOUBLE, 0) - COALESCE(t.INVOICE_AMOUNT, 0)) AS amount_variance
+  ABS(COALESCE(e.extracted_data:response:total_amount:value::DOUBLE, 0) - COALESCE(t.INVOICE_AMOUNT, 0)) AS amount_variance
 FROM extracted e
 LEFT JOIN oracle_erp_source.ra_customer_trx_all t
-  ON e.extracted_data:invoice_number::STRING = t.TRX_NUMBER;
+  ON e.extracted_data:response:invoice_number:value::STRING = t.TRX_NUMBER;
