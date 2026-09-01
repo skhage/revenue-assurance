@@ -115,3 +115,9 @@ targets:
       postgres_branch: projects/ra-console-lakebase/branches/production
       postgres_database: projects/ra-console-lakebase/branches/production/databases/databricks-postgres
       postgres_project: projects/ra-console-lakebase
+      # Architecture page deep links — real resource IDs for this workspace.
+      ra_pipeline_id: 30f8850c-df48-403c-92a5-5809d46be446
+      ra_ml_job_id: "333356543179714"
+      ra_datasim_job_id: "325749217551331"
+      ra_dashboard_id: 01f1a56bce111461856037d2272cee19
+      ra_genie_space_id: 01f1a56bce181f1aaff08b76fd8b915c
