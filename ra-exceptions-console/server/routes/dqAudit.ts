@@ -145,6 +145,14 @@ interface StaleCheck {
   ageHours: number | null;
 }
 
+const TIMESTAMP_EXEMPT_CHECK_TYPES = new Set(['DQ-1', 'DQ-5']);
+
+function requiresFreshness(checkType: string): boolean | null {
+  if (checkType === 'INLINE') return true;
+  if (TIMESTAMP_EXEMPT_CHECK_TYPES.has(checkType)) return false;
+  return null;
+}
+
 /**
  * Pure summarization of dq_audit rows into a block/warn/ok signal for the
  * Agent Workbench. Kept free of any Express/AppKit dependency so it is
@@ -152,15 +160,14 @@ interface StaleCheck {
  * that decides whether downstream agent panels are allowed to recommend.
  *
  * Freshness is evaluated per required check, not globally. A required check
- * is a distinct (dataset, expectation_name) pair whose `check_type` is
- * `'INLINE'` — the only category sourced from the pipeline event log and
- * therefore the only one with a genuine per-run timestamp (`DQ-1`/`DQ-5` are
- * live set-level checks computed at query time with no timestamp concept;
- * their correctness is fully captured by the GREEN/RED check below, so they
- * are exempt from freshness). For each required check we pick the
- * authoritative row — the one with the latest *valid* `observed_at` among
- * any rows sharing that (dataset, expectation_name) — and evaluate its
- * freshness independently. This is deliberately NOT "take the single
+ * is a distinct (dataset, expectation_name) pair whose `check_type` is the
+ * exact literal `'INLINE'` — the only category sourced from the pipeline
+ * event log and therefore the only one with a genuine per-run timestamp.
+ * Only the documented live set-level checks `DQ-1` and `DQ-5` are exempt.
+ * Unknown, malformed, or future check categories fail closed rather than
+ * silently inheriting an exemption. For each required check, every row must
+ * have a valid timestamp; among valid duplicates, the latest observation is
+ * authoritative. This is deliberately NOT "take the single
  * freshest timestamp across every row and check that": a global freshest-
  * wins comparison lets one recently-run check mask another required check
  * that is stale or has no timestamp at all, which is the fail-open bug this
@@ -192,38 +199,54 @@ export function summarizePipelineHealth(rows: DqAuditRow[], staleThresholdHours 
     };
   }
 
-  const requiredRows = rows.filter((r) => r.check_type === 'INLINE');
-  if (requiredRows.length === 0) {
+  const unsupportedRows = rows.filter((r) => requiresFreshness(r.check_type) === null);
+  if (unsupportedRows.length > 0) {
+    const values = unsupportedRows
+      .map((r) => (r.check_type.length > 0 ? JSON.stringify(r.check_type) : '(missing)'))
+      .slice(0, 3)
+      .join(', ');
     return {
       state: 'stale',
-      reason: 'DQ checks are green but no observation timestamp is available to confirm freshness.',
+      reason: `${unsupportedRows.length} DQ row(s) have unsupported check_type values (${values}${unsupportedRows.length > 3 ? ', …' : ''}); freshness cannot be proven.`,
       rows,
       freshestObservedAt,
     };
   }
 
-  // Authoritative row per required check: the latest row with a *valid*
-  // timestamp wins; if none of a check's rows has a valid timestamp, that
-  // check's authoritative row is whichever row we saw (its lack of a valid
-  // timestamp is itself the failure).
+  const requiredRows = rows.filter((r) => requiresFreshness(r.check_type) === true);
+  if (requiredRows.length === 0) {
+    return {
+      state: 'ok',
+      reason: 'Pipeline DQ checks are green; documented set-level checks are timestamp-exempt.',
+      rows,
+      freshestObservedAt,
+    };
+  }
+
   const authoritativeByCheck = new Map<string, DqAuditRow>();
+  const malformedByCheck = new Map<string, DqAuditRow>();
   for (const row of requiredRows) {
     const key = checkKey(row);
+    const rowMs = parsedTimestampMs(row.observed_at);
+    if (rowMs === null) {
+      malformedByCheck.set(key, row);
+      continue;
+    }
     const existing = authoritativeByCheck.get(key);
     if (!existing) {
       authoritativeByCheck.set(key, row);
       continue;
     }
     const existingMs = parsedTimestampMs(existing.observed_at);
-    const rowMs = parsedTimestampMs(row.observed_at);
-    if (rowMs !== null && (existingMs === null || rowMs > existingMs)) {
+    if (existingMs === null || rowMs > existingMs) {
       authoritativeByCheck.set(key, row);
     }
   }
 
   const now = Date.now();
-  const staleChecks: StaleCheck[] = [];
+  const staleChecks: StaleCheck[] = [...malformedByCheck].map(([key, row]) => ({ key, row, ageHours: null }));
   for (const [key, row] of authoritativeByCheck) {
+    if (malformedByCheck.has(key)) continue;
     const ms = parsedTimestampMs(row.observed_at);
     if (ms === null) {
       staleChecks.push({ key, row, ageHours: null });
