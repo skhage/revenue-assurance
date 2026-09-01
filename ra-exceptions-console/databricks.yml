@@ -50,7 +50,7 @@ variables:
     default: ""
   genie_space_name:
     description: Display name of the RA Genie space (for the app resource binding).
-    default: "Lakelink Revenue Assurance Analyst"
+    default: "Lakelink Fiber Revenue Assurance Analyst"
 
 resources:
   apps:
