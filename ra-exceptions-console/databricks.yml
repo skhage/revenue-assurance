@@ -62,9 +62,8 @@ resources:
       # Start the app automatically on deploy.
       lifecycle:
         started: true
-      # Uncomment to enable on behalf of user API scopes. Available scopes: sql, dashboards.genie, files.files, serving.serving-endpoints
-      # user_api_scopes:
-      #   - sql
+      user_api_scopes:
+        - sql
 
       # The resources which this app has access to.
       resources:
