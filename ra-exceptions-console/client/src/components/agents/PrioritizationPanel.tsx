@@ -13,13 +13,13 @@ import {
   TableHead,
   TableCell,
 } from '@databricks/appkit-ui/react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { BlockedNotice } from './BlockedNotice';
 import { DemoBadge } from '../DemoBadge';
 import { LoadingRegion, ErrorRegion } from '../StatusRegion';
 import { checkLabel, accountLabel, usd } from '../../lib/format';
 import { analyticsApi } from '../../lib/analytics';
-import { casesApi, type CaseRow } from '../../lib/cases';
+import { casesApi, type CaseRow, type ExceptionMeta } from '../../lib/cases';
 import { rankExceptions } from '../../lib/agents/scoring';
 import { isBlocked, type PipelineHealth, type PriorityScore } from '../../lib/agents/types';
 import type { ExceptionRow } from '../../lib/types';
@@ -31,7 +31,21 @@ interface RankedRow {
   score: PriorityScore;
 }
 
-export function PrioritizationPanel({ health }: { health: PipelineHealth }) {
+interface Props {
+  health: PipelineHealth;
+  selected: ExceptionRow | null;
+  onSelect: (row: ExceptionRow) => void;
+}
+
+function auditNote(item: RankedRow): string {
+  return (
+    `[Agent: Smart Prioritization & Routing] run_at=${new Date().toISOString()} · ` +
+    `inputs={exception_id=${item.row.exception_id}} · ` +
+    `output={score=${item.score.score}, recommended_analyst=${item.score.recommendedAnalyst}, recommended_queue=${item.score.recommendedQueue}}`
+  );
+}
+
+export function PrioritizationPanel({ health, selected, onSelect }: Props) {
   const [ranked, setRanked] = useState<RankedRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -39,6 +53,12 @@ export function PrioritizationPanel({ health }: { health: PipelineHealth }) {
   const [applyingId, setApplyingId] = useState<string | null>(null);
   const [appliedIds, setAppliedIds] = useState<Set<string>>(new Set());
   const [applyError, setApplyError] = useState<string | null>(null);
+  const selectedRowRef = useRef<HTMLTableRowElement | null>(null);
+  // Tracks which exceptions already have their audit note durably written,
+  // so retrying a failed assignment never writes a duplicate note — the
+  // note is recorded exactly once per approved recommendation, before the
+  // assignment mutation, and a retry resumes at the mutation step only.
+  const notedIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (isBlocked(health.state)) return;
@@ -74,6 +94,12 @@ export function PrioritizationPanel({ health }: { health: PipelineHealth }) {
     return () => controller.abort();
   }, [health.state, refreshKey]);
 
+  useEffect(() => {
+    // scrollIntoView is absent in jsdom and some older embedded webviews —
+    // guard rather than assume every DOM implementation has it.
+    selectedRowRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [selected, ranked]);
+
   if (isBlocked(health.state)) {
     return <BlockedNotice health={health} />;
   }
@@ -81,21 +107,23 @@ export function PrioritizationPanel({ health }: { health: PipelineHealth }) {
   async function applyAssignment(item: RankedRow) {
     setApplyingId(item.row.exception_id);
     setApplyError(null);
+    const meta: ExceptionMeta = {
+      reference_id: item.row.reference_id,
+      account_name: item.row.account_name,
+      check_type: item.row.check_type,
+      severity: item.row.severity,
+      amount_at_risk: item.row.amount_at_risk,
+    };
     try {
-      await casesApi.assign(item.row.exception_id, item.score.recommendedAnalyst, {
-        reference_id: item.row.reference_id,
-        account_name: item.row.account_name,
-        check_type: item.row.check_type,
-        severity: item.row.severity,
-        amount_at_risk: item.row.amount_at_risk,
-      });
-      await casesApi.addNote(
-        item.row.exception_id,
-        `[Agent: Smart Prioritization & Routing] run_at=${new Date().toISOString()} · ` +
-          `inputs={exception_id=${item.row.exception_id}} · ` +
-          `output={score=${item.score.score}, recommended_analyst=${item.score.recommendedAnalyst}, recommended_queue=${item.score.recommendedQueue}}`,
-        {}
-      );
+      // Record the recommendation as an audit note BEFORE the assignment
+      // mutation — a human-approved recommendation is never lost even if
+      // the assignment call below fails. Skipped on retry once it has
+      // already landed (notedIdsRef), so retrying never double-notes.
+      if (!notedIdsRef.current.has(item.row.exception_id)) {
+        await casesApi.addNote(item.row.exception_id, auditNote(item), meta);
+        notedIdsRef.current.add(item.row.exception_id);
+      }
+      await casesApi.assign(item.row.exception_id, item.score.recommendedAnalyst, meta);
       setAppliedIds((prev) => new Set(prev).add(item.row.exception_id));
     } catch (e) {
       setApplyError(e instanceof Error ? e.message : 'Failed to assign');
@@ -147,35 +175,53 @@ export function PrioritizationPanel({ health }: { health: PipelineHealth }) {
                     <TableHead>Recommended analyst</TableHead>
                     <TableHead>Queue</TableHead>
                     <TableHead />
+                    <TableHead />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {ranked.slice(0, 20).map((item) => (
-                    <TableRow key={item.row.exception_id}>
-                      <TableCell className="max-w-40 truncate">{accountLabel(item.row.account_name)}</TableCell>
-                      <TableCell className="text-muted-foreground">{checkLabel(item.row.check_type)}</TableCell>
-                      <TableCell className="text-right font-mono tabular-nums text-destructive">
-                        {usd(item.row.amount_at_risk)}
-                      </TableCell>
-                      <TableCell className="text-right font-mono font-semibold tabular-nums">
-                        {item.score.score}
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {item.score.recommendedAnalyst.split('@')[0]}
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{item.score.recommendedQueue}</TableCell>
-                      <TableCell>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={applyingId === item.row.exception_id || appliedIds.has(item.row.exception_id)}
-                          onClick={() => void applyAssignment(item)}
-                        >
-                          {appliedIds.has(item.row.exception_id) ? 'Assigned' : 'Apply: assign'}
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {ranked.slice(0, 20).map((item) => {
+                    const isSelected = selected?.exception_id === item.row.exception_id;
+                    return (
+                      <TableRow
+                        key={item.row.exception_id}
+                        ref={isSelected ? selectedRowRef : undefined}
+                        data-state={isSelected ? 'selected' : undefined}
+                        className={isSelected ? 'bg-primary/5' : undefined}
+                      >
+                        <TableCell className="max-w-40 truncate">{accountLabel(item.row.account_name)}</TableCell>
+                        <TableCell className="text-muted-foreground">{checkLabel(item.row.check_type)}</TableCell>
+                        <TableCell className="text-right font-mono tabular-nums text-destructive">
+                          {usd(item.row.amount_at_risk)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono font-semibold tabular-nums">
+                          {item.score.score}
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {item.score.recommendedAnalyst.split('@')[0]}
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{item.score.recommendedQueue}</TableCell>
+                        <TableCell>
+                          <Button
+                            size="sm"
+                            variant={isSelected ? 'default' : 'outline'}
+                            onClick={() => onSelect(item.row)}
+                          >
+                            {isSelected ? 'Selected' : 'Carry forward'}
+                          </Button>
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={applyingId === item.row.exception_id || appliedIds.has(item.row.exception_id)}
+                            onClick={() => void applyAssignment(item)}
+                          >
+                            {appliedIds.has(item.row.exception_id) ? 'Assigned' : 'Apply: assign'}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </div>
