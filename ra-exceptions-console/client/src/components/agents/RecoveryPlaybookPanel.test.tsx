@@ -106,6 +106,7 @@ function distinctNoteInserts(notesByExceptionAndKey: Map<string, Set<string>>, e
 
 describe('RecoveryPlaybookPanel — failure-atomic mutation ordering', () => {
   afterEach(() => {
+    localStorage.clear();
     vi.unstubAllGlobals();
   });
 
@@ -127,7 +128,7 @@ describe('RecoveryPlaybookPanel — failure-atomic mutation ordering', () => {
     expect(noteIndex).toBeGreaterThanOrEqual(0);
     expect(assignIndex).toBeGreaterThan(noteIndex);
     expect(statusIndex).toBeGreaterThan(assignIndex);
-    expect(calls[noteIndex].body?.idempotencyKey).toBe('agent:recovery-playbook:exc-1');
+    expect(calls[noteIndex].body?.idempotencyKey).toMatch(/^agent:recovery-playbook:exc-1:/);
   });
 
   it('never mutates the case if the audit note write fails', async () => {
@@ -267,6 +268,30 @@ describe('RecoveryPlaybookPanel — failure-atomic mutation ordering', () => {
     expect(distinctNoteInserts(notesByExceptionAndKey, 'exc-1')).toBe(1);
   });
 
+  it('a new approved run after a completed run creates a second distinct durable note', async () => {
+    const { fetchMock, notesByExceptionAndKey } = makeTrackedFetch({
+      caseStatus: 'Recovering',
+      enforceNoteIdempotency: true,
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const user = userEvent.setup();
+    const first = render(<RecoveryPlaybookPanel health={OK_HEALTH} selected={EXCEPTION} onSelect={() => {}} />);
+    await user.click(await screen.findByRole('button', { name: /Apply: move case to Recovering/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Moved to Recovering/i })).toBeInTheDocument();
+    });
+
+    first.unmount();
+    render(<RecoveryPlaybookPanel health={OK_HEALTH} selected={EXCEPTION} onSelect={() => {}} />);
+    await user.click(await screen.findByRole('button', { name: /Apply: move case to Recovering/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Moved to Recovering/i })).toBeInTheDocument();
+    });
+
+    expect(distinctNoteInserts(notesByExceptionAndKey, 'exc-1')).toBe(2);
+  });
+
   it('resets apply state when the selected exception changes', async () => {
     const { fetchMock } = makeTrackedFetch({ caseStatus: 'New', enforceNoteIdempotency: true });
     vi.stubGlobal('fetch', fetchMock);
@@ -288,6 +313,7 @@ describe('RecoveryPlaybookPanel — failure-atomic mutation ordering', () => {
 
 describe('RecoveryPlaybookPanel — demo-data disclosure', () => {
   afterEach(() => {
+    localStorage.clear();
     vi.unstubAllGlobals();
   });
 

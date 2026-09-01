@@ -9,6 +9,7 @@ import { casesApi, type ExceptionMeta } from '../../lib/cases';
 import { useWhoAmI } from '../../lib/whoami';
 import { usd } from '../../lib/format';
 import { isBlocked, type PipelineHealth } from '../../lib/agents/types';
+import { beginApprovedRun, completeApprovedRun, type ApprovedRun } from '../../lib/agents/approvedRun';
 import type { ExceptionRow } from '../../lib/types';
 
 interface Props {
@@ -59,17 +60,18 @@ function RecoveryCard({ selected }: { selected: ExceptionRow }) {
       severity: selected.severity,
       amount_at_risk: selected.amount_at_risk,
     };
+    let run: ApprovedRun;
+    try {
+      run = beginApprovedRun('recovery-playbook', selected.exception_id);
+    } catch (e) {
+      setApplyState('error');
+      setApplyError(e instanceof Error ? e.message : 'Failed to persist approved run');
+      return;
+    }
     const note =
-      `[Agent: Recovery Playbook] run_at=${new Date().toISOString()} · ` +
+      `[Agent: Recovery Playbook] run_at=${run.approvedAt} · ` +
       `inputs={exception_id=${selected.exception_id}} · ` +
       `output={action="${rec.entry.action}", expected_recovery_usd=${rec.expectedRecoveryUsd}, owner=${rec.entry.ownerRole}, deadline=${rec.deadline}}`;
-    // Stable per (agent, exception) — NOT re-derived per click. The server
-    // enforces at most one note per (exception_id, idempotencyKey) pair, so
-    // this call is safe to retry after a lost response, a component
-    // remount, or a full page reload; it never depends on component-local
-    // state to avoid duplicates, unlike a client-only "already noted" flag,
-    // which is wiped out by exactly those events.
-    const idempotencyKey = `agent:recovery-playbook:${selected.exception_id}`;
     try {
       // Record the human-approved recommendation BEFORE attempting any case
       // mutation. If this write fails, no mutation is attempted at all — a
@@ -79,7 +81,7 @@ function RecoveryCard({ selected }: { selected: ExceptionRow }) {
       // lifecycle transition didn't finish; retrying resumes at the
       // mutation, and the server-side unique index guarantees the note
       // itself is never duplicated no matter how many times this call runs.
-      await casesApi.addNote(selected.exception_id, note, meta, idempotencyKey);
+      await casesApi.addNote(selected.exception_id, note, meta, run.idempotencyKey);
 
       // The case lifecycle only allows New→Investigating→Recovering (see
       // server/routes/cases.ts TRANSITIONS); walk that chain instead of
@@ -93,6 +95,7 @@ function RecoveryCard({ selected }: { selected: ExceptionRow }) {
       if (status !== 'Recovering') {
         await casesApi.changeStatus(selected.exception_id, 'Recovering', undefined, meta);
       }
+      completeApprovedRun('recovery-playbook', selected.exception_id, run.idempotencyKey);
       setApplyState('done');
     } catch (e) {
       setApplyState('error');
