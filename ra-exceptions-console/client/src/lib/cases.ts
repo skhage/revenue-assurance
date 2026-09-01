@@ -12,6 +12,7 @@ export interface CaseRow {
   amount_at_risk: number | null;
   status: Status;
   assignee: string | null;
+  recovered_amount?: number | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -59,11 +60,17 @@ export const casesApi = {
       body: JSON.stringify({ assignee, meta }),
     }).then((r) => json<CasePayload>(r)),
 
-  changeStatus: (id: string, status: Status, note: string | undefined, meta: ExceptionMeta) =>
+  changeStatus: (
+    id: string,
+    status: Status,
+    note: string | undefined,
+    meta: ExceptionMeta,
+    recovered_amount?: number | null
+  ) =>
     fetch(`/api/cases/${id}/status`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status, note, meta }),
+      body: JSON.stringify({ status, note, recovered_amount, meta }),
     }).then((r) => json<CasePayload>(r)),
 
   addNote: (id: string, body: string, meta: ExceptionMeta) =>

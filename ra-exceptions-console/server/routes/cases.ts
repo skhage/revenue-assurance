@@ -50,10 +50,14 @@ const CREATE_CASES_SQL = `
     amount_at_risk  DOUBLE PRECISION,
     status          TEXT NOT NULL DEFAULT 'New',
     assignee        TEXT,
+    recovered_amount DOUBLE PRECISION,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )
 `;
+
+// Idempotent migration for the already-deployed table (created before Gap 3).
+const ALTER_CASES_RECOVERED_SQL = `ALTER TABLE ra.cases ADD COLUMN IF NOT EXISTS recovered_amount DOUBLE PRECISION`;
 
 const CREATE_NOTES_SQL = `
   CREATE TABLE IF NOT EXISTS ra.case_notes (
@@ -84,6 +88,7 @@ const AssignBody = z.object({
 const StatusBody = z.object({
   status: z.enum(STATUSES),
   note: z.string().optional(),
+  recovered_amount: z.number().nonnegative().nullish(),
   meta: ExceptionMeta.optional(),
 });
 
@@ -101,6 +106,7 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase) {
   try {
     await appkit.lakebase.query(CREATE_SCHEMA_SQL);
     await appkit.lakebase.query(CREATE_CASES_SQL);
+    await appkit.lakebase.query(ALTER_CASES_RECOVERED_SQL);
     await appkit.lakebase.query(CREATE_NOTES_SQL);
     console.log('[cases] schema ra ready (ra.cases, ra.case_notes)');
   } catch (err) {
@@ -128,7 +134,7 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase) {
   async function loadCase(exceptionId: string) {
     const { rows } = await appkit.lakebase.query(
       `SELECT exception_id, reference_id, account_name, check_type, severity, amount_at_risk,
-              status, assignee, created_at, updated_at
+              status, assignee, recovered_amount, created_at, updated_at
        FROM ra.cases WHERE exception_id = $1`,
       [exceptionId],
     );
@@ -177,7 +183,7 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase) {
         }
         const { rows } = await appkit.lakebase.query(
           `SELECT exception_id, reference_id, account_name, check_type, severity, amount_at_risk,
-                  status, assignee, updated_at
+                  status, assignee, recovered_amount, updated_at
            FROM ra.cases ${where}
            ORDER BY updated_at DESC
            LIMIT 200`,
@@ -235,7 +241,7 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase) {
           return;
         }
         const { exceptionId } = req.params;
-        const { status: next, note, meta } = parsed.data;
+        const { status: next, note, recovered_amount, meta } = parsed.data;
 
         await ensureCase(exceptionId, meta);
         const existing = await loadCase(exceptionId);
@@ -257,10 +263,20 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase) {
           return;
         }
 
-        await appkit.lakebase.query(
-          `UPDATE ra.cases SET status = $2, updated_at = NOW() WHERE exception_id = $1`,
-          [exceptionId, next],
-        );
+        // Recovered is where exposure converts to recovered revenue — capture the
+        // recovered dollars (defaults to the full amount at risk if unspecified).
+        if (next === 'Recovered') {
+          const recovered = recovered_amount ?? (existing?.amount_at_risk as number | null) ?? 0;
+          await appkit.lakebase.query(
+            `UPDATE ra.cases SET status = $2, recovered_amount = $3, updated_at = NOW() WHERE exception_id = $1`,
+            [exceptionId, next, recovered],
+          );
+        } else {
+          await appkit.lakebase.query(
+            `UPDATE ra.cases SET status = $2, updated_at = NOW() WHERE exception_id = $1`,
+            [exceptionId, next],
+          );
+        }
         if (note?.trim()) {
           await appkit.lakebase.query(
             `INSERT INTO ra.case_notes (exception_id, author, body) VALUES ($1, $2, $3)`,

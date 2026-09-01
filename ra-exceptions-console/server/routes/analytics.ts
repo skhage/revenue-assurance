@@ -131,11 +131,13 @@ export function setupAnalyticsRoutes(appkit: AppKitWithAnalyticsAndLakebase) {
     app.get('/api/analytics/kpis', async (_req, res) => {
       try {
         const { rows: terminalCases } = await appkit.lakebase.query(
-          `SELECT exception_id FROM ra.cases WHERE status IN ('Recovered', 'WrittenOff')`
+          `SELECT exception_id, status, recovered_amount FROM ra.cases WHERE status IN ('Recovered', 'WrittenOff')`
         );
         const terminalIds = terminalCases
           .map((row) => String(row.exception_id))
           .filter((id) => /^[a-f0-9]{32}$/.test(id));
+        const recoveredCases = terminalCases.filter((row) => row.status === 'Recovered');
+        const recoveredAmount = recoveredCases.reduce((sum, row) => sum + numberValue(row.recovered_amount), 0);
         const openPredicate =
           terminalIds.length === 0 ? 'TRUE' : `exception_id NOT IN (${terminalIds.map((id) => `'${id}'`).join(', ')})`;
 
@@ -162,6 +164,8 @@ export function setupAnalyticsRoutes(appkit: AppKitWithAnalyticsAndLakebase) {
           total_at_risk: numberValue(row[1]),
           high_severity: numberValue(row[2]),
           accounts_affected: numberValue(row[3]),
+          recovered_amount: recoveredAmount,
+          recovered_count: recoveredCases.length,
         });
       } catch (err) {
         console.error('[analytics] KPI merge failed:', err);

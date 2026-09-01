@@ -6,6 +6,7 @@ import {
   SheetTitle,
   Button,
   Textarea,
+  Input,
   Separator,
   Skeleton,
   Alert,
@@ -216,6 +217,8 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingRecovered, setPendingRecovered] = useState(false);
+  const [recoveredInput, setRecoveredInput] = useState('');
 
   const meta: ExceptionMeta = exception
     ? {
@@ -231,6 +234,8 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
     if (!exception || !open) return;
     setActionError(null);
     setNote('');
+    setPendingRecovered(false);
+    setRecoveredInput('');
     setScorecardRefreshKey(0);
     setCaseLoading(true);
     casesApi
@@ -336,37 +341,95 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
                 {terminal ? (
                   <div className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
                     This case is closed ({status}).
+                    {status === 'Recovered' && payload.case?.recovered_amount != null && (
+                      <span className="ml-1 font-medium text-success">
+                        {usd(payload.case.recovered_amount)} recovered.
+                      </span>
+                    )}
                   </div>
                 ) : (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={busy || payload.case?.assignee === me}
-                      onClick={() => void run(() => casesApi.assign(exception.exception_id, me, meta))}
-                    >
-                      {payload.case?.assignee === me ? 'Assigned to you' : 'Assign to me'}
-                    </Button>
+                  <div className="flex flex-col gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busy || payload.case?.assignee === me}
+                        onClick={() => void run(() => casesApi.assign(exception.exception_id, me, meta))}
+                      >
+                        {payload.case?.assignee === me ? 'Assigned to you' : 'Assign to me'}
+                      </Button>
 
-                    <Select
-                      disabled={busy || nextStates.length === 0}
-                      onValueChange={(v) =>
-                        void run(() =>
-                          casesApi.changeStatus(exception.exception_id, v as Status, note.trim() || undefined, meta)
-                        )
-                      }
-                    >
-                      <SelectTrigger className="h-8 w-[168px]">
-                        <SelectValue placeholder="Change status…" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {nextStates.map((s) => (
-                          <SelectItem key={s} value={s}>
-                            Move to {s}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                      <Select
+                        disabled={busy || nextStates.length === 0 || pendingRecovered}
+                        value=""
+                        onValueChange={(v) => {
+                          if (v === 'Recovered') {
+                            setRecoveredInput(String(Math.round(exception.amount_at_risk)));
+                            setPendingRecovered(true);
+                          } else {
+                            void run(() =>
+                              casesApi.changeStatus(exception.exception_id, v as Status, note.trim() || undefined, meta)
+                            );
+                          }
+                        }}
+                      >
+                        <SelectTrigger className="h-8 w-[168px]">
+                          <SelectValue placeholder="Change status…" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {nextStates.map((s) => (
+                            <SelectItem key={s} value={s}>
+                              Move to {s}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {pendingRecovered && (
+                      <div className="flex flex-col gap-2 rounded-md border border-success/40 bg-success/5 p-3">
+                        <label className="text-xs font-medium text-foreground" htmlFor="recovered-amt">
+                          Recovered amount (USD)
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            id="recovered-amt"
+                            type="number"
+                            min={0}
+                            inputMode="decimal"
+                            value={recoveredInput}
+                            onChange={(e) => setRecoveredInput(e.target.value)}
+                            className="h-8 w-40"
+                          />
+                          <Button
+                            size="sm"
+                            disabled={busy || recoveredInput === '' || Number(recoveredInput) < 0}
+                            onClick={() =>
+                              void run(async () => {
+                                const p = await casesApi.changeStatus(
+                                  exception.exception_id,
+                                  'Recovered',
+                                  note.trim() || undefined,
+                                  meta,
+                                  Number(recoveredInput)
+                                );
+                                setPendingRecovered(false);
+                                return p;
+                              })
+                            }
+                          >
+                            Confirm recovery
+                          </Button>
+                          <Button variant="ghost" size="sm" disabled={busy} onClick={() => setPendingRecovered(false)}>
+                            Cancel
+                          </Button>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">
+                          Defaults to the full amount at risk ({usd(exception.amount_at_risk)}). Adjust to the amount
+                          actually recovered or prevented.
+                        </p>
+                      </div>
+                    )}
                   </div>
                 )}
               </>
