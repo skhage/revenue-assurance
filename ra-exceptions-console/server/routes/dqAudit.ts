@@ -128,26 +128,57 @@ export function parseDqAuditRows(dataArray: unknown[][]): DqAuditRow[] {
   });
 }
 
+/** Identifies one required, independently-freshness-checked DQ check. */
+function checkKey(row: DqAuditRow): string {
+  return `${row.dataset}::${row.expectation_name}`;
+}
+
+function parsedTimestampMs(observedAt: string | null): number | null {
+  if (observedAt == null) return null;
+  const ms = new Date(observedAt).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+interface StaleCheck {
+  key: string;
+  row: DqAuditRow;
+  ageHours: number | null;
+}
+
 /**
  * Pure summarization of dq_audit rows into a block/warn/ok signal for the
  * Agent Workbench. Kept free of any Express/AppKit dependency so it is
  * directly unit-testable (see dqAudit.test.ts) — the only logic in this file
  * that decides whether downstream agent panels are allowed to recommend.
+ *
+ * Freshness is evaluated per required check, not globally. A required check
+ * is a distinct (dataset, expectation_name) pair whose `check_type` is
+ * `'INLINE'` — the only category sourced from the pipeline event log and
+ * therefore the only one with a genuine per-run timestamp (`DQ-1`/`DQ-5` are
+ * live set-level checks computed at query time with no timestamp concept;
+ * their correctness is fully captured by the GREEN/RED check below, so they
+ * are exempt from freshness). For each required check we pick the
+ * authoritative row — the one with the latest *valid* `observed_at` among
+ * any rows sharing that (dataset, expectation_name) — and evaluate its
+ * freshness independently. This is deliberately NOT "take the single
+ * freshest timestamp across every row and check that": a global freshest-
+ * wins comparison lets one recently-run check mask another required check
+ * that is stale or has no timestamp at all, which is the fail-open bug this
+ * function exists to close. If ANY required check's authoritative row is
+ * missing/unparseable or older than the threshold, the whole pipeline is
+ * reported stale — a stale/malformed check can never be hidden by a fresh
+ * one elsewhere.
  */
 export function summarizePipelineHealth(rows: DqAuditRow[], staleThresholdHours = 72): PipelineHealth {
   if (rows.length === 0) {
     return { state: 'unavailable', reason: 'No pipeline DQ audit data is available.', rows, freshestObservedAt: null };
   }
 
-  const redRows = rows.filter((r) => r.status === 'RED');
-  const observedTimestamps = rows
-    .map((r) => r.observed_at)
-    .filter((v): v is string => v != null)
-    .map((v) => new Date(v).getTime())
-    .filter((t) => Number.isFinite(t));
-  const freshestMs = observedTimestamps.length > 0 ? Math.max(...observedTimestamps) : null;
+  const allValidTimestamps = rows.map((r) => parsedTimestampMs(r.observed_at)).filter((t): t is number => t !== null);
+  const freshestMs = allValidTimestamps.length > 0 ? Math.max(...allValidTimestamps) : null;
   const freshestObservedAt = freshestMs != null ? new Date(freshestMs).toISOString() : null;
 
+  const redRows = rows.filter((r) => r.status === 'RED');
   if (redRows.length > 0) {
     const names = redRows
       .map((r) => `${r.dataset}/${r.expectation_name}`)
@@ -161,20 +192,61 @@ export function summarizePipelineHealth(rows: DqAuditRow[], staleThresholdHours 
     };
   }
 
-  if (freshestMs == null) {
+  const requiredRows = rows.filter((r) => r.check_type === 'INLINE');
+  if (requiredRows.length === 0) {
     return {
       state: 'stale',
       reason: 'DQ checks are green but no observation timestamp is available to confirm freshness.',
       rows,
-      freshestObservedAt: null,
+      freshestObservedAt,
     };
   }
 
-  const ageHours = (Date.now() - freshestMs) / (1000 * 60 * 60);
-  if (ageHours > staleThresholdHours) {
+  // Authoritative row per required check: the latest row with a *valid*
+  // timestamp wins; if none of a check's rows has a valid timestamp, that
+  // check's authoritative row is whichever row we saw (its lack of a valid
+  // timestamp is itself the failure).
+  const authoritativeByCheck = new Map<string, DqAuditRow>();
+  for (const row of requiredRows) {
+    const key = checkKey(row);
+    const existing = authoritativeByCheck.get(key);
+    if (!existing) {
+      authoritativeByCheck.set(key, row);
+      continue;
+    }
+    const existingMs = parsedTimestampMs(existing.observed_at);
+    const rowMs = parsedTimestampMs(row.observed_at);
+    if (rowMs !== null && (existingMs === null || rowMs > existingMs)) {
+      authoritativeByCheck.set(key, row);
+    }
+  }
+
+  const now = Date.now();
+  const staleChecks: StaleCheck[] = [];
+  for (const [key, row] of authoritativeByCheck) {
+    const ms = parsedTimestampMs(row.observed_at);
+    if (ms === null) {
+      staleChecks.push({ key, row, ageHours: null });
+      continue;
+    }
+    const ageHours = (now - ms) / (1000 * 60 * 60);
+    if (ageHours > staleThresholdHours) {
+      staleChecks.push({ key, row, ageHours });
+    }
+  }
+
+  if (staleChecks.length > 0) {
+    const names = staleChecks
+      .map(({ row, ageHours }) =>
+        ageHours === null
+          ? `${row.dataset}/${row.expectation_name} (no observation timestamp)`
+          : `${row.dataset}/${row.expectation_name} (${Math.round(ageHours)}h old)`
+      )
+      .slice(0, 3)
+      .join(', ');
     return {
       state: 'stale',
-      reason: `Freshest DQ observation is ${Math.round(ageHours)}h old (threshold ${staleThresholdHours}h).`,
+      reason: `${staleChecks.length} required DQ check(s) are stale or missing an observation timestamp (${names}${staleChecks.length > 3 ? ', …' : ''}); threshold ${staleThresholdHours}h.`,
       rows,
       freshestObservedAt,
     };

@@ -1,5 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, Button } from '@databricks/appkit-ui/react';
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { ExceptionPicker } from './ExceptionPicker';
 import { BlockedNotice } from './BlockedNotice';
 import { DemoBadge } from '../DemoBadge';
@@ -32,9 +32,10 @@ export function RecoveryPlaybookPanel({ health, selected, onSelect }: Props) {
         </div>
       ) : (
         // Keyed on the selected exception so switching exceptions remounts
-        // this card, resetting apply state and the noted-once guard below —
-        // without an effect that calls setState synchronously on every
-        // render.
+        // this card, resetting apply state — without an effect that calls
+        // setState synchronously on every render. Note deduplication itself
+        // is server-side (idempotencyKey), so it survives this remount
+        // (and a full page reload) regardless.
         <RecoveryCard key={selected.exception_id} selected={selected} />
       )}
     </div>
@@ -45,10 +46,6 @@ function RecoveryCard({ selected }: { selected: ExceptionRow }) {
   const me = useWhoAmI();
   const [applyState, setApplyState] = useState<'idle' | 'busy' | 'done' | 'error'>('idle');
   const [applyError, setApplyError] = useState<string | null>(null);
-  // Tracks whether the audit note for this exception has already been
-  // durably written, so a retry after a failed mutation step never
-  // re-notes — the note is written exactly once per approved action.
-  const notedRef = useRef(false);
 
   const rec = buildRecommendation(selected);
 
@@ -66,6 +63,13 @@ function RecoveryCard({ selected }: { selected: ExceptionRow }) {
       `[Agent: Recovery Playbook] run_at=${new Date().toISOString()} · ` +
       `inputs={exception_id=${selected.exception_id}} · ` +
       `output={action="${rec.entry.action}", expected_recovery_usd=${rec.expectedRecoveryUsd}, owner=${rec.entry.ownerRole}, deadline=${rec.deadline}}`;
+    // Stable per (agent, exception) — NOT re-derived per click. The server
+    // enforces at most one note per (exception_id, idempotencyKey) pair, so
+    // this call is safe to retry after a lost response, a component
+    // remount, or a full page reload; it never depends on component-local
+    // state to avoid duplicates, unlike a client-only "already noted" flag,
+    // which is wiped out by exactly those events.
+    const idempotencyKey = `agent:recovery-playbook:${selected.exception_id}`;
     try {
       // Record the human-approved recommendation BEFORE attempting any case
       // mutation. If this write fails, no mutation is attempted at all — a
@@ -73,11 +77,9 @@ function RecoveryCard({ selected }: { selected: ExceptionRow }) {
       // later mutation step fails, this note has already landed, so a
       // human reviewing the case sees exactly what was approved even if the
       // lifecycle transition didn't finish; retrying resumes at the
-      // mutation without re-writing the note (see notedRef).
-      if (!notedRef.current) {
-        await casesApi.addNote(selected.exception_id, note, meta);
-        notedRef.current = true;
-      }
+      // mutation, and the server-side unique index guarantees the note
+      // itself is never duplicated no matter how many times this call runs.
+      await casesApi.addNote(selected.exception_id, note, meta, idempotencyKey);
 
       // The case lifecycle only allows New→Investigating→Recovering (see
       // server/routes/cases.ts TRANSITIONS); walk that chain instead of
