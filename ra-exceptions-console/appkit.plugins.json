@@ -178,7 +178,8 @@
             "After init, configure the 'spaces' map in plugin config with alias-to-Space-ID mappings"
           ]
         }
-      }
+      },
+      "requiredByTemplate": true
     },
     "jobs": {
       "name": "jobs",

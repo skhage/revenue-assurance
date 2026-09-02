@@ -18,6 +18,7 @@ import {
 } from '@databricks/appkit-ui/react';
 import { sql } from '@databricks/appkit-ui/js';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router';
 import { Search } from 'lucide-react';
 import { SeverityBadge, StatusChip } from '../components/badges';
 import { ExceptionDrawer } from '../components/ExceptionDrawer';
@@ -31,10 +32,14 @@ import type { ExceptionRow } from '../lib/types';
 const PAGE_SIZE = 25;
 
 export function QueuePage() {
-  const [checkType, setCheckType] = useState('ALL');
-  const [severity, setSeverity] = useState('ALL');
-  const [searchInput, setSearchInput] = useState('');
-  const [search, setSearch] = useState('');
+  // Deep-linkable filters: the AI/BI dashboard (and any shared link) can drill
+  // in with ?check_type=…&severity=…&q=… ; filter changes sync back to the URL.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialSearch = searchParams.get('q') ?? '';
+  const [checkType, setCheckType] = useState(() => searchParams.get('check_type') ?? 'ALL');
+  const [severity, setSeverity] = useState(() => (searchParams.get('severity') ?? 'ALL').toUpperCase());
+  const [searchInput, setSearchInput] = useState(initialSearch);
+  const [search, setSearch] = useState(initialSearch);
   const [offset, setOffset] = useState(0);
   const [rows, setRows] = useState<ExceptionRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -107,6 +112,15 @@ export function QueuePage() {
       });
     return () => controller.abort();
   }, [filters, refreshKey]);
+
+  // Reflect the active filters in the URL so a view is shareable / deep-linkable.
+  useEffect(() => {
+    const next = new URLSearchParams();
+    if (checkType !== 'ALL') next.set('check_type', checkType);
+    if (severity !== 'ALL') next.set('severity', severity);
+    if (search) next.set('q', search);
+    setSearchParams(next, { replace: true });
+  }, [checkType, severity, search, setSearchParams]);
 
   function openRow(row: ExceptionRow) {
     setSelected(row);

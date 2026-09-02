@@ -6,6 +6,7 @@ import {
   SheetTitle,
   Button,
   Textarea,
+  Input,
   Separator,
   Skeleton,
   Alert,
@@ -25,6 +26,7 @@ import { FileText, ExternalLink } from 'lucide-react';
 import { usd, num, checkLabel, accountLabel, detectionLabel, sourceLabel } from '../lib/format';
 import { casesApi, NEXT_STATUS, type CasePayload, type Status, type ExceptionMeta } from '../lib/cases';
 import { evidenceApi, type EvidencePayload, type EvidenceRow, type EvidenceFormat } from '../lib/evidence';
+import { architectureApi, exploreDataUrl, type ArchitectureConfig } from '../lib/architecture';
 import { useWhoAmI } from '../lib/whoami';
 import type { ExceptionRow } from '../lib/types';
 
@@ -53,6 +55,7 @@ function EvidenceSection({ exception }: { exception: ExceptionRow }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const [showPdf, setShowPdf] = useState(false);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -128,22 +131,39 @@ function EvidenceSection({ exception }: { exception: ExceptionRow }) {
         <KV key={r.label} k={r.label} v={fmtEvidence(r.value, r.format)} />
       ))}
       {data.document && (
-        <div className="mt-1">
-          {data.document.url ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => window.open(data.document!.url!, '_blank', 'noopener,noreferrer')}
-            >
+        <div className="mt-1 flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant={showPdf ? 'default' : 'outline'} size="sm" onClick={() => setShowPdf((v) => !v)}>
               <FileText className="mr-1.5 h-4 w-4" />
-              {data.document.label}
-              <ExternalLink className="ml-1.5 h-3.5 w-3.5 opacity-60" />
+              {showPdf ? 'Hide PDF' : 'View PDF'}
             </Button>
-          ) : (
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <FileText className="h-3.5 w-3.5" />
-              <span className="font-mono">{data.document.fileName}</span>
-            </div>
+            {data.document.url && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => window.open(data.document!.url!, '_blank', 'noopener,noreferrer')}
+              >
+                Open in workspace
+                <ExternalLink className="ml-1.5 h-3.5 w-3.5 opacity-60" />
+              </Button>
+            )}
+          </div>
+          {showPdf && (
+            <object
+              data={`/api/documents?path=${encodeURIComponent(data.document.fileName)}`}
+              type="application/pdf"
+              className="h-[26rem] w-full rounded-md border border-border"
+              aria-label="Source document PDF"
+            >
+              <div className="p-3 text-xs text-muted-foreground">
+                Can’t display the PDF inline.{' '}
+                {data.document.url && (
+                  <a href={data.document.url} target="_blank" rel="noopener noreferrer" className="text-primary underline">
+                    Open it in the workspace
+                  </a>
+                )}
+              </div>
+            </object>
           )}
         </div>
       )}
@@ -216,6 +236,24 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingRecovered, setPendingRecovered] = useState(false);
+  const [recoveredInput, setRecoveredInput] = useState('');
+  const [ucCfg, setUcCfg] = useState<ArchitectureConfig | null>(null);
+
+  useEffect(() => {
+    if (!open || ucCfg) return;
+    architectureApi
+      .config()
+      .then(setUcCfg)
+      .catch(() => {
+        /* lineage link stays hidden if config is unavailable */
+      });
+  }, [open, ucCfg]);
+
+  const sourceUcUrl =
+    ucCfg && exception?.source_table
+      ? exploreDataUrl(ucCfg, `${ucCfg.catalog}/${exception.source_table.replace('.', '/')}`)
+      : null;
 
   const meta: ExceptionMeta = exception
     ? {
@@ -231,6 +269,8 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
     if (!exception || !open) return;
     setActionError(null);
     setNote('');
+    setPendingRecovered(false);
+    setRecoveredInput('');
     setScorecardRefreshKey(0);
     setCaseLoading(true);
     casesApi
@@ -285,6 +325,17 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
             <KV k="Source system" v={<span className="text-xs">{sourceLabel(exception.source_table)}</span>} />
             <KV k="Known leakage" v={exception.known_leakage_flag ? 'Yes (seeded ground truth)' : 'No'} />
             <KV k="Customer ID" v={exception.customer_id ? num(exception.customer_id) : '—'} />
+            {sourceUcUrl && (
+              <a
+                href={sourceUcUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-0.5 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+              >
+                View source in Unity Catalog (lineage)
+                <ExternalLink className="h-3.5 w-3.5 opacity-70" />
+              </a>
+            )}
           </div>
 
           <Separator />
@@ -336,37 +387,95 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
                 {terminal ? (
                   <div className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
                     This case is closed ({status}).
+                    {status === 'Recovered' && payload.case?.recovered_amount != null && (
+                      <span className="ml-1 font-medium text-success">
+                        {usd(payload.case.recovered_amount)} recovered.
+                      </span>
+                    )}
                   </div>
                 ) : (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={busy || payload.case?.assignee === me}
-                      onClick={() => void run(() => casesApi.assign(exception.exception_id, me, meta))}
-                    >
-                      {payload.case?.assignee === me ? 'Assigned to you' : 'Assign to me'}
-                    </Button>
+                  <div className="flex flex-col gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busy || payload.case?.assignee === me}
+                        onClick={() => void run(() => casesApi.assign(exception.exception_id, me, meta))}
+                      >
+                        {payload.case?.assignee === me ? 'Assigned to you' : 'Assign to me'}
+                      </Button>
 
-                    <Select
-                      disabled={busy || nextStates.length === 0}
-                      onValueChange={(v) =>
-                        void run(() =>
-                          casesApi.changeStatus(exception.exception_id, v as Status, note.trim() || undefined, meta)
-                        )
-                      }
-                    >
-                      <SelectTrigger className="h-8 w-[168px]">
-                        <SelectValue placeholder="Change status…" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {nextStates.map((s) => (
-                          <SelectItem key={s} value={s}>
-                            Move to {s}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                      <Select
+                        disabled={busy || nextStates.length === 0 || pendingRecovered}
+                        value=""
+                        onValueChange={(v) => {
+                          if (v === 'Recovered') {
+                            setRecoveredInput(String(Math.round(exception.amount_at_risk)));
+                            setPendingRecovered(true);
+                          } else {
+                            void run(() =>
+                              casesApi.changeStatus(exception.exception_id, v as Status, note.trim() || undefined, meta)
+                            );
+                          }
+                        }}
+                      >
+                        <SelectTrigger className="h-8 w-[168px]">
+                          <SelectValue placeholder="Change status…" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {nextStates.map((s) => (
+                            <SelectItem key={s} value={s}>
+                              Move to {s}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {pendingRecovered && (
+                      <div className="flex flex-col gap-2 rounded-md border border-success/40 bg-success/5 p-3">
+                        <label className="text-xs font-medium text-foreground" htmlFor="recovered-amt">
+                          Recovered amount (USD)
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            id="recovered-amt"
+                            type="number"
+                            min={0}
+                            inputMode="decimal"
+                            value={recoveredInput}
+                            onChange={(e) => setRecoveredInput(e.target.value)}
+                            className="h-8 w-40"
+                          />
+                          <Button
+                            size="sm"
+                            disabled={busy || recoveredInput === '' || Number(recoveredInput) < 0}
+                            onClick={() =>
+                              void run(async () => {
+                                const p = await casesApi.changeStatus(
+                                  exception.exception_id,
+                                  'Recovered',
+                                  note.trim() || undefined,
+                                  meta,
+                                  Number(recoveredInput)
+                                );
+                                setPendingRecovered(false);
+                                return p;
+                              })
+                            }
+                          >
+                            Confirm recovery
+                          </Button>
+                          <Button variant="ghost" size="sm" disabled={busy} onClick={() => setPendingRecovered(false)}>
+                            Cancel
+                          </Button>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">
+                          Defaults to the full amount at risk ({usd(exception.amount_at_risk)}). Adjust to the amount
+                          actually recovered or prevented.
+                        </p>
+                      </div>
+                    )}
                   </div>
                 )}
               </>

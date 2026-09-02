@@ -46,8 +46,11 @@ variables:
     description: >-
       Space ID of the RA Genie space (root bundle
       resources/revenue_assurance.geniespace.json). Find it on the Genie
-      space's About tab.
+      space's About tab. Also powers the in-app Genie chat tab.
     default: ""
+  genie_space_name:
+    description: Display name of the RA Genie space (for the app resource binding).
+    default: "Lakelink Fiber Revenue Assurance Analyst"
 
 resources:
   apps:
@@ -74,6 +77,13 @@ resources:
             branch: ${var.postgres_branch}
             database: ${var.postgres_database}
             permission: CAN_CONNECT_AND_CREATE
+        # Governed access for the in-app Genie chat tab (Gap 4). The app SP runs
+        # the space with CAN_RUN; the plugin reads DATABRICKS_GENIE_SPACE_ID.
+        - name: genie-space
+          genie_space:
+            name: ${var.genie_space_name}
+            space_id: ${var.ra_genie_space_id}
+            permission: CAN_RUN
 
       # App runtime environment. NOTE: this bundle-level `config.env` REPLACES
       # app.yaml's `env` block on deploy (it does not merge), so the resource
@@ -97,6 +107,9 @@ resources:
             value: ${var.ra_dashboard_id}
           - name: RA_GENIE_SPACE_ID
             value: ${var.ra_genie_space_id}
+          # Read by the @databricks/appkit genie() plugin for the in-app chat tab.
+          - name: DATABRICKS_GENIE_SPACE_ID
+            value_from: genie-space
           - name: RA_LAKEBASE_PROJECT
             value: ${var.postgres_project}
 

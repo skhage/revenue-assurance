@@ -1,6 +1,7 @@
 import { sql } from '@databricks/appkit';
 import { z } from 'zod';
 import type { Application } from 'express';
+import { resultRows, type WarehouseResult } from '../warehouse-result';
 
 /**
  * Check-type-aware evidence (Gap 2 + document reconciliation, Gap 1).
@@ -22,7 +23,7 @@ interface AppKitAnalytics {
     query(
       text: string,
       params?: Record<string, ReturnType<(typeof sql)['string']>>
-    ): Promise<{ data_array?: unknown[][] }>;
+    ): Promise<WarehouseResult>;
   };
   server: { extend(fn: (app: Application) => void): void };
 }
@@ -75,10 +76,10 @@ export function setupEvidenceRoutes(appkit: AppKitAnalytics) {
         res.status(400).json({ error: 'Invalid evidence request' });
         return;
       }
-      const { check_type, reference_id, customer_id } = parsed.data;
+      const { check_type, reference_id } = parsed.data;
 
       try {
-        const payload = await buildEvidence(appkit, check_type, reference_id, customer_id);
+        const payload = await buildEvidence(appkit, check_type, reference_id);
         res.json(payload);
       } catch (err) {
         console.error('[evidence] failed for', check_type, err);
@@ -94,16 +95,17 @@ async function one(
   params: Record<string, ReturnType<(typeof sql)['string']>>
 ): Promise<unknown[] | null> {
   const r = await appkit.analytics.query(text, params);
-  return r.data_array?.[0] ?? null;
+  return resultRows(r)[0] ?? null;
 }
 
 async function buildEvidence(
   appkit: AppKitAnalytics,
   check: string,
-  ref: string,
-  cid: string
+  ref: string
 ): Promise<EvidencePayload> {
-  const p = { ref: sql.string(ref), cid: sql.string(cid) };
+  // Only :ref is referenced by the per-check SQL below — do NOT bind extra
+  // params (Databricks rejects a supplied-but-unused parameter marker).
+  const p = { ref: sql.string(ref) };
 
   // ---- Contract price family -------------------------------------------------
   if (check === 'contract_price_mismatch' || check === 'contract_price_missing_erp') {
@@ -270,14 +272,17 @@ async function buildEvidence(
       p
     );
     if (!row) return empty('doc_contract');
+    // Warehouse booleans arrive as strings, so derive the highlight by comparing
+    // the PDF value against the system value directly (mismatch = they differ).
+    const diff = (a: unknown, b: unknown) => str(a) !== str(b);
     return {
       kind: 'doc_contract',
       comparison: { leftLabel: 'Contract PDF', rightLabel: 'System (CRM)' },
       rows: [
-        { label: 'SLA tier', left: str(row[0]), right: str(row[1]), format: 'text', mismatch: row[8] === true },
-        { label: 'Term (months)', left: row[2], right: row[3], format: 'int', mismatch: row[9] === true },
-        { label: 'Auto-renew', left: row[4], right: row[5], format: 'bool', mismatch: row[10] === true },
-        { label: 'Status', left: str(row[6]), right: str(row[7]), format: 'text', mismatch: row[11] === true },
+        { label: 'SLA tier', left: str(row[0]), right: str(row[1]), format: 'text', mismatch: diff(row[0], row[1]) },
+        { label: 'Term (months)', left: row[2], right: row[3], format: 'int', mismatch: diff(row[2], row[3]) },
+        { label: 'Auto-renew', left: row[4], right: row[5], format: 'bool', mismatch: diff(row[4], row[5]) },
+        { label: 'Status', left: str(row[6]), right: str(row[7]), format: 'text', mismatch: diff(row[6], row[7]) },
       ],
       document: { label: 'Open contract PDF', ...volumeUrl(str(row[12])) },
       note: 'AI-extracted terms from the signed MSA PDF vs the system of record. Highlighted rows diverge.',
