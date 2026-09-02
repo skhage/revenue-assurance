@@ -15,6 +15,7 @@ import { BlockedNotice } from './BlockedNotice';
 import { DemoBadge } from '../DemoBadge';
 import { LoadingRegion, ErrorRegion } from '../StatusRegion';
 import { buildHypothesis, type ExceptionDetailRow } from '../../lib/agents/hypothesis';
+import { beginApprovedRun, completeApprovedRun, type ApprovedRun } from '../../lib/agents/approvedRun';
 import { casesApi, type ExceptionMeta } from '../../lib/cases';
 import { isBlocked, type PipelineHealth } from '../../lib/agents/types';
 import type { ExceptionRow } from '../../lib/types';
@@ -25,9 +26,9 @@ interface Props {
   onSelect: (row: ExceptionRow) => void;
 }
 
-function noteBody(exceptionId: string, hypothesis: ReturnType<typeof buildHypothesis>): string {
+function noteBody(exceptionId: string, hypothesis: ReturnType<typeof buildHypothesis>, approvedAt: string): string {
   return (
-    `[Agent: Exception Investigation] run_at=${new Date().toISOString()} · ` +
+    `[Agent: Exception Investigation] run_at=${approvedAt} · ` +
     `inputs={exception_id=${exceptionId}} · ` +
     `output={confidence=${hypothesis.confidence}, hypothesis="${hypothesis.text}", next_step="${hypothesis.nextStep}"}`
   );
@@ -82,8 +83,19 @@ function EvidenceCardInner({ selected, onRetryEvidence }: { selected: ExceptionR
       severity: selected.severity,
       amount_at_risk: selected.amount_at_risk,
     };
+    let run: ApprovedRun;
     try {
-      await casesApi.addNote(selected.exception_id, noteBody(selected.exception_id, hypothesis), meta);
+      run = beginApprovedRun('exception-investigation', selected.exception_id, (approvedAt) =>
+        noteBody(selected.exception_id, hypothesis, approvedAt)
+      );
+    } catch (e) {
+      setApplyState('error');
+      setApplyError(e instanceof Error ? e.message : 'Failed to persist approved run');
+      return;
+    }
+    try {
+      await casesApi.addNote(selected.exception_id, run.noteBody, meta, run.idempotencyKey);
+      completeApprovedRun('exception-investigation', selected.exception_id, run.idempotencyKey);
       setApplyState('done');
     } catch (e) {
       setApplyState('error');
