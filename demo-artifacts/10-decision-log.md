@@ -3,34 +3,41 @@
 **Demo:** Revenue Assurance Lakehouse for Lakelink Fiber (pitched to Lumen Technologies) · **Catalog:** `cdm_tmforum` · **App:** RA Exceptions Console · **Repo:** `revenue-assurance` · **Cloud:** FEVM (serverless, `demo` profile)
 
 > **Scrutiny summary**
+>
 > - ✅ **2026-08-25:** Refinement recorded: ADR-013 clarified to single `cdm_tmforum.revenue_assurance` schema (not split ra_silver/ra_gold); 7 silver check MVs (contract-price, discount-auth, FX, AR-aging, rev-rec, doc-intel×2) feeding gold_leakage_summary; no materialized service_instance bridge; case state moved to Lakebase Postgres; app framework is Databricks AppKit (React/TS) instead of implied FastAPI; reconciliation SQL files under reconciliation/pipelines/ (+ reconciliation/warehouse/); see 2026-08-25 entry below.
 > - ❌ **Was:** 12 ADRs assuming synthetic bronze-layer generation (~2K customers, ~25K circuits) and a `lumen_ra` catalog
 > - ✅ **Now:** Added **ADR-000** (reuse `cdm_tmforum` vs. generate), removed synthetic-data generation ADR, reframed 10 core ADRs around data reuse. **ADR-008** now states real scale (~10K customers, ~100K circuits).
 > - ❌ **Was:** ADR-007 framed Azure as "flagship reference" per Rogers, asserting it as architectural fact
-> - ✅ **Now:** ADR-007 acknowledges cloud is FEVM at deploy time; Rogers narrative is *reference*, not an assertion about this demo's cloud.
+> - ✅ **Now:** ADR-007 acknowledges cloud is FEVM at deploy time; Rogers narrative is _reference_, not an assertion about this demo's cloud.
 > - ✅ **Added:** ADR-013 (build `ra_silver`/`ra_gold` in `cdm_tmforum` vs. separate `lumen_ra` catalog) — reflects ground truth that `tmf_*` are read-only, new schemas stay in same catalog.
 > - ✅ **Verified:** All product names (Lakeflow Declarative Pipelines, Unity Catalog, Genie, MLflow, Databricks Apps, DABs, serverless) are current and correctly cited per README and web-verifiable Databricks docs.
+> - ✅ **2026-09-01 correction:** ADR-015 Agent Workbench refinements after cross-review — `stale` DQ evidence is now a hard block (not a soft warning) via a single `isBlocked()` gate every panel calls; the DQ route now fails closed on any null/unrecognized/inconsistent status row (never defaults to GREEN); every "Apply" writes its audit note _before_ the case mutation and never re-writes it on retry; Recovery Playbook's recovery %/owner/deadline are now labeled "Demo data" (the earlier "no invented facts" framing overstated it); selection is now shared across Investigate, Prioritize & route, _and_ Recovery playbook (previously Prioritize & route was disconnected). See the addendum at the end of this file.
+> - ✅ **2026-09-01 second correction:** ADR-015 refinements after a second round of cross-review — DQ freshness is now evaluated per required check (not by a single global freshest timestamp, which let one fresh check mask another stale/timestamp-less one); note-write deduplication moved from a client-local `ref` to a server-enforced Postgres unique index keyed on `(exception_id, idempotency_key)`, durable across component remounts, page reloads, and ambiguous lost-response retries; Prioritize & route now explicitly merges and scores the selected exception so it is always visible and actionable, even when absent from the default batch or ranked outside the visible top 20. See the second addendum at the end of this file.
+> - ✅ **2026-09-01 third correction:** ADR-015 refinements after a third round of cross-review — the idempotency key is now minted per human-approved run (`agent:<slug>:<exception_id>:<run_id>`, persisted in `localStorage` until that run's mutation succeeds), not a constant per (agent, exception), so a later independent approval is no longer silently suppressed by an earlier one; the server now rejects (`409`) reuse of an idempotency key with a different note body instead of silently deduping it, closing a latent audit-trail-corruption gap. See the third addendum at the end of this file.
+> - ✅ **2026-09-01 fourth correction:** ADR-015 concurrency/retry hardening after independent review — payload matching and insertion now happen in one conditional Postgres upsert, so simultaneous different bodies sharing a key cannot both pass; pending approved runs persist their exact note body, so exact retries remain stable while a materially changed recommendation/note receives a new durable key instead of wedging on `409`. See the fourth addendum at the end of this file.
 
 ---
 
 ## Index
 
-| ADR | Decision | Choice |
-| :---- | :---- | :---- |
-| ADR-000 | Data foundation: reuse vs. generate | Reuse `cdm_tmforum` (TM Forum SID); inject anomalies only |
-| ADR-001 | Compute model | Serverless (SQL warehouse + serverless jobs) |
-| ADR-002 | Reconciliation implementation language | SQL for deterministic checks; Python only where needed |
-| ADR-003 | Ingestion pattern | Batch-first, streaming-capable narrative |
-| ADR-004 | Transformation framework | Lakeflow Declarative Pipelines |
-| ADR-005 | Case management surface | Databricks App + AI/BI dashboard (both) |
-| ADR-006 | Detection technique per check | Deterministic rules for 5; ML anomaly for 1 |
-| ADR-007 | Cloud & architecture | FEVM serverless (platform-agnostic; Rogers story as reference) |
-| ADR-008 | Real-world data scale | Reuse existing ~10K customers / ~100K circuits |
-| ADR-009 | IaC / packaging | Databricks Asset Bundles (DABs) |
-| ADR-010 | Genie inclusion | Include Genie for natural-language Q&A |
-| ADR-011 | Identity model | ~~Single canonical `service_instance` bridge~~ → **superseded** (2026-08-25): checks join `*_source` → `tmf_*` directly, no materialized bridge |
-| ADR-012 | Data determinism | Fixed-seed simulation for reproducibility |
-| ADR-013 | Schema organization | ~~Build `ra_silver`/`ra_gold`~~ → **superseded** (2026-08-25): single `cdm_tmforum.revenue_assurance` schema; keep `tmf_*` read-only |
+| ADR     | Decision                                  | Choice                                                                                                                                          |
+| :------ | :---------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------- |
+| ADR-000 | Data foundation: reuse vs. generate       | Reuse `cdm_tmforum` (TM Forum SID); inject anomalies only                                                                                       |
+| ADR-001 | Compute model                             | Serverless (SQL warehouse + serverless jobs)                                                                                                    |
+| ADR-002 | Reconciliation implementation language    | SQL for deterministic checks; Python only where needed                                                                                          |
+| ADR-003 | Ingestion pattern                         | Batch-first, streaming-capable narrative                                                                                                        |
+| ADR-004 | Transformation framework                  | Lakeflow Declarative Pipelines                                                                                                                  |
+| ADR-005 | Case management surface                   | Databricks App + AI/BI dashboard (both)                                                                                                         |
+| ADR-006 | Detection technique per check             | Deterministic rules for 5; ML anomaly for 1                                                                                                     |
+| ADR-007 | Cloud & architecture                      | FEVM serverless (platform-agnostic; Rogers story as reference)                                                                                  |
+| ADR-008 | Real-world data scale                     | Reuse existing ~10K customers / ~100K circuits                                                                                                  |
+| ADR-009 | IaC / packaging                           | Databricks Asset Bundles (DABs)                                                                                                                 |
+| ADR-010 | Genie inclusion                           | Include Genie for natural-language Q&A                                                                                                          |
+| ADR-011 | Identity model                            | ~~Single canonical `service_instance` bridge~~ → **superseded** (2026-08-25): checks join `*_source` → `tmf_*` directly, no materialized bridge |
+| ADR-012 | Data determinism                          | Fixed-seed simulation for reproducibility                                                                                                       |
+| ADR-013 | Schema organization                       | ~~Build `ra_silver`/`ra_gold`~~ → **superseded** (2026-08-25): single `cdm_tmforum.revenue_assurance` schema; keep `tmf_*` read-only            |
+| ADR-014 | Governed semantic layer                   | Unity Catalog Business Semantics (Metric Views, Domains, Pages) — design-only                                                                   |
+| ADR-015 | Agent Workbench data access & audit trail | Inline SQL over `dq_audit` (no named query); reuse `ra.case_notes` for agent-run audit, no new table                                            |
 
 ---
 
@@ -48,14 +55,16 @@
 
 **Choice.** Hybrid reuse + selective injection. The ~10K customers, ~100K circuits, and all associated billing/provisioning/settlement tables already exist in `cdm_tmforum`. Build RA reconciliation logic (`ra_silver.service_instance`, `ra_gold.reconciliation_exceptions`, `ra_gold.exception_case`) reading from read-only `tmf_*` schemas. Inject a small number of sharp anomalies (via `ra_simulate_source_systems` + source-system simulation) only for the ML/anomaly-detection scenes and to make the data compelling for live demo impact.
 
-**Rationale.** 
+**Rationale.**
+
 - **Efficiency:** Eliminates a full data-generation pipeline; shifts the 80% effort from "build fake data" to "build reconciliation logic on real data" — a genuine RA problem, not a simulation artifact.
 - **Realism:** The existing data is 8 years of real Lakelink Fiber billing (uniformly flat, but real dimensions, cardinalities, and relationships). A generated dataset risks looking fabricated to a prospect who knows telecom.
 - **Scale believability:** ~10K customers and ~100K circuits are production-scale enough for a KPI dashboard and a 10K exception population to look credible. Regenerating from scratch introduces variance and reset friction.
 - **Reproducibility:** Base data is static and deterministic; only the anomalies and derived reconciliation layer are seeded generators. This makes reset fast and reliable without a 10-minute data regeneration.
 - **Cost:** Existing data is already ingested; reusing it costs zero extra egress/compute vs. regenerating millions of rows.
 
-**Rejected alternatives.** 
+**Rejected alternatives.**
+
 - Pure generation (Option 1) was rejected: it requires maintaining a full Faker + source-system simulator, is harder to reason about when numbers drift, and introduces a layer of abstraction between the demo and real RA patterns.
 - Pure reuse with no anomaly injection (partial Option 2) was rejected: the existing data is statistically flat (round row counts, 50/50 splits), which weakens the ML anomaly-detection narrative — a few injected sharp anomalies (e.g., a sudden usage spike with no corresponding billing) make the scene more compelling.
 
@@ -95,7 +104,7 @@
 
 **Choice.** Hybrid, SQL-first. The five deterministic checks (active-circuit-unbilled, contract-price mismatch, expired/unauthorized discount, billing-start-date lag, partner-settlement mismatch) are SQL joins/anti-joins against `ra_silver.service_instance`. Python is reserved for the ML anomaly check (ADR-006), the source-system simulator, and anomaly injection.
 
-**Rationale.** The deterministic checks *are* set operations — "active circuits with no matching non-zero invoice line" is a textbook anti-join. SQL makes them short, auditable, and legible to the RA/finance audience, and they read well on screen. It also matches the buyer's skill base (analysts and finance write SQL, not Spark). Python is used only where it earns its place.
+**Rationale.** The deterministic checks _are_ set operations — "active circuits with no matching non-zero invoice line" is a textbook anti-join. SQL makes them short, auditable, and legible to the RA/finance audience, and they read well on screen. It also matches the buyer's skill base (analysts and finance write SQL, not Spark). Python is used only where it earns its place.
 
 **Rejected alternatives.** All-Python was rejected as over-engineered for set logic and less readable to the target audience. All-SQL was rejected because the usage–billing variance check is genuinely an anomaly-detection problem, not a fixed threshold (see ADR-006).
 
@@ -115,7 +124,7 @@
 
 **Choice.** Batch-first for the actual demo build, with the architecture and narration explicitly noting that usage telemetry and CDRs are the streaming-capable path (Auto Loader / Lakeflow Connect).
 
-**Rationale.** RA reconciliation is fundamentally periodic — the business runs daily/monthly reconciliation, not per-event. Batch keeps the demo reproducible and the golden numbers stable (critical for a scripted 20-minute run). We keep the streaming *story* because the real-world pattern (high-volume CDR/IPDR) is streaming, and Lakeflow Connect/Auto Loader let us say "same pipeline, flip to streaming" without building live streams that could destabilize the demo.
+**Rationale.** RA reconciliation is fundamentally periodic — the business runs daily/monthly reconciliation, not per-event. Batch keeps the demo reproducible and the golden numbers stable (critical for a scripted 20-minute run). We keep the streaming _story_ because the real-world pattern (high-volume CDR/IPDR) is streaming, and Lakeflow Connect/Auto Loader let us say "same pipeline, flip to streaming" without building live streams that could destabilize the demo.
 
 **Rejected alternatives.** Pure streaming was rejected: it makes the demo non-deterministic (counts change mid-demo), adds live failure surface, and doesn't match how RA teams actually reconcile. Pure batch with no streaming mention was rejected because it undersells the platform for the genuinely high-volume telemetry source.
 
@@ -175,14 +184,14 @@
 
 **Choice.** Per-check. Five checks are deterministic; one (**Usage–billing variance**, mapped to `usage_reconciliation_gap` / `mediation_failure` violations) is an ML anomaly-detection model in the `ml` schema, tracked in MLflow.
 
-| Check | Technique | Why |
-| :---- | :---- | :---- |
-| Active-circuit-unbilled | Deterministic | Exact: active circuit, no non-zero invoice line (anti-join). |
-| Contract-price mismatch | Deterministic | Exact: billed price ≠ CRM contract price. |
-| Expired/unauthorized discount | Deterministic | Exact: discount past expiry or no approved CPQ record. |
-| Usage–billing variance | **ML anomaly** | Statistical: usage rose materially but billing didn't — no single correct threshold; outlier detection. |
-| Billing-start-date lag | Deterministic | Exact: delivered/order-complete but billing start > N days later. |
-| Partner-settlement mismatch | Deterministic | Exact: leased capacity not reconciled to settlement feed. |
+| Check                         | Technique      | Why                                                                                                     |
+| :---------------------------- | :------------- | :------------------------------------------------------------------------------------------------------ |
+| Active-circuit-unbilled       | Deterministic  | Exact: active circuit, no non-zero invoice line (anti-join).                                            |
+| Contract-price mismatch       | Deterministic  | Exact: billed price ≠ CRM contract price.                                                               |
+| Expired/unauthorized discount | Deterministic  | Exact: discount past expiry or no approved CPQ record.                                                  |
+| Usage–billing variance        | **ML anomaly** | Statistical: usage rose materially but billing didn't — no single correct threshold; outlier detection. |
+| Billing-start-date lag        | Deterministic  | Exact: delivered/order-complete but billing start > N days later.                                       |
+| Partner-settlement mismatch   | Deterministic  | Exact: leased capacity not reconciled to settlement feed.                                               |
 
 **Rationale.** Use ML only where it's genuinely warranted. Five of these are precise business rules; wrapping them in ML would add opacity and false positives with no benefit, and would undermine trust with an audit-minded RA/finance audience. Usage-vs-billing variance is the one with no fixed threshold — it's a real anomaly problem — so it earns MLflow and demonstrates the platform's ML story where it's credible.
 
@@ -204,9 +213,9 @@
 
 **Choice.** Deploy to FEVM serverless at deploy time (confirm cloud at deploy time; do not assert cloud up front).
 
-**Rationale.** The demo is cloud-agnostic and portable; the `demo` profile points to `demo-workspace`, which may be any cloud. Serverless-first keeps it low-ops. Narratively, Rogers Communications' "Revenue Assurance Data Lake" (a documented Databricks reference in the telecom space) provides an anchor to credibility, but it's a *reference* for the pattern, not an assertion about this demo's cloud. If Lumen's standard deployment is a different cloud, the bundle is portable and this decision is revisited.
+**Rationale.** The demo is cloud-agnostic and portable; the `demo` profile points to `demo-workspace`, which may be any cloud. Serverless-first keeps it low-ops. Narratively, Rogers Communications' "Revenue Assurance Data Lake" (a documented Databricks reference in the telecom space) provides an anchor to credibility, but it's a _reference_ for the pattern, not an assertion about this demo's cloud. If Lumen's standard deployment is a different cloud, the bundle is portable and this decision is revisited.
 
-**Rejected alternatives.** Asserting a specific cloud up front (AWS/Azure/GCP) was rejected as over-constraining; the demo's value is in the RA architecture and Databricks capabilities, not in cloud choice. The Rogers reference was rejected as a *prerequisite* because it would hide the portability story.
+**Rejected alternatives.** Asserting a specific cloud up front (AWS/Azure/GCP) was rejected as over-constraining; the demo's value is in the RA architecture and Databricks capabilities, not in cloud choice. The Rogers reference was rejected as a _prerequisite_ because it would hide the portability story.
 
 ---
 
@@ -224,7 +233,8 @@
 
 **Choice.** Production-representative: reuse the existing `cdm_tmforum` data (~10K customers, ~100K circuits, ~100K product orders, ~100K usage records, ~10K seeded RA violations across 12 types, $540M estimated impact). Inject a handful of sharp anomalies for the ML scenes.
 
-**Rationale.** 
+**Rationale.**
+
 - **Big enough:** Dashboards, joins, and aggregations look real; millions of usage rows exercise the platform visibly.
 - **Believable:** ~10K customers and ~100K circuits are production-scale relative to Lumen's $12.5bn business; the $540M seeded leakage is in the ballpark of the $250–312M pitch (distinct from, tunable by filtering).
 - **Fast reset:** No generation pipeline; cold rebuild is a matter of minutes (source simulation + pipeline run).
@@ -267,7 +277,7 @@
 
 **Choice.** Include Genie, scoped to the governed `ra_gold` tables, as Marcus's investigation entry point.
 
-**Rationale.** Genie shows analysts starting an investigation without writing SQL, over the *same* governed, masked data — reinforcing the Unity Catalog governance story rather than bypassing it. It's a short, high-impact beat (~90s) and differentiates the platform. Because it reads `ra_gold`, it can't destabilize the deterministic pipeline.
+**Rationale.** Genie shows analysts starting an investigation without writing SQL, over the _same_ governed, masked data — reinforcing the Unity Catalog governance story rather than bypassing it. It's a short, high-impact beat (~90s) and differentiates the platform. Because it reads `ra_gold`, it can't destabilize the deterministic pipeline.
 
 **Rejected alternatives.** Excluding Genie was rejected as leaving a strong, on-message capability on the table — but note the runbook flags Genie as a **fallback-first** beat: the exact prompt is pre-tested during preflight and has a screenshot fallback, because live NL answers carry more variance than the deterministic surfaces.
 
@@ -286,7 +296,7 @@
 
 **Choice.** A single canonical `ra_silver.service_instance` bridge (`service_instance_id, circuit_id, contract_id, billing_account_id, invoice_line_id, match_confidence`); all 6 checks join through it.
 
-**Rationale.** Identity resolution is *the* hard problem and the actual point of most leakage — so it deserves to be a first-class, reusable asset, not logic duplicated inside six checks. Centralizing it means: one place to reason about match confidence; consistent results across checks and dashboards; a clean lineage/story beat ("once these are linked, leakage is just mismatches across the bridge"); and far simpler check SQL (ADR-002). It also mirrors real RA architecture and the research's explicit guidance to build one canonical service instance.
+**Rationale.** Identity resolution is _the_ hard problem and the actual point of most leakage — so it deserves to be a first-class, reusable asset, not logic duplicated inside six checks. Centralizing it means: one place to reason about match confidence; consistent results across checks and dashboards; a clean lineage/story beat ("once these are linked, leakage is just mismatches across the bridge"); and far simpler check SQL (ADR-002). It also mirrors real RA architecture and the research's explicit guidance to build one canonical service instance.
 
 **Rejected alternatives.** Per-source ad-hoc joins were rejected: they duplicate the hardest logic six times, drift out of sync, make every check harder to read, and bury the single most important architectural idea of the whole demo. The bridge is the demo's spine — collapsing it into per-check joins would gut the narrative.
 
@@ -325,12 +335,13 @@
 
 **Choice.** Option 2: new `ra_silver` and `ra_gold` schemas within `cdm_tmforum`. The `tmf_*` schemas remain read-only (per catalog ownership / governance).
 
-**Rationale.** 
+**Rationale.**
+
 - **Simplicity:** Keeps all RA assets in one catalog for lineage and governance; Catalog Explorer shows the full story end-to-end.
 - **Schema clarity:** `tmf_*` = source (read-only, owned by platform team). `ra_silver` = conformed identity bridge + DQ. `ra_gold` = exceptions, cases, KPIs (analyst-facing).
 - **Permission model:** Single catalog grants make sense; split catalogs complicate UC governance.
 - **Governance:** Unity Catalog treats the whole `cdm_tmforum` as one governed asset; lineage from `tmf_*` to `ra_gold` is clean and visible.
-- **Narrative clarity:** "We built reconciliation logic *on top of* the TM Forum model, not into it — the source remains pristine."
+- **Narrative clarity:** "We built reconciliation logic _on top of_ the TM Forum model, not into it — the source remains pristine."
 
 **Rejected alternatives.** Separate `lumen_ra` catalog was rejected as unnecessary schema sprawl and harder to explain in the lineage story. Writing into `tmf_*` was rejected outright — those schemas are governed and read-only by design; overwriting them would corrupt the source data model.
 
@@ -358,6 +369,7 @@
 ### (a) Single unified schema instead of ra_silver + ra_gold split
 
 The demo builds a single schema `cdm_tmforum.revenue_assurance` (not separate `ra_silver` and `ra_gold`). This schema contains:
+
 - **Silver materialized views (7 checks):** `silver_contract_price_reconciliation`, `silver_discount_authorization_check`, `silver_fx_rate_validation`, `silver_ar_aging_analysis`, `silver_revenue_recognition_check`, `silver_doc_intelligence_contracts`, `silver_doc_intelligence_invoices`.
 - **Gold materialized views:** `gold_leakage_summary` (unified register ~48K rows / ~$601M across 7 check_types), `gold_reconciliation_scorecard` (composite health score + risk_tier per customer), `gold_anomaly_scores`, `gold_revenue_forecast_anomalies` (ai_forecast results).
 
@@ -381,16 +393,16 @@ The RA Exceptions Console is a Databricks AppKit application (React components +
 
 The 6 checks in ADR-006 expanded to 7 with refined detection logic and naming:
 
-| Check | Silver MV | Output `check_type` | Detection |
-| :---- | :---- | :---- | :---- |
-| Contract price mismatch | `silver_contract_price_reconciliation` | `contract_price_mismatch` | Salesforce contract price ≠ Oracle billed amount |
-| Unauthorized discount | `silver_discount_authorization_check` | `unauthorized_discount` | Quote discount exceeds approval limit |
-| Expired quote active | `silver_discount_authorization_check` | `expired_quote_active` | Approved quote past expiry, still active |
-| FX rate deviation | `silver_fx_rate_validation` | (validation only, not unioned to register) | Invoice FX > 1% vs. Refinitiv mid-market |
-| AR aging / collection risk | `silver_ar_aging_analysis` | `ar_collection_risk` | DSO > threshold or 90+ day overdue |
-| Revenue recognition timing | `silver_revenue_recognition_check` | `rev_rec_timing_mismatch` | ASC-606 schedule ≠ GL posting |
-| Doc intelligence: contracts | `silver_doc_intelligence_contracts` | `doc_contract_mismatch` | AI-extracted contract amount ≠ system |
-| Doc intelligence: invoices | `silver_doc_intelligence_invoices` | `doc_invoice_mismatch` | AI-extracted invoice amount ≠ system |
+| Check                       | Silver MV                              | Output `check_type`                        | Detection                                        |
+| :-------------------------- | :------------------------------------- | :----------------------------------------- | :----------------------------------------------- |
+| Contract price mismatch     | `silver_contract_price_reconciliation` | `contract_price_mismatch`                  | Salesforce contract price ≠ Oracle billed amount |
+| Unauthorized discount       | `silver_discount_authorization_check`  | `unauthorized_discount`                    | Quote discount exceeds approval limit            |
+| Expired quote active        | `silver_discount_authorization_check`  | `expired_quote_active`                     | Approved quote past expiry, still active         |
+| FX rate deviation           | `silver_fx_rate_validation`            | (validation only, not unioned to register) | Invoice FX > 1% vs. Refinitiv mid-market         |
+| AR aging / collection risk  | `silver_ar_aging_analysis`             | `ar_collection_risk`                       | DSO > threshold or 90+ day overdue               |
+| Revenue recognition timing  | `silver_revenue_recognition_check`     | `rev_rec_timing_mismatch`                  | ASC-606 schedule ≠ GL posting                    |
+| Doc intelligence: contracts | `silver_doc_intelligence_contracts`    | `doc_contract_mismatch`                    | AI-extracted contract amount ≠ system            |
+| Doc intelligence: invoices  | `silver_doc_intelligence_invoices`     | `doc_invoice_mismatch`                     | AI-extracted invoice amount ≠ system             |
 
 All 7 feed into `gold_leakage_summary`. The old "active-unbilled / usage-variance / billing-start-lag / partner settlement" checks are superseded by this set. ML anomaly detection is now integrated into the doc-intelligence checks and the `ai_forecast` component of `gold_revenue_forecast_anomalies`.
 
@@ -400,7 +412,7 @@ All 7 feed into `gold_leakage_summary`. The old "active-unbilled / usage-varianc
 
 **Validation gate:** `databricks apps validate` (typegen, lint, typecheck, build); verify app readiness with `databricks apps get <app_name>` / `databricks apps logs <app_name>`. Runbook gotcha: repo-root `.gitignore` has a `lib/` rule that may exclude AppKit's `client/src/lib/` from bundle sync — fix with `sync.include: [client/src/lib/**]` in the app's `databricks.yml`.
 
-**Teardown:** `databricks bundle destroy` removes `revenue_assurance` schema, *_source schemas, app, and jobs, but **not** `tmf_*` (read-only source data) or Lakebase project (separate lifecycle). Lakebase project teardown is manual or via a separate destroy script.
+**Teardown:** `databricks bundle destroy` removes `revenue_assurance` schema, `*_source` schemas, app, and jobs, but **not** `tmf_*` (read-only source data) or Lakebase project (separate lifecycle). Lakebase project teardown is manual or via a separate destroy script.
 
 **Rationale.** These four refinements reflect implementation reality: a single schema is easier to govern and explain; Lakebase Postgres is operationally cleaner for case state; AppKit is idiomatic to Databricks; and the 7-check set is more realistic and demo-compelling than the original 6. Together, they strengthen the end-to-end story from detection (7 checks) → unified register (gold_leakage_summary) → app workflow (case assignment & recovery in Lakebase) → governance (UC lineage + masking) → KPIs (gold scorecard & forecast on the dashboard).
 
@@ -433,5 +445,218 @@ in slideware.
 **Constraint recorded.** **Recovery rate** (recovered ÷ detected leakage) cannot be a metric view
 yet: case state lives in **Lakebase Postgres** (`ra.cases.status`) and metric views read only
 UC/Delta. It requires a **Lakebase→Delta sync** (job) first. Likewise **ARPU** in the golden data
-is a *tier* (`customer.arpu_tier`), not a computed dollar — a deliberate disambiguation example, not
+is a _tier_ (`customer.arpu_tier`), not a computed dollar — a deliberate disambiguation example, not
 a gap to "fix."
+
+---
+
+## 2026-08-31 — ADR-015: Agent Workbench data access & audit trail
+
+**Status:** Accepted. See [`07-ui-specs.md`](07-ui-specs.md) §5.5.
+
+**Context.** The Agent Workbench adds four deterministic, rule-based panels (Pipeline Reliability,
+Exception Investigation, Smart Prioritization & Routing, Recovery Playbook) to the RA Exceptions
+Console. Two implementation questions needed a decision: how the Pipeline Reliability panel reads
+`dq_audit` (a materialized view the app had never queried before), and how to record an immutable
+audit trail of what each agent recommended and whether a human applied it.
+
+**Decision 1 — `dq_audit` access: inline SQL, not a named query.**
+
+_Options considered:_
+
+- **(a) New named query** `config/queries/dq_audit.sql` + `npx appkit generate-types` against a live
+  warehouse, matching the pattern used by `exceptions_list.sql`/`exception_detail.sql`.
+- **(b) Inline SQL string** in a new server route, matching the pattern `analytics.ts` already uses
+  for `QUEUE_SQL` and the KPI merge query — calls `appkit.analytics.query(sql)` directly.
+
+_Choice:_ **(b)**. `appkit generate-types` needs a live warehouse to introspect column types; this
+demo is built and tested without guaranteed live Databricks connectivity at every step, and this app
+already has _both_ patterns in use (named queries for the original 4 surfaces, inline SQL for
+`exceptions_list`'s `QUEUE_SQL`). Inline SQL keeps the new `/api/dq/audit` route statically
+typecheckable and unit-testable with zero external dependency, at the cost of not benefiting from
+the query registry's auto-generated types for this one endpoint.
+
+**Decision 2 — audit trail: reuse `ra.case_notes`, no new table.**
+
+_Options considered:_
+
+- **(a) New `ra.agent_runs` table** (+ a read-only route) recording every agent invocation
+  independent of whether a human applied it.
+- **(b) Reuse the existing append-only `ra.case_notes`** table via the existing
+  `POST /api/cases/:exceptionId/notes` route, writing a structured
+  `[Agent: <name>] run_at=… · inputs={…} · output={…}` note only when a human clicks "Apply."
+
+_Choice:_ **(b)**. Every agent recommendation in this workbench is already exception-scoped, which
+is exactly `case_notes`' shape (`exception_id` FK, append-only, timestamped, authored). A new table
+would duplicate that shape for no benefit and would need its own schema-bootstrap, route, and
+typegen. The trade-off: (b) only records a run when a human applies it — an agent recommendation a
+user _saw but didn't act on_ leaves no trace. That is intentional for a demo scoped to "human
+approval before any mutation": the audit trail should show what was _done_, and by whom, not every
+recommendation a panel happened to render.
+
+**Consequence.** No new Postgres schema objects, no new named-query typegen dependency, and no
+change to the mutation surface: the only writes the Agent Workbench performs are the same
+`assign`/`status`/`notes` calls the Queue and Cases pages already make, via the same `casesApi`
+client. This keeps the "existing App API is the only mutation gateway" constraint mechanically true
+rather than merely documented.
+
+---
+
+## 2026-09-01 — ADR-015 addendum: fail-closed gating and audit-before-mutation ordering
+
+**Status:** Accepted, supersedes the original blocking/audit behavior described above. Prompted by
+cross-review of the initial implementation.
+
+**Decision 3 — stale evidence is a hard block, not a soft warning.**
+
+The first cut treated `stale` (freshest DQ observation older than the 72h threshold) as a
+soft-warning state: panels still rendered recommendations, just with a warning banner. Cross-review
+correctly identified this as inconsistent with the gate's own purpose — recommending against
+evidence that might be out of date is exactly the failure mode a reliability gate exists to prevent.
+`stale` now blocks identically to `red`/`unavailable`: `isBlocked()` in
+`client/src/lib/agents/types.ts` is the single source of truth every panel calls, so no panel can
+independently decide to treat staleness as advisory.
+
+**Decision 4 — the DQ status parser fails closed, never defaults to GREEN.**
+
+The original `parseDqAuditRows` treated anything other than the literal string `'RED'` as GREEN —
+so a null, missing, or unrecognized status from the warehouse silently passed as healthy.
+`resolveStatus()` in `server/routes/dqAudit.ts` now requires the exact literal `'GREEN'` _and_
+internally consistent, present, non-negative counts (`passed_records + failed_records ==
+observed_records`, `failed_records == 0`) before returning GREEN; anything else — null, empty,
+unrecognized, lowercase, numeric, boolean, missing counts, or a status/count mismatch — resolves to
+RED. A single malformed row therefore fails the whole pipeline closed via `summarizePipelineHealth`,
+rather than being silently absorbed as one more "healthy" row.
+
+**Decision 5 — every "Apply" writes its audit note before, not after, the case mutation.**
+
+The original ordering assigned/transitioned the case first and logged the `[Agent: …]` note
+afterward (or, in one panel, with an empty `meta` object, since the case row already existed by
+then). That meant a human-approved recommendation could be silently lost if the note write failed
+after a real mutation had already happened. Recovery Playbook and Prioritization now write the note
+first; the case mutation is only attempted once the note has landed. A per-exception "already
+noted" flag (a `ref` keyed to the exception, reset when the exception selection changes) prevents a
+retry after a failed mutation step from writing a duplicate note — retrying resumes at the mutation,
+not the audit record.
+
+**Decision 6 — Recovery Playbook's numbers are demo data, not "no invented facts."**
+
+The original card description claimed "no invented facts," but the recovery %, owner role, and
+deadline are fixed template assumptions, not measured recovery-rate history — a materially different
+claim from the cited evidence fields (`check_type`, `source_table`, `amount_at_risk`) that _are_
+real. The card now carries a visible `Demo data` badge and an explicit caveat next to those three
+values; the "no invented facts" line was removed.
+
+**Decision 7 — Prioritize & route now shares the same selected-exception state as the other two tabs.**
+
+Originally only Investigate and Recovery playbook shared a selection; Prioritize & route ranked
+exceptions independently with no way to carry a row forward. It now accepts the same
+`selected`/`onSelect` props, highlights the shared selection in its table, and exposes a "Carry
+forward" action per row — so a single exception can flow through the whole
+Investigate → Prioritize & route → Recovery playbook loop.
+
+---
+
+## 2026-09-01 second addendum: per-check freshness, server-enforced idempotency, guaranteed visibility
+
+**Status:** Accepted, refines Decisions 4, 5, and 7 above after a second round of cross-review.
+
+**Decision 8 — DQ freshness is evaluated per required check, not globally.**
+
+Decision 4 made the _status_ parser fail closed, but `summarizePipelineHealth`'s _freshness_ check
+still took the single freshest valid timestamp across every row and compared only that one value to
+the threshold. That is fail-open for freshness specifically: one recently-run required check (an
+`INLINE` row from the pipeline event log) could mask a different required check that is genuinely
+stale, or has no timestamp at all, because only the maximum mattered. `summarizePipelineHealth` now
+groups `INLINE` rows by `(dataset, expectation_name)` — the identity of one required check — picks
+each check's authoritative row (its own latest valid timestamp, not the batch's), and evaluates
+every check's freshness independently. If _any_ required check's authoritative row is missing a
+parseable timestamp or older than the threshold, the whole pipeline reports `stale`, regardless of
+how fresh any other check is. `DQ-1`/`DQ-5` rows (live set-level checks with no per-run timestamp
+concept) are excluded from this per-check freshness evaluation — their correctness is already fully
+captured by the status/count fail-closed logic from Decision 4.
+
+**Decision 9 — note deduplication moved from client-local state to a server-enforced idempotency key.**
+
+Decision 5's "already noted" guard was a `ref` living in the React component — it does not survive
+a component remount (selecting a different exception and back), a full page reload, or a lost HTTP
+response after the server had already committed the note. Any of those leaves the guard blind to a
+note that already exists, and a retry could double-write it. The fix moves the guarantee into
+Lakebase itself: `ra.case_notes` gained a nullable `idempotency_key` column and a unique partial
+index on `(exception_id, idempotency_key) WHERE idempotency_key IS NOT NULL`. Callers that write an
+audit note before a mutation now pass a caller-supplied key (convention:
+`agent:<slug>:<exception_id>`); the insert becomes `... ON CONFLICT (exception_id, idempotency_key)
+WHERE idempotency_key IS NOT NULL DO NOTHING`, and the route reports back whether the insert was
+`deduped`. Manual, human-authored notes pass no key and are correctly never deduped (two identical
+manual notes are not a bug). This makes the guarantee durable across exactly the failure modes
+Decision 5 didn't cover — remounts, reloads, and ambiguous lost-response retries — because it no
+longer depends on any client-held memory of "did I already send this."
+
+**Decision 10 — Prioritize & route explicitly merges and scores the selected exception, and never hides it.**
+
+Decision 7 gave Prioritize & route the `selected` prop and a highlight, but the ranked table was
+still built purely from a fixed top-N-by-amount warehouse batch and only ever rendered its own
+top 20. An exception a user is actively investigating (via Investigate, or a deep link) could be
+absent from that batch outright, or present but ranked outside the visible top 20 — in both cases it
+silently had no "Carry forward"/"Apply: assign" affordance, breaking the promised
+Investigate → Prioritize & route → Recovery playbook loop for exactly the exception a user cares
+about. The panel now merges the `selected` row into the scored set client-side whenever the batch
+doesn't already contain it (no second network round-trip — the full row is already held in
+`selected`), and always renders it: if its rank places it outside the top 20, it is appended below
+the top 20 (never spliced in, so the visible ordering of the top 20 is unaffected) with an explicit
+"(rank #N, outside top 20)" label, and its "Apply: assign" action remains enabled.
+
+---
+
+## 2026-09-01 third addendum: per-approved-run idempotency keys and payload-mismatch rejection
+
+**Status:** Accepted, refines Decision 9 above.
+
+**Decision 11 — the idempotency key is per approved run, not a constant per (agent, exception).**
+
+Decision 9 introduced a stable key of the form `agent:<slug>:<exception_id>`. That key never
+changes for a given (agent, exception) pair, which has an unintended side effect: it suppresses
+every future independent approval of the same recommendation for that exception, not just retries
+of one in-flight approval — a second, later, deliberate "Apply" click would silently dedupe against
+the first click's note forever. The key now includes a per-run UUID
+(`agent:<slug>:<exception_id>:<run_id>`), minted once per human approval and persisted in
+`localStorage` (`client/src/lib/agents/approvedRun.ts`) until that run's mutation succeeds. Retrying
+the same approval (lost response, remount, reload) resumes the same pending run and reuses its key;
+clicking "Apply" again only after that run completed mints a genuinely new run and a new key, so a
+second real approval produces a second, independent note.
+
+**Decision 12 — the server rejects idempotency-key reuse with a different payload instead of silently deduping.**
+
+The `ON CONFLICT ... DO NOTHING` insert alone cannot distinguish "this is the same retried note" from
+"this key collided with an unrelated note" — both look like a no-op insert. `POST
+/api/cases/:exceptionId/notes` therefore compares the stored and submitted bodies as part of its
+conflict decision: the _same_ body is treated as an exact retry, while a _different_ body is rejected
+with `409` and the case is never mutated. This closes a latent correctness gap where a stale or reused
+key could have silently attributed the wrong recommendation to an existing audit note. Decision 13
+below records the concurrency-safe single-statement implementation of that rule.
+
+## 2026-09-01 fourth addendum: atomic conflicts and note-bound pending approvals
+
+**Status:** Accepted, supersedes Decision 12's check-then-insert implementation detail and refines Decision 11.
+
+**Decision 13 — payload matching and note insertion are one atomic Postgres conflict decision.**
+
+The pre-insert lookup in Decision 12 left a time-of-check/time-of-use race: two simultaneous
+requests with the same key and different bodies could both observe no existing row, after which one
+inserted and the other was silently treated as a deduped success. The route now issues one
+conditional `INSERT ... ON CONFLICT ... DO UPDATE ... WHERE ra.case_notes.body = EXCLUDED.body`
+statement. A new key inserts; an exact retry locks and returns the existing row; a conflicting body
+fails the conditional update and returns no row, producing `409`. The unique index and payload
+comparison therefore participate in the same database statement, so simultaneous mismatched
+requests cannot both pass.
+
+**Decision 14 — a pending approval is bound to its exact audit-note body.**
+
+Persisting only the run key and timestamp meant a recommendation or note-template change during a
+pending run reused the old key with a new body, causing every retry to receive `409` indefinitely.
+The browser's pending-run record now also stores the exact approved note. Reconstructing the same
+note resumes the existing key and safely retries it; reconstructing materially different text
+replaces the pending record with a fresh per-run UUID and durable note identity. Recovery deadlines
+are anchored to the original approval timestamp, preventing clock drift across rerenders or reloads
+from being mistaken for a changed recommendation. Audit-before-mutation ordering and fail-closed DQ
+gating remain unchanged.

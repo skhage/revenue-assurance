@@ -3,9 +3,88 @@
 A Databricks App powered by [AppKit](https://developers.databricks.com/docs/appkit/v0/), featuring React, TypeScript, and Tailwind CSS.
 
 **Enabled plugins:**
+
 - **Analytics** -- SQL query execution against Databricks SQL Warehouses
 - **Lakebase** -- Fully managed Postgres database for transactional (OLTP) workloads on Databricks
 - **Server** -- Express HTTP server with static file serving and Vite dev mode
+
+## Screens
+
+- **Overview** -- KPI tiles and root-cause breakdown from `gold_leakage_summary`.
+- **Exception queue** -- filterable, paginated register of detected leakage.
+- **My cases** -- cases you (or anyone) have started working, with the full lifecycle.
+- **Agent Workbench** -- four deterministic, rule-based panels over the same data (see below).
+- **Architecture** -- how the demo maps onto the Databricks Data + AI Platform.
+
+## Agent Workbench
+
+A single tab with four sub-tabs, each showcasing one narrow, deterministic capability over data
+this app already reads. **None of these use an LLM or a Model Serving endpoint** — every
+agent-computed value in the UI carries a "Deterministic · rule-based" or "Demo data" badge so
+that's never ambiguous. See `demo-artifacts/07-ui-specs.md` §5.5 and `demo-artifacts/10-decision-log.md`
+ADR-015 for the full design rationale.
+
+| Tab                      | What it shows                                                                           | Computed how                                                                                                                                                                            |
+| :----------------------- | :-------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Pipeline reliability** | Freshness/quality of the reconciliation pipeline (`dq_audit`)                           | Reads `cdm_tmforum.revenue_assurance.dq_audit`; summarized server-side into `ok`/`stale`/`red`/`unavailable` (`server/routes/dqAudit.ts`, `summarizePipelineHealth`)                    |
+| **Investigate**          | A cited root-cause hypothesis + confidence for a selected exception                     | `client/src/lib/agents/hypothesis.ts` — cites literal evidence fields from `exception_detail`                                                                                           |
+| **Prioritize & route**   | A ranked queue with a recommended analyst/queue; carries the selected exception forward | `client/src/lib/agents/scoring.ts` (amount 35 + severity 25 + age 20 + evidence 20) + a small **demo** analyst roster (`roster.ts`) — not a live capacity feed                          |
+| **Recovery playbook**    | A check-type-specific recovery action, expected recovery $, owner, deadline             | `client/src/lib/agents/playbook.ts` — a fixed 7-entry template table, one row per reconciliation check_type; recovery %/owner/deadline are labeled **demo data**, not measured outcomes |
+
+**Safety controls, all enforced in code, not just documented:**
+
+- **Pipeline gate, evaluated per required check.** If `dq_audit` reports `red`, is unreachable, or
+  is `stale`, the Investigate/Prioritize/Recovery tabs render only a blocking alert — no
+  recommendation is computed, no "Apply" button renders. Stale evidence is a hard block, not a soft
+  warning: `isBlocked()` in `client/src/lib/agents/types.ts` is the single source of truth every
+  panel calls. Freshness is checked **per required check**, not by a single global freshest
+  timestamp — one recently-run check can never mask a different required check that is stale or has
+  no timestamp at all (`summarizePipelineHealth` in `server/routes/dqAudit.ts`). The DQ route itself
+  also fails closed on status and category — any row with a null/unrecognized/inconsistent status,
+  or a `check_type` other than timestamp-required `INLINE` or documented timestamp-exempt `DQ-1`/
+  `DQ-5`, blocks downstream agents.
+- **Human approval before any mutation.** Every recommendation is inert until a user clicks "Apply."
+  There is no auto-apply, no background write, no polling loop.
+- **Existing API is the only mutation gateway.** "Apply" buttons call the same
+  `POST /api/cases/:id/assign|status|notes` routes the Queue and Cases pages already use — no new
+  mutation route was added for this feature.
+- **Audit-before-mutation, durably deduped by the server.** Every "Apply" writes its structured
+  `[Agent: <name>] run_at=… · inputs={…} · output={…}` note **before** attempting any case-lifecycle
+  mutation, tagged with a per-approved-run idempotency key
+  (`agent:<slug>:<exception_id>:<run_id>`). A pending run record in browser storage preserves both
+  that key and the exact approved note across retries/remounts and is retired only after the mutation
+  succeeds. An exact retry therefore reuses both; if the recommendation or note text materially
+  changes, the next approval receives a distinct key instead of colliding with the pending run. If
+  the note write fails, no mutation is attempted at all. The server enforces at most one note per
+  `(exception_id, idempotency_key)` via a Postgres unique index — not a client-side flag — so a
+  duplicate is impossible even across a lost response, a component remount, or a full page reload.
+  One conditional `INSERT ... ON CONFLICT` statement atomically accepts an exact retry or rejects a
+  different body with `409`, so simultaneous mismatched requests cannot both pass;
+  `POST /api/cases/:id/notes` returns `{ deduped: true }` for an exact retry.
+- **Shared selection across the loop, with guaranteed visibility.** Investigate, Prioritize & route,
+  and Recovery playbook share one "selected exception" — pick it in Investigate, or "Carry forward"
+  a ranked row in Prioritize & route, and Recovery playbook opens already showing it. Prioritize &
+  route explicitly merges the selected exception into its scored set and always renders it, even
+  when it's absent from the default batch or its score ranks it outside the visible top 20 (shown
+  pinned below the top 20 with a "(rank #N, outside top 20)" label, never displacing the top-20
+  ordering itself).
+
+### Demo script (~3 minutes)
+
+1. Open **Agent Workbench → Pipeline reliability**. Point out the green/fresh status and the
+   `dq_audit` snapshot — this is the gate the other three tabs respect (and note that `stale`, not
+   just `red`/unreachable, blocks them too).
+2. Switch to **Investigate**, search for an account, select an exception. Read the hypothesis aloud
+   and point at the literal `check_type=…`, `source_table=…`, `risk_tier=…` values it cites, and the
+   "Deterministic · rule-based" badge.
+3. Switch to **Prioritize & route** — the same exception is highlighted in the ranked table. Show the
+   recommended analyst/queue column; call out the "Demo data" badge on the roster — this is
+   illustrative routing, not live capacity.
+4. Switch to **Recovery playbook** — it opens already showing that exception's plan. Show the
+   templated action, expected recovery $, owner, and deadline (all under a "Demo data" caveat); click
+   **Apply** and narrate that this is the exact same status-change call a human would make from the
+   Cases page — then open the case's notes timeline to show the `[Agent: Recovery Playbook]` audit
+   note, written before the status change, that was just recorded.
 
 ## Prerequisites
 
