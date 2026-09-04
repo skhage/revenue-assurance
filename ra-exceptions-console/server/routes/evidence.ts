@@ -109,79 +109,47 @@ async function buildEvidence(
   // params (Databricks rejects a supplied-but-unused parameter marker).
   const p = { ref: sql.string(ref) };
 
-  // ---- Contract price family -------------------------------------------------
-  if (check === 'contract_price_mismatch' || check === 'contract_price_missing_erp') {
-    const status = check === 'contract_price_mismatch' ? 'MISMATCH' : 'MISSING_ERP';
+  // ---- Contract price --------------------------------------------------------
+  // gold emits ONE check_type (contract_price_mismatch) for both price_mismatch
+  // and expired_discount leakage, keyed by ContractNumber. The silver view
+  // carries the contracted side and the leakage classification; the billed
+  // figure lives in the billing system and is not materialized here, so this is
+  // a KV summary rather than a contracted-vs-billed comparison.
+  if (check === 'contract_price_mismatch') {
     const row = await one(
       appkit,
-      `SELECT ProductCode, Service_Circuit_Id__c, contracted_price, billed_unit_price,
-              contracted_total, billed_total, price_mismatch_pct, reconciliation_status
+      `SELECT ProductCode, Service_Circuit_Id__c, contracted_price, leakage_flag, estimated_amount_at_risk
        FROM ${S}.silver_contract_price_reconciliation
-       WHERE ContractNumber = :ref AND reconciliation_status = '${status}'
+       WHERE ContractNumber = :ref AND leakage_flag IS NOT NULL
        ORDER BY estimated_amount_at_risk DESC LIMIT 1`,
       p
     );
     if (!row) return empty('contract_price');
-    return {
-      kind: 'contract_price',
-      comparison: { leftLabel: 'Contracted', rightLabel: 'Billed' },
-      rows: [
-        { label: 'Unit price', left: row.contracted_price, right: row.billed_unit_price, format: 'usd', mismatch: true },
-        { label: 'Line total', left: row.contracted_total, right: row.billed_total, format: 'usd', mismatch: true },
-        { label: 'Product', value: str(row.productcode), format: 'text' },
-        { label: 'Circuit', value: str(row.service_circuit_id__c), format: 'text' },
-        { label: 'Price variance', value: row.price_mismatch_pct, format: 'pct' },
-      ],
-    };
-  }
-  if (check === 'contract_price_missing_salesforce') {
-    const row = await one(
-      appkit,
-      `SELECT ProductCode, Service_Circuit_Id__c, billed_unit_price, billed_total, reconciliation_status
-       FROM ${S}.silver_contract_price_reconciliation
-       WHERE CAST(line_item_id AS STRING) = :ref LIMIT 1`,
-      p
-    );
-    if (!row) return empty('contract_price');
+    const flag = str(row.leakage_flag);
     return {
       kind: 'contract_price',
       rows: [
-        { label: 'Billed unit price', value: row.billed_unit_price, format: 'usd' },
-        { label: 'Billed total', value: row.billed_total, format: 'usd' },
+        {
+          label: 'Leakage type',
+          value: flag === 'expired_discount' ? 'Expired discount still applied' : 'Contracted vs billed price mismatch',
+          format: 'text',
+        },
         { label: 'Product', value: str(row.productcode), format: 'text' },
         { label: 'Circuit', value: str(row.service_circuit_id__c), format: 'text' },
+        { label: 'Contracted price', value: row.contracted_price, format: 'usd' },
+        { label: 'Estimated at risk', value: row.estimated_amount_at_risk, format: 'usd', mismatch: true },
       ],
-      note: 'Billed in ERP with no matching Salesforce contract line — revenue charged with no contract on file.',
+      note:
+        flag === 'expired_discount'
+          ? 'An expired promotional discount is still applied to this circuit, so the billed price sits below the contracted rate.'
+          : 'The billed amount for this circuit diverges from the contracted price. Billed detail lives in the billing system of record.',
     };
   }
 
-  // ---- FX family -------------------------------------------------------------
-  if (check.startsWith('fx_')) {
-    const row = await one(
-      appkit,
-      `SELECT INVOICE_CURRENCY_CODE, INVOICE_AMOUNT, applied_rate, market_rate,
-              rate_deviation_pct, fx_validation_status, TRX_DATE
-       FROM ${S}.silver_fx_rate_validation
-       WHERE TRX_NUMBER = :ref LIMIT 1`,
-      p
-    );
-    if (!row) return empty('fx');
-    const hasRates = row.applied_rate != null || row.market_rate != null;
-    return {
-      kind: 'fx',
-      comparison: hasRates ? { leftLabel: 'Applied rate', rightLabel: 'Market (Refinitiv)' } : undefined,
-      rows: [
-        { label: 'Currency', value: str(row.invoice_currency_code), format: 'text' },
-        { label: 'Invoice amount', value: row.invoice_amount, format: 'usd' },
-        ...(hasRates
-          ? [{ label: 'FX rate', left: row.applied_rate, right: row.market_rate, format: 'text' as Fmt, mismatch: true }]
-          : []),
-        { label: 'Rate deviation', value: row.rate_deviation_pct, format: 'pct' },
-        { label: 'Status', value: str(row.fx_validation_status).replace(/_/g, ' ').toLowerCase(), format: 'text' },
-        { label: 'Transaction date', value: str(row.trx_date), format: 'text' },
-      ],
-    };
-  }
+  // NOTE: FX rate validation (silver_fx_rate_validation) is not unioned into
+  // gold_leakage_summary, so no fx_* exception reaches this route — there is
+  // deliberately no FX branch here. Add one alongside a gold union if FX is ever
+  // surfaced in the register.
 
   // ---- Discount / expired quote ---------------------------------------------
   if (check === 'unauthorized_discount' || check === 'expired_quote_active') {
