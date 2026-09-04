@@ -220,7 +220,7 @@ async function buildEvidence(
   if (check === 'rev_rec_timing_mismatch') {
     const row = await one(
       appkit,
-      `SELECT scheduled_recognized_total, gl_revenue_posted, recognition_variance, PERIOD_NAME
+      `SELECT scheduled_recognized, gl_revenue_posted, recognition_variance, PERIOD_NAME
        FROM ${S}.silver_revenue_recognition_check
        WHERE PERIOD_NAME = :ref LIMIT 1`,
       p
