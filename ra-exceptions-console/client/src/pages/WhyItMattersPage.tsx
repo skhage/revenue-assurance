@@ -191,9 +191,9 @@ const CHAPTERS: Chapter[] = [
 function StatTile({ stat }: { stat: Stat }) {
   const tone = TONE[stat.tone ?? 'muted'];
   return (
-    <div className="flex flex-col gap-1 rounded-lg border border-border bg-card p-4">
-      <span className={`text-3xl font-semibold tabular-nums ${tone.num}`}>{stat.value}</span>
-      <span className="text-xs leading-snug text-muted-foreground">{stat.label}</span>
+    <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-card p-5 lg:p-6">
+      <span className={`text-4xl font-semibold tabular-nums lg:text-5xl ${tone.num}`}>{stat.value}</span>
+      <span className="text-sm leading-snug text-muted-foreground lg:text-base">{stat.label}</span>
     </div>
   );
 }
@@ -202,12 +202,12 @@ function StoryTile({ card }: { card: StoryCard }) {
   const Icon = card.icon;
   const tone = TONE[card.tone ?? 'brand'];
   return (
-    <div className={`flex flex-col gap-2 rounded-lg border border-l-2 border-border bg-card p-3.5 ${tone.bar}`}>
-      <span className={`flex h-8 w-8 items-center justify-center rounded-md ${tone.chip}`}>
-        <Icon className="h-4 w-4" />
+    <div className={`flex flex-col gap-2.5 rounded-lg border border-l-2 border-border bg-card p-4 lg:p-5 ${tone.bar}`}>
+      <span className={`flex h-10 w-10 items-center justify-center rounded-md ${tone.chip}`}>
+        <Icon className="h-5 w-5" />
       </span>
-      <span className="text-sm font-semibold text-foreground">{card.title}</span>
-      <span className="text-xs leading-relaxed text-muted-foreground">{card.body}</span>
+      <span className="text-base font-semibold text-foreground lg:text-lg">{card.title}</span>
+      <span className="text-sm leading-relaxed text-muted-foreground lg:text-base">{card.body}</span>
     </div>
   );
 }
@@ -229,23 +229,23 @@ function RailItem({
       type="button"
       onClick={onClick}
       aria-current={active ? 'step' : undefined}
-      className={`relative flex items-center gap-2.5 rounded-md py-2 pl-3.5 pr-2.5 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+      className={`relative flex items-center gap-3 rounded-md py-2.5 pl-4 pr-3 text-left text-base transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
         active ? 'bg-accent font-medium text-accent-foreground' : 'text-muted-foreground hover:bg-accent/50'
       }`}
     >
       <span
-        className={`absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-r-full bg-brand transition-opacity ${
+        className={`absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-brand transition-opacity ${
           active ? 'opacity-100' : 'opacity-0'
         }`}
       />
       <span
-        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[11px] font-bold ${
+        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-bold ${
           active ? 'bg-brand text-brand-foreground' : 'bg-muted text-muted-foreground'
         }`}
       >
         {index + 1}
       </span>
-      <Icon className="h-4 w-4 shrink-0" />
+      <Icon className="h-5 w-5 shrink-0" />
       <span className="min-w-0 truncate">{chapter.nav}</span>
     </button>
   );
@@ -280,27 +280,27 @@ export function WhyItMattersPage() {
   const cardCols = (current.cards?.length ?? 0) >= 5 ? 'sm:grid-cols-2 lg:grid-cols-3' : 'sm:grid-cols-2';
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
+    <div className="flex h-full w-full flex-col gap-4">
       {/* Controls (page title/subtitle come from the layout header in App.tsx) */}
       <div className="flex items-center justify-end gap-2">
-        <Button variant="outline" size="sm" onClick={prev} disabled={step === 0}>
+        <Button variant="outline" onClick={prev} disabled={step === 0}>
           <ArrowLeft className="mr-1 h-4 w-4" /> Prev
         </Button>
-        <span className="min-w-[3.5rem] text-center text-xs font-medium tabular-nums text-muted-foreground">
+        <span className="min-w-[3.5rem] text-center text-sm font-medium tabular-nums text-muted-foreground">
           {step + 1} / {total}
         </span>
-        <Button size="sm" onClick={next} disabled={step === total - 1}>
+        <Button onClick={next} disabled={step === total - 1}>
           Next <ArrowRight className="ml-1 h-4 w-4" />
         </Button>
         <Button variant="ghost" size="icon" onClick={() => setStep(0)} aria-label="Restart from the beginning">
-          <RotateCcw className="h-4 w-4" />
+          <RotateCcw className="h-5 w-5" />
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[220px_1fr]">
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-6 lg:grid-cols-[260px_1fr]">
         {/* Chapter rail */}
         <Card className="h-fit shadow-sm">
-          <CardContent className="flex flex-col gap-0.5 p-2">
+          <CardContent className="flex flex-col gap-1 p-2.5">
             {CHAPTERS.map((c, i) => (
               <RailItem key={c.id} chapter={c} index={i} active={i === step} onClick={() => setStep(i)} />
             ))}
@@ -308,22 +308,22 @@ export function WhyItMattersPage() {
         </Card>
 
         {/* Narrative stage */}
-        <Card className="shadow-sm">
-          <CardContent className="flex flex-col gap-5 p-6">
-            <div className="flex items-center gap-3">
-              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand/10">
-                <current.icon className="h-5 w-5 text-brand" />
+        <Card className="flex flex-col shadow-sm">
+          <CardContent className="flex flex-1 flex-col gap-6 p-8 lg:p-10">
+            <div className="flex items-center gap-3.5">
+              <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-brand/10">
+                <current.icon className="h-6 w-6 text-brand" />
               </span>
-              <div className="inline-flex w-fit items-center rounded-full bg-brand px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-brand-foreground">
+              <div className="inline-flex w-fit items-center rounded-full bg-brand px-3 py-1 text-sm font-semibold uppercase tracking-wide text-brand-foreground">
                 {current.kicker}
               </div>
             </div>
 
-            <h2 className="text-2xl font-semibold leading-tight text-foreground">{current.title}</h2>
-            <p className="max-w-3xl text-[15px] leading-relaxed text-muted-foreground">{current.lead}</p>
+            <h2 className="text-3xl font-semibold leading-tight text-foreground lg:text-4xl">{current.title}</h2>
+            <p className="max-w-4xl text-lg leading-relaxed text-muted-foreground lg:text-xl">{current.lead}</p>
 
             {current.stats && (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 {current.stats.map((s) => (
                   <StatTile key={s.label} stat={s} />
                 ))}
@@ -331,13 +331,13 @@ export function WhyItMattersPage() {
             )}
 
             {current.cards && (
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-3.5">
                 {current.cardsTitle && (
-                  <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground lg:text-sm">
                     {current.cardsTitle}
                   </div>
                 )}
-                <div className={`grid grid-cols-1 gap-3 ${cardCols}`}>
+                <div className={`grid grid-cols-1 gap-4 ${cardCols}`}>
                   {current.cards.map((c) => (
                     <StoryTile key={c.title} card={c} />
                   ))}
@@ -346,30 +346,30 @@ export function WhyItMattersPage() {
             )}
 
             {current.callout && (
-              <div className="rounded-lg border-l-2 border-brand bg-brand/5 py-3 pl-4 pr-4">
-                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-brand">
+              <div className="rounded-lg border-l-2 border-brand bg-brand/5 py-4 pl-5 pr-5">
+                <div className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-brand lg:text-sm">
                   {current.callout.label}
                 </div>
-                <p className="text-sm leading-relaxed text-foreground">{current.callout.text}</p>
+                <p className="text-base leading-relaxed text-foreground lg:text-lg">{current.callout.text}</p>
               </div>
             )}
 
             {current.cta && (
-              <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-muted/40 p-4">
+              <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-muted/40 p-5">
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-semibold text-foreground">Ready to see it?</div>
-                  <div className="text-xs text-muted-foreground">
+                  <div className="text-base font-semibold text-foreground lg:text-lg">Ready to see it?</div>
+                  <div className="text-sm text-muted-foreground lg:text-base">
                     The Overview opens on total exposure — the executive view of everything at risk.
                   </div>
                 </div>
-                <Button onClick={() => navigate('/')} className="bg-brand text-brand-foreground hover:bg-brand/90">
-                  <PlayCircle className="mr-1.5 h-4 w-4" /> Start the demo
+                <Button size="lg" onClick={() => navigate('/')} className="bg-brand text-brand-foreground hover:bg-brand/90">
+                  <PlayCircle className="mr-1.5 h-5 w-5" /> Start the demo
                 </Button>
               </div>
             )}
 
             {/* Progress dots */}
-            <div className="mt-auto flex flex-wrap items-center gap-1 pt-2">
+            <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-2">
               {CHAPTERS.map((c, i) => (
                 <button
                   key={c.id}
@@ -379,7 +379,7 @@ export function WhyItMattersPage() {
                   aria-label={`Go to chapter ${i + 1}: ${c.nav}`}
                   aria-current={i === step ? 'step' : undefined}
                 >
-                  <span className={`h-2 rounded-full transition-all ${i === step ? 'w-5 bg-brand' : 'w-2 bg-border'}`} />
+                  <span className={`h-2.5 rounded-full transition-all ${i === step ? 'w-6 bg-brand' : 'w-2.5 bg-border'}`} />
                 </button>
               ))}
             </div>
