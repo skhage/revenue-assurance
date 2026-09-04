@@ -40,10 +40,13 @@ function fmtEvidence(v: unknown, format?: EvidenceFormat): string {
     case 'bool':
       return v === true || v === 'true' ? 'Yes' : 'No';
     case 'pct': {
+      // The evidence route emits 'pct' values already in percentage points
+      // (e.g. discount 21.1 → "21.1%"), so format the number directly. The old
+      // `abs(n) <= 1 ? n*100 : n` heuristic mis-scaled any ratio > 1 (1.5 →
+      // "1.5%") and any sub-1 percentage-point value (0.8 → "80%").
       const n = typeof v === 'number' ? v : Number(v);
       if (!Number.isFinite(n)) return String(v);
-      const pct = Math.abs(n) <= 1 ? n * 100 : n; // ratios (0.15) → 15%, percent-points (30) → 30%
-      return `${(Math.round(pct * 10) / 10).toLocaleString()}%`;
+      return `${(Math.round(n * 10) / 10).toLocaleString()}%`;
     }
     default:
       return String(v);

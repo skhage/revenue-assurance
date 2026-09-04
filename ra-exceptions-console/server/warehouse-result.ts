@@ -8,11 +8,12 @@
 //
 // The original server routes read top-level `data_array`, which does not exist on
 // this shape, so every server-side query resolved to [] — hence $0 KPIs and an
-// empty exception queue. This helper reads the real location and returns a
-// positional `unknown[][]` (column order preserved from the object insertion
-// order, which matches the SELECT) so existing `row[0]`-style parsing works.
-// It also tolerates the raw 2-D (`data_array`) and legacy nested (`result.*`)
-// shapes defensively.
+// empty exception queue. `resultObjects()` reads the real location and returns
+// the rows as column-keyed objects so callers read values BY COLUMN NAME, not
+// by SELECT position — a positional read silently shifts every value if the
+// warehouse ever returns columns in a different order. Keys are lowercased so a
+// read never depends on how the layer cases identifiers either. It also
+// tolerates the legacy nested (`result.data`) shape defensively.
 export interface WarehouseResult {
   data?: Record<string, unknown>[];
   data_array?: unknown[][];
@@ -22,12 +23,17 @@ export interface WarehouseResult {
   };
 }
 
-export function resultRows(res: WarehouseResult | null | undefined): unknown[][] {
+export function resultObjects(res: WarehouseResult | null | undefined): Record<string, unknown>[] {
   if (!res) return [];
-  if (Array.isArray(res.data)) return res.data.map((row) => Object.values(row));
-  if (Array.isArray(res.data_array)) return res.data_array;
-  const r = res.result;
-  if (r && Array.isArray(r.data)) return r.data.map((row) => Object.values(row));
-  if (r && Array.isArray(r.data_array)) return r.data_array;
-  return [];
+  const rows = Array.isArray(res.data)
+    ? res.data
+    : res.result && Array.isArray(res.result.data)
+      ? res.result.data
+      : null;
+  if (!rows) return [];
+  return rows.map((row) => {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(row)) out[key.toLowerCase()] = value;
+    return out;
+  });
 }

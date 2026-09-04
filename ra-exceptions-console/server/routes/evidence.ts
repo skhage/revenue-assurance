@@ -1,7 +1,7 @@
 import { sql } from '@databricks/appkit';
 import { z } from 'zod';
 import type { Application } from 'express';
-import { resultRows, type WarehouseResult } from '../warehouse-result';
+import { resultObjects, type WarehouseResult } from '../warehouse-result';
 
 /**
  * Check-type-aware evidence (Gap 2 + document reconciliation, Gap 1).
@@ -89,13 +89,15 @@ export function setupEvidenceRoutes(appkit: AppKitAnalytics) {
   });
 }
 
+// Returns the first row as a column-keyed object (keys lowercased). Callers read
+// by column name so the parsing never depends on SELECT position.
 async function one(
   appkit: AppKitAnalytics,
   text: string,
   params: Record<string, ReturnType<(typeof sql)['string']>>
-): Promise<unknown[] | null> {
+): Promise<Record<string, unknown> | null> {
   const r = await appkit.analytics.query(text, params);
-  return resultRows(r)[0] ?? null;
+  return resultObjects(r)[0] ?? null;
 }
 
 async function buildEvidence(
@@ -124,11 +126,11 @@ async function buildEvidence(
       kind: 'contract_price',
       comparison: { leftLabel: 'Contracted', rightLabel: 'Billed' },
       rows: [
-        { label: 'Unit price', left: row[2], right: row[3], format: 'usd', mismatch: true },
-        { label: 'Line total', left: row[4], right: row[5], format: 'usd', mismatch: true },
-        { label: 'Product', value: str(row[0]), format: 'text' },
-        { label: 'Circuit', value: str(row[1]), format: 'text' },
-        { label: 'Price variance', value: row[6], format: 'pct' },
+        { label: 'Unit price', left: row.contracted_price, right: row.billed_unit_price, format: 'usd', mismatch: true },
+        { label: 'Line total', left: row.contracted_total, right: row.billed_total, format: 'usd', mismatch: true },
+        { label: 'Product', value: str(row.productcode), format: 'text' },
+        { label: 'Circuit', value: str(row.service_circuit_id__c), format: 'text' },
+        { label: 'Price variance', value: row.price_mismatch_pct, format: 'pct' },
       ],
     };
   }
@@ -144,10 +146,10 @@ async function buildEvidence(
     return {
       kind: 'contract_price',
       rows: [
-        { label: 'Billed unit price', value: row[2], format: 'usd' },
-        { label: 'Billed total', value: row[3], format: 'usd' },
-        { label: 'Product', value: str(row[0]), format: 'text' },
-        { label: 'Circuit', value: str(row[1]), format: 'text' },
+        { label: 'Billed unit price', value: row.billed_unit_price, format: 'usd' },
+        { label: 'Billed total', value: row.billed_total, format: 'usd' },
+        { label: 'Product', value: str(row.productcode), format: 'text' },
+        { label: 'Circuit', value: str(row.service_circuit_id__c), format: 'text' },
       ],
       note: 'Billed in ERP with no matching Salesforce contract line — revenue charged with no contract on file.',
     };
@@ -164,19 +166,19 @@ async function buildEvidence(
       p
     );
     if (!row) return empty('fx');
-    const hasRates = row[2] != null || row[3] != null;
+    const hasRates = row.applied_rate != null || row.market_rate != null;
     return {
       kind: 'fx',
       comparison: hasRates ? { leftLabel: 'Applied rate', rightLabel: 'Market (Refinitiv)' } : undefined,
       rows: [
-        { label: 'Currency', value: str(row[0]), format: 'text' },
-        { label: 'Invoice amount', value: row[1], format: 'usd' },
+        { label: 'Currency', value: str(row.invoice_currency_code), format: 'text' },
+        { label: 'Invoice amount', value: row.invoice_amount, format: 'usd' },
         ...(hasRates
-          ? [{ label: 'FX rate', left: row[2], right: row[3], format: 'text' as Fmt, mismatch: true }]
+          ? [{ label: 'FX rate', left: row.applied_rate, right: row.market_rate, format: 'text' as Fmt, mismatch: true }]
           : []),
-        { label: 'Rate deviation', value: row[4], format: 'pct' },
-        { label: 'Status', value: str(row[5]).replace(/_/g, ' ').toLowerCase(), format: 'text' },
-        { label: 'Transaction date', value: str(row[6]), format: 'text' },
+        { label: 'Rate deviation', value: row.rate_deviation_pct, format: 'pct' },
+        { label: 'Status', value: str(row.fx_validation_status).replace(/_/g, ' ').toLowerCase(), format: 'text' },
+        { label: 'Transaction date', value: str(row.trx_date), format: 'text' },
       ],
     };
   }
@@ -199,18 +201,18 @@ async function buildEvidence(
         kind: 'discount',
         comparison: { leftLabel: 'Applied', rightLabel: 'Approved ceiling' },
         rows: [
-          { label: 'Discount %', left: row[0], right: row[1], format: 'pct', mismatch: true },
-          { label: 'Overrun amount', value: row[2], format: 'usd' },
-          { label: 'Quote status', value: str(row[3]), format: 'text' },
+          { label: 'Discount %', left: row.applied_discount_pct, right: row.approved_discount_pct, format: 'pct', mismatch: true },
+          { label: 'Overrun amount', value: row.discount_overrun_amount, format: 'usd' },
+          { label: 'Quote status', value: str(row.quote_status), format: 'text' },
         ],
       };
     }
     return {
       kind: 'discount',
       rows: [
-        { label: 'Quote status', value: str(row[3]), format: 'text' },
-        { label: 'Expiration date', value: str(row[4]), format: 'text' },
-        { label: 'Applied discount %', value: row[0], format: 'pct' },
+        { label: 'Quote status', value: str(row.quote_status), format: 'text' },
+        { label: 'Expiration date', value: str(row.quote_expiration_date), format: 'text' },
+        { label: 'Applied discount %', value: row.applied_discount_pct, format: 'pct' },
       ],
       note: 'Quote is past its expiration date but still marked active.',
     };
@@ -230,9 +232,9 @@ async function buildEvidence(
       kind: 'rev_rec',
       comparison: { leftLabel: 'Scheduled (ASC-606)', rightLabel: 'GL posted' },
       rows: [
-        { label: 'Recognized revenue', left: row[0], right: row[1], format: 'usd', mismatch: true },
-        { label: 'Variance', value: row[2], format: 'usd' },
-        { label: 'Period', value: str(row[3]), format: 'text' },
+        { label: 'Recognized revenue', left: row.scheduled_recognized, right: row.gl_revenue_posted, format: 'usd', mismatch: true },
+        { label: 'Variance', value: row.recognition_variance, format: 'usd' },
+        { label: 'Period', value: str(row.period_name), format: 'text' },
       ],
     };
   }
@@ -251,11 +253,11 @@ async function buildEvidence(
     return {
       kind: 'ar',
       rows: [
-        { label: 'Outstanding', value: row[0], format: 'usd', mismatch: true },
-        { label: 'Originally billed', value: row[1], format: 'usd' },
-        { label: 'Est. DSO (days)', value: row[2], format: 'int' },
-        { label: 'Aging bucket', value: str(row[3]), format: 'text' },
-        { label: 'Open invoices', value: row[4], format: 'int' },
+        { label: 'Outstanding', value: row.total_outstanding, format: 'usd', mismatch: true },
+        { label: 'Originally billed', value: row.total_billed, format: 'usd' },
+        { label: 'Est. DSO (days)', value: row.estimated_dso_days, format: 'int' },
+        { label: 'Aging bucket', value: str(row.aging_bucket), format: 'text' },
+        { label: 'Open invoices', value: row.invoice_count, format: 'int' },
       ],
     };
   }
@@ -279,12 +281,12 @@ async function buildEvidence(
       kind: 'doc_contract',
       comparison: { leftLabel: 'Contract PDF', rightLabel: 'System (CRM)' },
       rows: [
-        { label: 'SLA tier', left: str(row[0]), right: str(row[1]), format: 'text', mismatch: diff(row[0], row[1]) },
-        { label: 'Term (months)', left: row[2], right: row[3], format: 'int', mismatch: diff(row[2], row[3]) },
-        { label: 'Auto-renew', left: row[4], right: row[5], format: 'bool', mismatch: diff(row[4], row[5]) },
-        { label: 'Status', left: str(row[6]), right: str(row[7]), format: 'text', mismatch: diff(row[6], row[7]) },
+        { label: 'SLA tier', left: str(row.doc_sla_tier), right: str(row.db_sla_tier), format: 'text', mismatch: diff(row.doc_sla_tier, row.db_sla_tier) },
+        { label: 'Term (months)', left: row.doc_term_months, right: row.db_term_months, format: 'int', mismatch: diff(row.doc_term_months, row.db_term_months) },
+        { label: 'Auto-renew', left: row.doc_auto_renew, right: row.db_auto_renew, format: 'bool', mismatch: diff(row.doc_auto_renew, row.db_auto_renew) },
+        { label: 'Status', left: str(row.doc_status), right: str(row.db_status), format: 'text', mismatch: diff(row.doc_status, row.db_status) },
       ],
-      document: { label: 'Open contract PDF', ...volumeUrl(str(row[12])) },
+      document: { label: 'Open contract PDF', ...volumeUrl(str(row.file_name)) },
       note: 'AI-extracted terms from the signed MSA PDF vs the system of record. Highlighted rows diverge.',
     };
   }
@@ -303,11 +305,11 @@ async function buildEvidence(
       kind: 'doc_invoice',
       comparison: { leftLabel: 'Invoice PDF', rightLabel: 'System (ERP)' },
       rows: [
-        { label: 'Total amount', left: row[0], right: row[1], format: 'usd', mismatch: true },
-        { label: 'Tax amount', left: row[2], right: row[3], format: 'usd' },
-        { label: 'Variance', value: row[4], format: 'usd' },
+        { label: 'Total amount', left: row.doc_total_amount, right: row.db_invoice_amount, format: 'usd', mismatch: true },
+        { label: 'Tax amount', left: row.doc_tax_amount, right: row.db_tax_amount, format: 'usd' },
+        { label: 'Variance', value: row.amount_variance, format: 'usd' },
       ],
-      document: { label: 'Open invoice PDF', ...volumeUrl(str(row[5])) },
+      document: { label: 'Open invoice PDF', ...volumeUrl(str(row.file_name)) },
       note: 'AI-extracted invoice totals from the PDF vs the ERP system of record.',
     };
   }

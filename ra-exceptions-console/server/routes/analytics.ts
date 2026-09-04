@@ -1,7 +1,7 @@
 import { sql } from '@databricks/appkit';
 import { z } from 'zod';
 import type { Application } from 'express';
-import { resultRows, type WarehouseResult } from '../warehouse-result';
+import { resultObjects, type WarehouseResult } from '../warehouse-result';
 
 interface AppKitWithAnalyticsAndLakebase {
   analytics: {
@@ -85,17 +85,17 @@ export function setupAnalyticsRoutes(appkit: AppKitWithAnalyticsAndLakebase) {
           row_offset: sql.int(filters.row_offset),
         });
 
-        const rows = resultRows(warehouseResult).map((row) => ({
-          exception_id: stringValue(row[0]),
-          reference_id: stringValue(row[1]),
-          account_name: stringValue(row[2]),
-          check_type: stringValue(row[3]),
-          severity: stringValue(row[4]),
-          amount_at_risk: numberValue(row[5]),
-          detection_method: stringValue(row[6]),
-          source_table: stringValue(row[7]),
-          customer_id: numberValue(row[8]),
-          known_leakage_flag: booleanValue(row[9]),
+        const rows = resultObjects(warehouseResult).map((row) => ({
+          exception_id: stringValue(row.exception_id),
+          reference_id: stringValue(row.reference_id),
+          account_name: stringValue(row.account_name),
+          check_type: stringValue(row.check_type),
+          severity: stringValue(row.severity),
+          amount_at_risk: numberValue(row.amount_at_risk),
+          detection_method: stringValue(row.detection_method),
+          source_table: stringValue(row.source_table),
+          customer_id: numberValue(row.customer_id),
+          known_leakage_flag: booleanValue(row.known_leakage_flag),
           status: 'New',
           assignee: null as string | null,
         }));
@@ -158,13 +158,13 @@ export function setupAnalyticsRoutes(appkit: AppKitWithAnalyticsAndLakebase) {
             COUNT(DISTINCT account_name) AS accounts_affected
           FROM exceptions
         `);
-        const row = resultRows(warehouseResult)[0] ?? [];
+        const row = resultObjects(warehouseResult)[0] ?? {};
 
         res.json({
-          open_exceptions: numberValue(row[0]),
-          total_at_risk: numberValue(row[1]),
-          high_severity: numberValue(row[2]),
-          accounts_affected: numberValue(row[3]),
+          open_exceptions: numberValue(row.open_exceptions),
+          total_at_risk: numberValue(row.total_at_risk),
+          high_severity: numberValue(row.high_severity),
+          accounts_affected: numberValue(row.accounts_affected),
           recovered_amount: recoveredAmount,
           recovered_count: recoveredCases.length,
         });

@@ -5,16 +5,21 @@ import { WorkspaceClient } from '@databricks/sdk-experimental';
  * Streams a source PDF (Ironclad contract / invoice) from its Unity Catalog
  * Volume so the exception drawer can embed it in-app. Runs as the app service
  * principal (granted READ VOLUME on the CLM volumes) via the Databricks Files
- * API. Paths are validated against a fixed allowlist prefix so this can only
- * ever serve the CLM document volumes — never an arbitrary workspace file.
+ * API. Paths are validated against an allowlist prefix so this can only ever
+ * serve the CLM document volumes — never an arbitrary workspace file.
  */
 
 interface AppKitServer {
   server: { extend(fn: (app: Application) => void): void };
 }
 
-// Only the CLM document volumes may be served.
-const ALLOWED_PREFIX = '/Volumes/cdm_tmforum/ironclad_clm_source/';
+// The CLM document volume root. Must match the pipeline's `ra.clm_volume_root`
+// (silver_doc_intelligence.sql reads `${ra.clm_volume_root}/{contract,invoice}_pdfs/`),
+// otherwise every real file_name is rejected and "View PDF" 400s. Configurable
+// via RA_CLM_VOLUME_ROOT so a workspace whose volume differs isn't hardcoded
+// out; defaults to the demo's volume.
+const ALLOWED_PREFIX =
+  (process.env.RA_CLM_VOLUME_ROOT || '/Volumes/cdm_tmforum/ironclad_clm_source').replace(/\/+$/, '') + '/';
 
 let client: WorkspaceClient | null = null;
 function workspace(): WorkspaceClient {
