@@ -26,6 +26,8 @@ Companion analysis: [`../data-source-assessment.md`](../data-source-assessment.m
 | 12 | Domains & Governed Tags | `12-domains-and-tags.md` |
 | 13 | Glossary (UC Pages) | `13-glossary.md` |
 | 14 | Customer Roleplay Presentation (narrative + built deck) | `14-customer-roleplay-presentation.md`, [`customer-roleplay-presentation.html`](customer-roleplay-presentation.html), [`customer-roleplay-presentation.pptx`](customer-roleplay-presentation.pptx) |
+| 15 | Model Governance via Unity (AI) Gateway | `15-model-governance-unity-gateway.md` |
+| 16 | Detection Tabs Plan (Reconciliation Rules & Anomaly Models) | `16-detection-tabs-plan.md` |
 
 Artifact 14 is a **customer-facing deliverable**, not a scrutinized planning doc like 00–13: it is
 the Lumen Technologies roleplay presentation. The Markdown file is the narrative source of truth
