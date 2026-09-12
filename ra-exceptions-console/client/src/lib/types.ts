@@ -19,4 +19,6 @@ export interface KpiSummary {
   total_at_risk: number;
   high_severity: number;
   accounts_affected: number;
+  recovered_amount: number;
+  recovered_count: number;
 }

@@ -162,7 +162,7 @@ export function OverviewPage() {
       )}
 
       {/* KPI row */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <KpiTile
           label="Leakage at risk"
           value={usdCompact(kpi?.total_at_risk)}
@@ -188,6 +188,13 @@ export function OverviewPage() {
           label="Accounts affected"
           value={numCompact(kpi?.accounts_affected)}
           sublabel="Distinct customers"
+          loading={kpiLoading}
+          error={kpiError}
+        />
+        <KpiTile
+          label="Recovered"
+          value={usdCompact(kpi?.recovered_amount)}
+          sublabel={`Converted to recovered revenue · ${numCompact(kpi?.recovered_count)} cases`}
           loading={kpiLoading}
           error={kpiError}
         />
