@@ -4,6 +4,7 @@ import { setupEvidenceRoutes } from './routes/evidence';
 import { setupDocumentRoutes } from './routes/documents';
 import { setupCaseRoutes } from './routes/cases';
 import { setupArchitectureRoutes } from './routes/architecture';
+import { setupDqAuditRoutes } from './routes/dqAudit';
 
 createApp({
   plugins: [analytics(), lakebase(), server(), genie()],
@@ -13,5 +14,6 @@ createApp({
     setupEvidenceRoutes(appkit);
     setupDocumentRoutes(appkit);
     setupArchitectureRoutes(appkit);
+    setupDqAuditRoutes(appkit);
   },
 }).catch(console.error);
