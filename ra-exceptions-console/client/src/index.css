@@ -26,7 +26,7 @@
   --popover: #ffffff;
   --popover-foreground: #1b3139;
 
-  --primary: #ff3621; /* Lava 600 */
+  --primary: #d42b18; /* Lava 700 — darkened for WCAG 4.5:1 text contrast on white */
   --primary-foreground: #ffffff;
 
   --secondary: #f3f2ef; /* Oat light */
@@ -40,7 +40,7 @@
   --destructive-foreground: #ffffff;
   --success: #12805c;
   --success-foreground: #ffffff;
-  --warning: #b45309;
+  --warning: #874510; /* darkened amber for WCAG AA ≥ 5.75:1 on warning/15 badge bg */
   --warning-foreground: #ffffff;
 
   --border: #e5e3de;

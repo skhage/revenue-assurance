@@ -216,3 +216,56 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Node.js (project-root level; ra-exceptions-console has its own .gitignore)
+node_modules/
+
+# Databricks workspace-only files (agent swarm instructions, assistant config)
+.assistant_instructions.md
+.assistant/
+
+# Agent notebooks contain workspace-specific identifiers (experiment paths,
+# Lakebase hostnames) that must not be committed to this public repo.
+agents/
+
+# Workspace-only Jupyter notebooks (.ipynb) — these are created by agents and
+# interactive sessions in the Databricks workspace. They may contain Lakebase
+# hostnames, experiment paths, or other internal identifiers that must NOT be
+# committed to this public repo. Committable code lives in .py/.sql/.ts files.
+*.ipynb
+
+# MLflow experiment artifacts tracked by workspace, not by git.
+ra-supervisor-eval
+
+# Workspace-only maintenance / ad-hoc scoring notebooks exported as .py source.
+# These contain workspace-specific identifiers (emails, experiment paths) and
+# must NOT be committed to this public repo.
+mlops/rescore_gold_anomaly_scores.py
+mlops/score_payment_reconciliation.py
+mlops/score_bill_adjustments.py
+mlops/score_order_to_bill.py
+
+# Temporary Genie space update file (workspace-only).
+_tmp_genie_update.json
+
+# Maintenance scripts (workspace-only, may contain internal identifiers).
+maintenance/
+
+# Workspace-only warehouse SQL scripts not part of the pipeline.
+reconciliation/warehouse/domain_tagging_admin_completion.sql
+reconciliation/warehouse/uc_pages_glossary.md
+
+# Claude Code / Isaac internal config (workspace-only, not part of the project).
+.claude/
+.isaac/
+
+# Generated / binary demo artifacts (source markdown stays tracked).
+demo-artifacts/*.pptx
+demo-artifacts/*.html
+demo-artifacts/requirements-presentation.txt
+
+# Early planning doc superseded by demo-artifacts/04-source-data-spec.md.
+data-source-assessment.md
+
+# Empty scaffold folder (app lives in ra-exceptions-console/).
+app/

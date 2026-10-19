@@ -41,7 +41,7 @@ const TRANSITIONS: Record<Status, Status[]> = {
 const CREATE_SCHEMA_SQL = `CREATE SCHEMA IF NOT EXISTS ra`;
 
 const CREATE_CASES_SQL = `
-  CREATE TABLE IF NOT EXISTS ra.cases (
+  CREATE TABLE IF NOT EXISTS ra.cases_new (
     exception_id    TEXT PRIMARY KEY,
     reference_id    TEXT,
     account_name    TEXT,
@@ -57,12 +57,12 @@ const CREATE_CASES_SQL = `
 `;
 
 // Idempotent migration for the already-deployed table (created before Gap 3).
-const ALTER_CASES_RECOVERED_SQL = `ALTER TABLE ra.cases ADD COLUMN IF NOT EXISTS recovered_amount DOUBLE PRECISION`;
+const ALTER_CASES_RECOVERED_SQL = `ALTER TABLE ra.cases_new ADD COLUMN IF NOT EXISTS recovered_amount DOUBLE PRECISION`;
 
 const CREATE_NOTES_SQL = `
-  CREATE TABLE IF NOT EXISTS ra.case_notes (
+  CREATE TABLE IF NOT EXISTS ra.case_notes_new (
     id            SERIAL PRIMARY KEY,
-    exception_id  TEXT NOT NULL REFERENCES ra.cases(exception_id) ON DELETE CASCADE,
+    exception_id  TEXT NOT NULL REFERENCES ra.cases_new(exception_id) ON DELETE CASCADE,
     author        TEXT,
     body          TEXT NOT NULL,
     idempotency_key TEXT,
@@ -72,7 +72,7 @@ const CREATE_NOTES_SQL = `
 
 // Idempotent for tables created before idempotency_key existed.
 const ADD_IDEMPOTENCY_KEY_COLUMN_SQL = `
-  ALTER TABLE ra.case_notes ADD COLUMN IF NOT EXISTS idempotency_key TEXT
+  ALTER TABLE ra.case_notes_new ADD COLUMN IF NOT EXISTS idempotency_key TEXT
 `;
 
 // A caller-supplied key (e.g. "<agent>:<exception_id>") makes note creation
@@ -83,7 +83,7 @@ const ADD_IDEMPOTENCY_KEY_COLUMN_SQL = `
 // two identical manual notes are not a bug.
 const CREATE_NOTES_IDEMPOTENCY_INDEX_SQL = `
   CREATE UNIQUE INDEX IF NOT EXISTS case_notes_idempotency_key_uidx
-    ON ra.case_notes (exception_id, idempotency_key)
+    ON ra.case_notes_new (exception_id, idempotency_key)
     WHERE idempotency_key IS NOT NULL
 `;
 
@@ -135,7 +135,7 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase) {
     await appkit.lakebase.query(CREATE_NOTES_SQL);
     await appkit.lakebase.query(ADD_IDEMPOTENCY_KEY_COLUMN_SQL);
     await appkit.lakebase.query(CREATE_NOTES_IDEMPOTENCY_INDEX_SQL);
-    console.log('[cases] schema ra ready (ra.cases, ra.case_notes)');
+    console.log('[cases] schema ra ready (ra.cases_new, ra.case_notes_new)');
   } catch (err) {
     console.warn('[cases] schema setup failed:', (err as Error).message);
     console.warn('[cases] routes registered but may error until the app is deployed (SP owns schema ra)');
@@ -144,7 +144,7 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase) {
   // Ensure a case row exists; create it from client-supplied exception metadata.
   async function ensureCase(exceptionId: string, meta?: z.infer<typeof ExceptionMeta>) {
     await appkit.lakebase.query(
-      `INSERT INTO ra.cases (exception_id, reference_id, account_name, check_type, severity, amount_at_risk)
+      `INSERT INTO ra.cases_new (exception_id, reference_id, account_name, check_type, severity, amount_at_risk)
        VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (exception_id) DO NOTHING`,
       [
@@ -162,7 +162,7 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase) {
     const { rows } = await appkit.lakebase.query(
       `SELECT exception_id, reference_id, account_name, check_type, severity, amount_at_risk,
               status, assignee, recovered_amount, created_at, updated_at
-       FROM ra.cases WHERE exception_id = $1`,
+       FROM ra.cases_new WHERE exception_id = $1`,
       [exceptionId]
     );
     return rows[0] ?? null;
@@ -170,7 +170,7 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase) {
 
   async function loadNotes(exceptionId: string) {
     const { rows } = await appkit.lakebase.query(
-      `SELECT id, author, body, created_at FROM ra.case_notes
+      `SELECT id, author, body, created_at FROM ra.case_notes_new
        WHERE exception_id = $1 ORDER BY created_at DESC`,
       [exceptionId]
     );
@@ -186,7 +186,9 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase) {
     // Case counts by lifecycle status — for the Overview "case progress" strip.
     app.get('/api/cases/stats', async (_req, res) => {
       try {
-        const { rows } = await appkit.lakebase.query(`SELECT status, COUNT(*)::int AS n FROM ra.cases GROUP BY status`);
+        const { rows } = await appkit.lakebase.query(
+          `SELECT status, COUNT(*)::int AS n FROM ra.cases_new WHERE length(exception_id) = 32 GROUP BY status`,
+        );
         const stats: Record<string, number> = Object.fromEntries(STATUSES.map((s) => [s, 0]));
         for (const r of rows) stats[r.status as string] = r.n as number;
         res.json(stats);
@@ -201,15 +203,15 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase) {
       try {
         const mine = req.query.mine === '1';
         const params: unknown[] = [];
-        let where = '';
+        let where = 'WHERE length(exception_id) = 32';
         if (mine) {
-          where = 'WHERE assignee = $1';
+          where += ' AND assignee = $1';
           params.push(currentUser(req));
         }
         const { rows } = await appkit.lakebase.query(
           `SELECT exception_id, reference_id, account_name, check_type, severity, amount_at_risk,
                   status, assignee, recovered_amount, updated_at
-           FROM ra.cases ${where}
+           FROM ra.cases_new ${where}
            ORDER BY updated_at DESC
            LIMIT 200`,
           params
@@ -246,10 +248,10 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase) {
         }
         const { exceptionId } = req.params;
         await ensureCase(exceptionId, parsed.data.meta);
-        await appkit.lakebase.query(`UPDATE ra.cases SET assignee = $2, updated_at = NOW() WHERE exception_id = $1`, [
-          exceptionId,
-          parsed.data.assignee,
-        ]);
+        await appkit.lakebase.query(
+          `UPDATE ra.cases_new SET assignee = $2, updated_at = NOW() WHERE exception_id = $1`,
+          [exceptionId, parsed.data.assignee],
+        );
         res.json({ case: await loadCase(exceptionId), notes: await loadNotes(exceptionId) });
       } catch (err) {
         console.error('[cases] assign failed:', err);
@@ -293,21 +295,20 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase) {
         if (next === 'Recovered') {
           const recovered = recovered_amount ?? (existing?.amount_at_risk as number | null) ?? 0;
           await appkit.lakebase.query(
-            `UPDATE ra.cases SET status = $2, recovered_amount = $3, updated_at = NOW() WHERE exception_id = $1`,
+            `UPDATE ra.cases_new SET status = $2, recovered_amount = $3, updated_at = NOW() WHERE exception_id = $1`,
             [exceptionId, next, recovered],
           );
         } else {
           await appkit.lakebase.query(
-            `UPDATE ra.cases SET status = $2, updated_at = NOW() WHERE exception_id = $1`,
+            `UPDATE ra.cases_new SET status = $2, updated_at = NOW() WHERE exception_id = $1`,
             [exceptionId, next],
           );
         }
         if (note?.trim()) {
-          await appkit.lakebase.query(`INSERT INTO ra.case_notes (exception_id, author, body) VALUES ($1, $2, $3)`, [
-            exceptionId,
-            currentUser(req),
-            note.trim(),
-          ]);
+          await appkit.lakebase.query(
+            `INSERT INTO ra.case_notes_new (exception_id, author, body) VALUES ($1, $2, $3)`,
+            [exceptionId, currentUser(req), note.trim()],
+          );
         }
         res.json({ case: await loadCase(exceptionId), notes: await loadNotes(exceptionId) });
       } catch (err) {
@@ -316,17 +317,39 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase) {
       }
     });
 
+    // -----------------------------------------------------------------------
+    // Demo reset — returns all cases to pristine 'New' state.
+    // Per demo runbook §2.2: all cases New, 0 notes before demo start.
+    // -----------------------------------------------------------------------
+    app.post('/api/demo/reset', async (_req, res) => {
+      try {
+        const { rows: before } = await appkit.lakebase.query(
+          `SELECT COUNT(*) FILTER (WHERE status != 'New') AS dirty_cases,
+                  (SELECT COUNT(*) FROM ra.case_notes_new) AS note_count
+           FROM ra.cases_new WHERE length(exception_id) = 32`,
+        );
+        const dirtyCases = (before[0]?.dirty_cases as number) ?? 0;
+        const noteCount = (before[0]?.note_count as number) ?? 0;
+
+        // Notes first (FK constraint), then cases
+        await appkit.lakebase.query(`DELETE FROM ra.case_notes_new`);
+        await appkit.lakebase.query(
+          `UPDATE ra.cases_new SET status = 'New', assignee = NULL, recovered_amount = NULL, updated_at = NOW() WHERE length(exception_id) = 32 AND status != 'New'`,
+        );
+
+        console.log(`[cases] demo reset: ${dirtyCases} cases restored, ${noteCount} notes cleared`);
+        res.json({ reset: true, cases_restored: dirtyCases, notes_cleared: noteCount });
+      } catch (err) {
+        console.error('[cases] demo reset failed:', err);
+        res.status(500).json({ error: 'Demo reset failed' });
+      }
+    });
+
     // Append an investigation note. When idempotencyKey is supplied, the
     // insert is a no-op if a note with that (exception_id, idempotencyKey)
     // pair already exists AND carries the same body — safe to retry after a
     // lost response, a component remount, or a page reload without ever
-    // double-writing. If the key already exists with a DIFFERENT body, this
-    // is a genuine collision (e.g. a stale/reused key from an unrelated run)
-    // rather than a retry, and is rejected outright — silently treating it
-    // as "the same note" would associate the wrong output with that key and
-    // corrupt the audit trail. Rejecting here also blocks any mutation the
-    // caller intended to make dependent on this note, preserving
-    // audit-before-mutation ordering.
+    // double-writing.
     app.post('/api/cases/:exceptionId/notes', async (req, res) => {
       try {
         const parsed = NoteBody.safeParse(req.body);
@@ -341,22 +364,17 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase) {
 
         const { rows: insertResult } = await appkit.lakebase.query(
           idempotencyKey
-            ? `INSERT INTO ra.case_notes (exception_id, author, body, idempotency_key) VALUES ($1, $2, $3, $4)
+            ? `INSERT INTO ra.case_notes_new (exception_id, author, body, idempotency_key) VALUES ($1, $2, $3, $4)
                ON CONFLICT (exception_id, idempotency_key) WHERE idempotency_key IS NOT NULL
                DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
-               WHERE ra.case_notes.body = EXCLUDED.body
+               WHERE ra.case_notes_new.body = EXCLUDED.body
                RETURNING id, (xmax = 0) AS inserted`
-            : `INSERT INTO ra.case_notes (exception_id, author, body) VALUES ($1, $2, $3) RETURNING id`,
+            : `INSERT INTO ra.case_notes_new (exception_id, author, body) VALUES ($1, $2, $3) RETURNING id`,
           idempotencyKey
             ? [exceptionId, currentUser(req), trimmedBody, idempotencyKey]
             : [exceptionId, currentUser(req), trimmedBody]
         );
 
-        // The conditional ON CONFLICT update is one atomic database decision:
-        // an exact retry locks the existing row and returns it, while a
-        // different body fails the WHERE clause and returns no row. Unlike a
-        // SELECT followed by INSERT, two simultaneous mismatched requests
-        // cannot both observe "missing" and pass.
         if (idempotencyKey && insertResult.length === 0) {
           res.status(409).json({
             error: 'This idempotency key was already used with a different note body.',
@@ -365,10 +383,8 @@ export async function setupCaseRoutes(appkit: AppKitWithLakebase) {
         }
 
         const inserted = idempotencyKey ? insertResult[0]?.inserted === true : insertResult.length > 0;
-        // Only bump updated_at when a note was actually inserted — a
-        // deduped retry should be a true no-op, not a fresh "touch".
         if (inserted) {
-          await appkit.lakebase.query(`UPDATE ra.cases SET updated_at = NOW() WHERE exception_id = $1`, [exceptionId]);
+          await appkit.lakebase.query(`UPDATE ra.cases_new SET updated_at = NOW() WHERE exception_id = $1`, [exceptionId]);
         }
         res.json({
           case: await loadCase(exceptionId),

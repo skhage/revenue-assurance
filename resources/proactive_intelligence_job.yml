@@ -1,0 +1,57 @@
+# Daily proactive revenue intelligence agent run.
+#
+# Runs the proactive_intelligence_agent notebook on serverless compute every
+# day at 06:00 UTC — before Dana Whitfield's morning review session. The
+# notebook orchestrates all 23 RA UC functions in a single intelligence run:
+# batch triage, auto-resolution, emerging risk detection, recovery health
+# tracking, and executive briefing generation.
+#
+# This is a standalone scheduled job, deliberately separate from the on-demand
+# ra_e2e_orchestration job. The agent reads from the gold/silver tables that
+# the reconciliation pipeline has already populated.
+#
+# This file is auto-included by databricks.yml's `include: resources/*.yml`
+# glob. It does NOT modify any other resource file.
+#
+# Public repo: no workspace hostnames, CLI profile names, or real resource ids.
+# The catalog comes in via ${var.catalog}; the host resolves from the CLI
+# profile at deploy/run time (`--profile <name>`).
+
+resources:
+  jobs:
+    ra_proactive_intelligence:
+      name: ra_proactive_intelligence
+      description: >-
+        Daily proactive revenue intelligence run. Orchestrates all 23 RA UC
+        functions: batch exception triage (P1–P4), P4 auto-resolution,
+        emerging risk detection, recovery health tracking, and executive
+        briefing generation. Runs at 06:00 UTC before the RA team's morning
+        review.
+
+      schedule:
+        quartz_cron_expression: "0 0 6 * * ?"
+        timezone_id: UTC
+        pause_status: UNPAUSED
+
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+
+      tasks:
+        - task_key: proactive_intelligence
+          description: >-
+            Run the proactive intelligence agent notebook. Calls 23 UC
+            functions across 6 phases: batch triage, auto-resolution,
+            emerging risk detection, recovery health, executive briefing,
+            and daily report persistence. ~3.5 min on serverless.
+          notebook_task:
+            notebook_path: ../agents/proactive_intelligence_agent.ipynb
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+
+      # One run at a time; the agent writes daily reports and case
+      # assignments, so concurrent runs would create duplicates.
+      max_concurrent_runs: 1

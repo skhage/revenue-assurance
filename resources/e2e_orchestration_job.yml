@@ -1,0 +1,140 @@
+# Unified end-to-end orchestration job for the Revenue Assurance demo.
+#
+# Chains every pipeline stage in dependency order on serverless compute:
+#   1. simulate_source_systems  — regenerate *_source tables from data-sim
+#   2. reconciliation_pipeline  — refresh silver + gold MVs via the SDP
+#   3. ml_feature_build          — build exception features (parallel with 4)
+#   4. forecast_refresh          — ai_forecast gold MV on SQL warehouse
+#   5. ml_train                  — train IsolationForest (after 3)
+#   6. ml_score                  — publish anomaly scores (after 5)
+#
+# Stages 3+5+6 and 4 run in parallel after the reconciliation pipeline
+# completes, so ML and forecast work overlap for minimum wall-clock time.
+#
+# Usage:
+#   databricks bundle run ra_e2e_orchestration --profile <name>
+#
+# This file is auto-included by databricks.yml's `include: resources/*.yml`
+# glob. It does NOT modify any other resource file.
+#
+# Public repo: no workspace hostnames, CLI profile names, or real resource ids.
+# The catalog, schema, and warehouse_id come in via bundle variables.
+
+resources:
+  jobs:
+    ra_e2e_orchestration:
+      name: ra_e2e_orchestration
+      description: >-
+        End-to-end orchestration: data simulation → silver/gold reconciliation
+        → ML anomaly detection → KPI/forecast refresh. Chains all Revenue
+        Assurance pipeline stages in dependency order on serverless compute.
+        Target wall-clock time < 15 min (S1 criterion).
+
+      # Bundle-level params flow to all tasks that need them.
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+        - name: experiment_name
+          default: /Shared/revenue-assurance/anomaly-detection
+
+      # ML tasks need extra Python packages beyond the base serverless image.
+      environments:
+        - environment_key: ml_runtime
+          spec:
+            client: "1"
+            dependencies:
+              - mlflow>=2.22.0,<4
+              - databricks-feature-engineering>=0.16.0
+              - scikit-learn>=1.4.0
+              - pandas>=2.0.0
+              - numpy>=1.26.0
+
+      tasks:
+        # ─── Stage 1: Simulate upstream source systems ───────────────────
+        - task_key: simulate_source_systems
+          description: >-
+            Regenerate salesforce_source, oracle_erp_source, refinitiv_fx_source,
+            ironclad_clm_source, and mdm_source tables from data-sim config.
+          notebook_task:
+            notebook_path: ../data-sim/simulate_source_systems.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+
+        # ─── Stage 2: Run silver + gold reconciliation pipeline ──────────
+        - task_key: reconciliation_pipeline
+          description: >-
+            Trigger the ra_medallion_pipeline SDP to refresh all 7 silver and
+            4 gold materialized views. Waits for the update to complete.
+          depends_on:
+            - task_key: simulate_source_systems
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.ra_medallion_pipeline.id}
+            full_refresh: false
+
+        # ─── Stage 3a: ML feature build (parallel with forecast) ─────────
+        - task_key: ml_feature_build
+          description: >-
+            Build exception-level features from gold_leakage_summary and
+            gold_reconciliation_scorecard for IsolationForest training.
+          depends_on:
+            - task_key: reconciliation_pipeline
+          environment_key: ml_runtime
+          spark_python_task:
+            python_file: ../mlops/feature_build.py
+            parameters:
+              - --catalog
+              - "{{job.parameters.catalog}}"
+              - --schema
+              - "{{job.parameters.schema}}"
+
+        # ─── Stage 3b: ML model training ─────────────────────────────────
+        - task_key: ml_train
+          description: >-
+            Train IsolationForest model, log to MLflow experiment, register
+            champion in Unity Catalog model registry.
+          depends_on:
+            - task_key: ml_feature_build
+          environment_key: ml_runtime
+          spark_python_task:
+            python_file: ../mlops/train.py
+            parameters:
+              - --catalog
+              - "{{job.parameters.catalog}}"
+              - --schema
+              - "{{job.parameters.schema}}"
+              - --experiment-name
+              - "{{job.parameters.experiment_name}}"
+
+        # ─── Stage 3c: ML scoring ────────────────────────────────────────
+        - task_key: ml_score
+          description: >-
+            Score all exceptions with the champion model and publish
+            gold_anomaly_scores for the dashboard and Genie.
+          depends_on:
+            - task_key: ml_train
+          environment_key: ml_runtime
+          spark_python_task:
+            python_file: ../mlops/score.py
+            parameters:
+              - --catalog
+              - "{{job.parameters.catalog}}"
+              - --schema
+              - "{{job.parameters.schema}}"
+
+        # ─── Stage 4: Refresh ai_forecast gold MV (parallel with ML) ─────
+        - task_key: forecast_refresh
+          description: >-
+            Refresh gold_revenue_forecast_anomalies and its DQ-6 audit MV on
+            a SQL warehouse. Runs ai_forecast which requires warehouse execution.
+          depends_on:
+            - task_key: reconciliation_pipeline
+          sql_task:
+            file:
+              path: ../reconciliation/warehouse/gold_revenue_forecast_anomalies.sql
+            warehouse_id: ${var.sql_warehouse_id}
+
+      # One run at a time; no schedule (triggered on demand for demos).
+      max_concurrent_runs: 1

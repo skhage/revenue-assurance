@@ -27,7 +27,7 @@ FROM (
   SELECT *,
     md5(concat_ws('|', check_type, coalesce(reference_id, ''),
          coalesce(cast(customer_id AS string), ''), cast(amount_at_risk AS string))) AS exception_id
-  FROM cdm_tmforum.revenue_assurance.gold_leakage_summary
+  FROM cdm_tmforum.revenue_assurance.v_gold_leakage_summary
 ) s
 LEFT JOIN cdm_tmforum.revenue_assurance.gold_reconciliation_scorecard sc
   ON sc.customer_id = s.customer_id

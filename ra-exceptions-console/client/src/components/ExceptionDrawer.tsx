@@ -4,6 +4,7 @@ import {
   SheetContent,
   SheetHeader,
   SheetTitle,
+  SheetDescription,
   Button,
   Textarea,
   Input,
@@ -20,15 +21,17 @@ import {
 } from '@databricks/appkit-ui/react';
 import { sql } from '@databricks/appkit-ui/js';
 import { useEffect, useState } from 'react';
-import { SeverityBadge, StatusChip } from './badges';
+import { SeverityBadge, StatusChip, ConfidenceBadge } from './badges';
 import { LoadingRegion, ErrorRegion } from './StatusRegion';
-import { FileText, ExternalLink } from 'lucide-react';
+import { FileText, ExternalLink, Shield, ChevronRight, BrainCircuit, AlertTriangle } from 'lucide-react';
 import { usd, num, checkLabel, accountLabel, detectionLabel, sourceLabel } from '../lib/format';
 import { casesApi, NEXT_STATUS, type CasePayload, type Status, type ExceptionMeta } from '../lib/cases';
+import { triageApi } from '../lib/triage';
 import { evidenceApi, type EvidencePayload, type EvidenceRow, type EvidenceFormat } from '../lib/evidence';
 import { architectureApi, exploreDataUrl, type ArchitectureConfig } from '../lib/architecture';
 import { useWhoAmI } from '../lib/whoami';
-import type { ExceptionRow } from '../lib/types';
+import type { ExceptionRow, TriageClassification, PlaybookStep, AdaptiveTriageResult } from '../lib/types';
+import { PriorityBadge } from './badges';
 
 function fmtEvidence(v: unknown, format?: EvidenceFormat): string {
   if (v === null || v === undefined || v === '') return '—';
@@ -182,7 +185,7 @@ function KV({ k, v }: { k: string; v: React.ReactNode }) {
 }
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{children}</div>;
+  return <h3 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{children}</h3>;
 }
 
 function CustomerScorecard({ exceptionId, onRetry }: { exceptionId: string; onRetry: () => void }) {
@@ -217,6 +220,207 @@ function CustomerScorecard({ exceptionId, onRetry }: { exceptionId: string; onRe
       <KV k="Customer exceptions" v={num(detail.customer_total_exceptions)} />
       <KV k="Customer $ at risk" v={usd(detail.customer_total_at_risk)} />
     </>
+  );
+}
+
+function TriagePanel({ exception }: { exception: ExceptionRow }) {
+  const [classification, setClassification] = useState<TriageClassification | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    const ctrl = new AbortController();
+    setLoading(true);
+    triageApi
+      .classify(
+        { check_type: exception.check_type, amount_at_risk: exception.amount_at_risk },
+        ctrl.signal
+      )
+      .then(setClassification)
+      .catch(() => { /* triage is supplemental */ })
+      .finally(() => { if (!ctrl.signal.aborted) setLoading(false); });
+    return () => ctrl.abort();
+  }, [exception.check_type, exception.amount_at_risk]);
+
+  if (loading) {
+    return (
+      <LoadingRegion label="Classifying">
+        <Skeleton className="h-16 w-full" />
+      </LoadingRegion>
+    );
+  }
+  if (!classification) return null;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <PriorityBadge priority={classification.priority} />
+        <span className="text-xs text-muted-foreground">
+          Urgency {classification.urgency_score}/100 · SLA {classification.sla_hours}h
+        </span>
+      </div>
+      <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-foreground">
+        {classification.rationale}
+      </div>
+      <KV k="Assigned analyst" v={classification.assigned_analyst} />
+    </div>
+  );
+}
+
+// ConfidenceBadge imported from shared badges.tsx (single source of truth)
+
+function AdaptiveTriagePanel({ exception }: { exception: ExceptionRow }) {
+  const [result, setResult] = useState<AdaptiveTriageResult | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    const ctrl = new AbortController();
+    setLoading(true);
+    triageApi
+      .adaptiveTriage(
+        {
+          check_type: exception.check_type,
+          amount_at_risk: exception.amount_at_risk,
+          customer_id: exception.customer_id,
+          severity: exception.severity,
+        },
+        ctrl.signal
+      )
+      .then(setResult)
+      .catch(() => { /* adaptive triage is supplemental */ })
+      .finally(() => { if (!ctrl.signal.aborted) setLoading(false); });
+    return () => ctrl.abort();
+  }, [exception.check_type, exception.amount_at_risk, exception.customer_id, exception.severity]);
+
+  if (loading) {
+    return (
+      <LoadingRegion label="Loading adaptive recommendation">
+        <Skeleton className="h-24 w-full" />
+      </LoadingRegion>
+    );
+  }
+  if (!result) return null;
+
+  const pct = (v: number) => `${(Math.round(v * 1000) / 10).toLocaleString()}%`;
+
+  return (
+    <div className="flex flex-col gap-3">
+      {/* Priority + confidence header */}
+      <div className="flex items-center gap-2">
+        <PriorityBadge priority={result.adaptive_priority} />
+        <ConfidenceBadge confidence={result.learning_confidence} />
+        {result.compound_risk_flag && (
+          <span className="inline-flex items-center gap-1 rounded bg-destructive/10 px-2 py-0.5 text-[10px] font-semibold text-destructive">
+            <AlertTriangle className="h-3 w-3" aria-hidden="true" /> Compound risk
+          </span>
+        )}
+      </div>
+
+      {/* Routing rationale */}
+      {result.routing_rationale && (
+        <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-foreground">
+          {result.routing_rationale}
+        </div>
+      )}
+
+      {/* Key metrics grid */}
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+        <KV
+          k="Expected recovery"
+          v={<span>{usd(result.expected_recovery_value)} <span className="text-xs text-muted-foreground">({pct(result.expected_recovery_rate)})</span></span>}
+        />
+        <KV k="Est. hours" v={`${result.expected_hours.toFixed(1)}h`} />
+        <KV k="ROI/hour" v={usd(result.recovery_roi_per_hour)} />
+        <KV k="Best analyst" v={result.recommended_analyst} />
+      </div>
+
+      {/* Recommended method */}
+      <KV k="Recommended method" v={result.recommended_method.replace(/_/g, ' ')} />
+    </div>
+  );
+}
+
+function InvestigationPlaybook({ exception }: { exception: ExceptionRow }) {
+  const [steps, setSteps] = useState<PlaybookStep[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [expandedStep, setExpandedStep] = useState<number | null>(null);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    setLoading(true);
+    setError(false);
+    triageApi
+      .playbook(
+        {
+          check_type: exception.check_type,
+          customer_id: exception.customer_id,
+          amount_at_risk: exception.amount_at_risk,
+          reference_id: exception.reference_id,
+        },
+        ctrl.signal
+      )
+      .then((s) => { setSteps(s); setError(false); })
+      .catch(() => { if (!ctrl.signal.aborted) setError(true); })
+      .finally(() => { if (!ctrl.signal.aborted) setLoading(false); });
+    return () => ctrl.abort();
+  }, [exception.check_type, exception.customer_id, exception.amount_at_risk, exception.reference_id]);
+
+  if (loading) {
+    return (
+      <LoadingRegion label="Generating playbook">
+        <Skeleton className="h-24 w-full" />
+      </LoadingRegion>
+    );
+  }
+  if (error || steps.length === 0) {
+    return (
+      <div className="text-sm text-muted-foreground">
+        No investigation playbook available for this check type.
+      </div>
+    );
+  }
+
+  return (
+    <ol className="flex flex-col gap-2">
+      {steps.map((step) => (
+        <li
+          key={step.step_number}
+          className="rounded-md border border-border transition-colors hover:bg-muted/30"
+        >
+          <button
+            type="button"
+            onClick={() =>
+              setExpandedStep((prev) => (prev === step.step_number ? null : step.step_number))
+            }
+            aria-expanded={expandedStep === step.step_number}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          >
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand/10 text-[10px] font-bold text-brand">
+              {step.step_number}
+            </span>
+            <span className="flex-1 text-sm font-medium text-foreground">{step.action}</span>
+            <ChevronRight
+              className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${
+                expandedStep === step.step_number ? 'rotate-90' : ''
+              }`}
+            />
+          </button>
+          {expandedStep === step.step_number && (
+            <div className="flex flex-col gap-1.5 border-t border-border px-3 py-2">
+              <KV k="Data source" v={step.data_source} />
+              {step.query_hint && (
+                <div className="rounded bg-muted px-2 py-1 font-mono text-[11px] text-muted-foreground">
+                  {step.query_hint}
+                </div>
+              )}
+              {step.escalation_trigger && (
+                <div className="text-xs text-warning">
+                  Escalate if: {step.escalation_trigger}
+                </div>
+              )}
+            </div>
+          )}
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -310,6 +514,9 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
             <span className="text-base">{accountLabel(exception.account_name)}</span>
             <SeverityBadge severity={exception.severity} />
           </SheetTitle>
+          <SheetDescription className="sr-only">
+            {checkLabel(exception.check_type)} exception — {usd(exception.amount_at_risk)} at risk
+          </SheetDescription>
           <div className="mt-1 font-mono text-lg font-semibold tabular-nums text-destructive">
             {usd(exception.amount_at_risk)}
             <span className="ml-1.5 text-xs font-normal text-muted-foreground">at risk</span>
@@ -356,6 +563,38 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
               exceptionId={exception.exception_id}
               onRetry={() => setScorecardRefreshKey((k) => k + 1)}
             />
+          </div>
+
+          <Separator />
+
+          {/* AI triage classification */}
+          <div className="flex flex-col gap-2.5">
+            <SectionTitle>
+              <span className="inline-flex items-center gap-1">
+                <Shield className="h-3.5 w-3.5" /> AI triage
+              </span>
+            </SectionTitle>
+            <TriagePanel key={`triage-${exception.exception_id}`} exception={exception} />
+          </div>
+
+          <Separator />
+
+          {/* Adaptive triage — learning-informed recommendation */}
+          <div className="flex flex-col gap-2.5">
+            <SectionTitle>
+              <span className="inline-flex items-center gap-1">
+                <BrainCircuit className="h-3.5 w-3.5" /> Adaptive triage
+              </span>
+            </SectionTitle>
+            <AdaptiveTriagePanel key={`adaptive-${exception.exception_id}`} exception={exception} />
+          </div>
+
+          <Separator />
+
+          {/* Investigation playbook */}
+          <div className="flex flex-col gap-2.5">
+            <SectionTitle>Investigation playbook</SectionTitle>
+            <InvestigationPlaybook key={`playbook-${exception.exception_id}`} exception={exception} />
           </div>
 
           <Separator />
@@ -446,6 +685,7 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
                             value={recoveredInput}
                             onChange={(e) => setRecoveredInput(e.target.value)}
                             className="h-8 w-40"
+                            aria-describedby="recovered-amt-help"
                           />
                           <Button
                             size="sm"
@@ -470,7 +710,7 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
                             Cancel
                           </Button>
                         </div>
-                        <p className="text-[11px] text-muted-foreground">
+                        <p id="recovered-amt-help" className="text-[11px] text-muted-foreground">
                           Defaults to the full amount at risk ({usd(exception.amount_at_risk)}). Adjust to the amount
                           actually recovered or prevented.
                         </p>
@@ -504,6 +744,7 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
               <div className="flex flex-col gap-2">
                 <Textarea
                   placeholder="Add an investigation note for the audit trail…"
+                  aria-label="Investigation note"
                   value={note}
                   onChange={(e) => setNote(e.target.value)}
                   className="min-h-16"

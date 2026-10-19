@@ -29,7 +29,21 @@ const QueueQuery = z.object({
 const EXCEPTION_ID_SQL = `md5(concat_ws('|', check_type, coalesce(reference_id, ''),
        coalesce(cast(customer_id AS string), ''), cast(amount_at_risk AS string)))`;
 
+// Single authoritative CTE — reads the v_gold_leakage_summary view which unions
+// all 8 gold sources (leakage_summary, bill_adjustment, payment, fee, commission,
+// billing_dispute, network_incident) and applies PII masking via UC row-level
+// security. Replaces the earlier 4-source inline UNION (stale since gold_fee,
+// gold_commission, gold_billing_dispute, and gold_network_incident were added).
+const ALL_EXCEPTIONS_CTE = `
+  all_exceptions AS (
+    SELECT check_type, severity, customer_id, account_name, amount_at_risk,
+           source_table, detection_method, known_leakage_flag, reference_id
+    FROM cdm_tmforum.revenue_assurance.v_gold_leakage_summary
+  )
+`;
+
 const QUEUE_SQL = `
+WITH ${ALL_EXCEPTIONS_CTE}
 SELECT
   ${EXCEPTION_ID_SQL} AS exception_id,
   reference_id,
@@ -41,7 +55,7 @@ SELECT
   source_table,
   customer_id,
   known_leakage_flag
-FROM cdm_tmforum.revenue_assurance.gold_leakage_summary
+FROM all_exceptions
 WHERE (:check_type = 'ALL' OR check_type = :check_type)
   AND (:severity = 'ALL' OR severity = :severity)
   AND (
@@ -107,7 +121,7 @@ export function setupAnalyticsRoutes(appkit: AppKitWithAnalyticsAndLakebase) {
 
         const { rows: caseRows } = await appkit.lakebase.query(
           `SELECT exception_id, status, assignee
-           FROM ra.cases
+           FROM ra.cases_new
            WHERE exception_id = ANY($1::text[])`,
           [rows.map((row) => row.exception_id)]
         );
@@ -132,7 +146,7 @@ export function setupAnalyticsRoutes(appkit: AppKitWithAnalyticsAndLakebase) {
     app.get('/api/analytics/kpis', async (_req, res) => {
       try {
         const { rows: terminalCases } = await appkit.lakebase.query(
-          `SELECT exception_id, status, recovered_amount FROM ra.cases WHERE status IN ('Recovered', 'WrittenOff')`
+          `SELECT exception_id, status, recovered_amount FROM ra.cases_new WHERE status IN ('Recovered', 'WrittenOff')`
         );
         const terminalIds = terminalCases
           .map((row) => String(row.exception_id))
@@ -143,13 +157,14 @@ export function setupAnalyticsRoutes(appkit: AppKitWithAnalyticsAndLakebase) {
           terminalIds.length === 0 ? 'TRUE' : `exception_id NOT IN (${terminalIds.map((id) => `'${id}'`).join(', ')})`;
 
         const warehouseResult = await appkit.analytics.query(`
-          WITH exceptions AS (
+          WITH ${ALL_EXCEPTIONS_CTE},
+          exceptions AS (
             SELECT
               ${EXCEPTION_ID_SQL} AS exception_id,
               severity,
               amount_at_risk,
               account_name
-            FROM cdm_tmforum.revenue_assurance.gold_leakage_summary
+            FROM all_exceptions
           )
           SELECT
             COUNT(*) FILTER (WHERE ${openPredicate}) AS open_exceptions,

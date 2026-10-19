@@ -226,6 +226,10 @@ SELECT
   t.INVOICE_AMOUNT AS db_invoice_amount,
   t.TAX_AMOUNT AS db_tax_amount,
   t.TMF_BILL_ID,
+  -- RA-P1-DOCINV-IDENTITY-RESOLVE: resolve customer via
+  -- BILL_TO_CUSTOMER_ID → hz_cust_accounts.TMF_CUSTOMER_ID.
+  hz.TMF_CUSTOMER_ID AS customer_id,
+  hz.PARTY_NAME AS account_name,
   -- Amount mismatch detection (tolerance: $0.01)
   CASE
     WHEN ABS(COALESCE(e.extracted_data:response:total_amount:value::DOUBLE, 0) - COALESCE(t.INVOICE_AMOUNT, 0)) > 0.01
@@ -234,4 +238,6 @@ SELECT
   ABS(COALESCE(e.extracted_data:response:total_amount:value::DOUBLE, 0) - COALESCE(t.INVOICE_AMOUNT, 0)) AS amount_variance
 FROM extracted e
 LEFT JOIN oracle_erp_source.ra_customer_trx_all t
-  ON e.extracted_data:response:invoice_number:value::STRING = t.TRX_NUMBER;
+  ON e.extracted_data:response:invoice_number:value::STRING = t.TRX_NUMBER
+LEFT JOIN oracle_erp_source.hz_cust_accounts hz
+  ON t.BILL_TO_CUSTOMER_ID = hz.CUST_ACCOUNT_ID;

@@ -121,16 +121,20 @@ targets:
     # Do not hardcode the workspace hostname in this public repo.
 
     variables:
-      # Public repo: never commit a real workspace SQL Warehouse ID here.
-      # Override at deploy time, e.g. `databricks apps deploy --profile <name>
-      # --var sql_warehouse_id=<id>` (or via a local, untracked target override).
-      sql_warehouse_id: 7b65956f30d66feb
-      postgres_branch: projects/ra-console-lakebase/branches/production
-      postgres_database: projects/ra-console-lakebase/branches/production/databases/databricks-postgres
-      postgres_project: projects/ra-console-lakebase
-      # Architecture page deep links — real resource IDs for this workspace.
-      ra_pipeline_id: 30f8850c-df48-403c-92a5-5809d46be446
-      ra_ml_job_id: "333356543179714"
-      ra_datasim_job_id: "325749217551331"
-      ra_dashboard_id: 01f1a56bce111461856037d2272cee19
-      ra_genie_space_id: 01f1a56bce181f1aaff08b76fd8b915c
+      # Public repo: supply real values at deploy time via --var or a local,
+      # untracked target-override file. Never commit real resource IDs here.
+      #   databricks apps deploy --profile <name> \
+      #     --var sql_warehouse_id=<id> \
+      #     --var postgres_branch=projects/<project>/branches/production \
+      #     --var postgres_database=projects/<project>/branches/production/databases/databricks-postgres \
+      #     --var postgres_project=projects/<project>
+      sql_warehouse_id: REPLACE_WITH_SQL_WAREHOUSE_ID
+      postgres_branch: REPLACE_WITH_POSTGRES_BRANCH
+      postgres_database: REPLACE_WITH_POSTGRES_DATABASE
+      postgres_project: REPLACE_WITH_POSTGRES_PROJECT
+      # Architecture page deep links — override at deploy time.
+      ra_pipeline_id: ""
+      ra_ml_job_id: ""
+      ra_datasim_job_id: ""
+      ra_dashboard_id: ""
+      ra_genie_space_id: ""

@@ -34,7 +34,15 @@ def main() -> None:
     if model.metadata.signature is None or model.metadata.signature.outputs is None:
         raise RuntimeError("Champion model signature must include outputs")
 
-    feature_frame = spark.table(feature_table).fillna(0.0, subset=FEATURE_COLUMNS)
+    # BUG-ANOMALY-DOUBLE-COUNT fix: Exclude order_to_bill_reconciliation from the
+    # standard scoring pipeline — OTB has its own dedicated scorer
+    # (score_order_to_bill notebook) which reads gold_order_to_bill_leakage.
+    # Including OTB here creates 2x rows with disjoint exception_ids.
+    feature_frame = (
+        spark.table(feature_table)
+        .filter("check_type != 'order_to_bill_reconciliation'")
+        .fillna(0.0, subset=FEATURE_COLUMNS)
+    )
     predict = mlflow.pyfunc.spark_udf(spark, model_uri, result_type="double")
     scored = feature_frame.withColumn(
         "isolation_forest_score",
@@ -119,13 +127,43 @@ def main() -> None:
         functions.current_timestamp().alias("scored_at"),
     )
 
-    result.write.format("delta").mode("overwrite").option(
-        "overwriteSchema", "true"
-    ).saveAsTable(output_table)
-    spark.sql(
-        f"COMMENT ON TABLE `{args.catalog}`.`{args.schema}`.`gold_anomaly_scores` IS "
-        "'Managed batch anomaly scores produced from the champion Unity Catalog model.'"
-    )
+    # ── MERGE instead of overwrite to preserve column-level COMMENT ON metadata ──
+    # BUG-CTAS-STRIPS-COMMENTS: saveAsTable(mode=overwrite) is a CTAS that destroys
+    # column comments added by @data-engineer, violating CEO directive #2.
+    # MERGE INTO preserves table/column metadata while achieving full-refresh semantics.
+    #
+    # BUG-OTB-DELETE-REGRESSION (2026-10-13): The previous DELETE clause
+    # (`WHEN NOT MATCHED BY SOURCE THEN DELETE`) was unscoped — it purged
+    # order-to-bill rows scored via the separate score_order_to_bill pipeline.
+    # Fix: scope the DELETE to only remove rows whose check_type is in the
+    # feature_account_anomaly source (i.e., the standard 14 check types).
+    # Order-to-bill rows (check_type = 'order_to_bill_reconciliation') are
+    # managed by score_order_to_bill and must not be deleted here.
+    result.createOrReplaceTempView("_ml_scored_anomalies")
+
+    output_table_sql = f"`{args.catalog}`.`{args.schema}`.`gold_anomaly_scores`"
+
+    # Collect check_types present in the standard feature pipeline
+    # FIX: replaced .rdd.flatMap() with DataFrame collect() for serverless compatibility
+    # (JVM_ATTRIBUTE_NOT_SUPPORTED: PySpark RDDs not allowed on serverless compute)
+    source_check_types = [
+        row.check_type for row in result.select("check_type").distinct().collect()
+    ]
+
+    # If the table doesn't exist yet, create it from the scored DataFrame
+    if not spark.catalog.tableExists(output_table):
+        result.write.format("delta").saveAsTable(output_table)
+    else:
+        spark.sql(f"""
+            MERGE INTO {output_table_sql} AS target
+            USING _ml_scored_anomalies AS source
+            ON target.exception_id = source.exception_id
+            WHEN MATCHED THEN UPDATE SET *
+            WHEN NOT MATCHED BY TARGET THEN INSERT *
+            WHEN NOT MATCHED BY SOURCE
+                AND target.check_type IN ({','.join(repr(ct) for ct in source_check_types)})
+                THEN DELETE
+        """)
 
 
 if __name__ == "__main__":

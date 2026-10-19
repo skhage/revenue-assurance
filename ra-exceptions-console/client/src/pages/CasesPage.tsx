@@ -62,7 +62,7 @@ export function CasesPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-4">
-      <div className="flex items-center gap-2">
+      <div role="group" aria-label="Case filter" className="flex items-center gap-2">
         <Button variant={mine ? 'default' : 'outline'} size="sm" aria-pressed={mine} onClick={() => setMine(true)}>
           My cases
         </Button>
@@ -119,7 +119,7 @@ export function CasesPage() {
                         {c.reference_id || '—'}
                       </RowActionButton>
                     </TableCell>
-                    <TableCell className="max-w-48 truncate">{accountLabel(c.account_name)}</TableCell>
+                    <TableCell className="max-w-48 truncate" title={c.account_name}>{accountLabel(c.account_name)}</TableCell>
                     <TableCell className="text-muted-foreground">{checkLabel(c.check_type)}</TableCell>
                     <TableCell>
                       <SeverityBadge severity={c.severity ?? 'LOW'} />

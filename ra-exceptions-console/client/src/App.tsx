@@ -14,6 +14,14 @@ import {
   Lightbulb,
   Bot,
   Sparkles,
+  ArrowUpRight,
+  Bell,
+  FileCheck,
+  Handshake,
+  ShoppingCart,
+  Banknote,
+  UserX,
+  Gavel,
   type LucideIcon,
 } from 'lucide-react';
 import { OverviewPage } from './pages/OverviewPage';
@@ -23,6 +31,14 @@ import { ArchitecturePage } from './pages/ArchitecturePage';
 import { WhyItMattersPage } from './pages/WhyItMattersPage';
 import { AgentWorkbenchPage } from './pages/AgentWorkbenchPage';
 import { GeniePage } from './pages/GeniePage';
+import { RecoveryPage } from './pages/RecoveryPage';
+import { AlertsPage } from './pages/AlertsPage';
+import { CompliancePage } from './pages/CompliancePage';
+import { PartnerSettlementPage } from './pages/PartnerSettlementPage';
+import { OrderToBillPage } from './pages/OrderToBillPage';
+import { CollectionsPage } from './pages/CollectionsPage';
+import { CommissionPage } from './pages/CommissionPage';
+import { DisputesPage } from './pages/DisputesPage';
 import { LakelinkMark } from './components/LakelinkMark';
 import { DatabricksLogo } from './components/DatabricksLogo';
 import { useTheme } from './lib/useTheme';
@@ -37,6 +53,17 @@ const NAV = [
   { to: '/ask', label: 'Ask (Genie)', icon: Sparkles, end: false },
 ];
 
+const AI_NAV = [
+  { to: '/recovery', label: 'Recovery', icon: ArrowUpRight, end: false },
+  { to: '/alerts', label: 'Risk alerts', icon: Bell, end: false },
+  { to: '/compliance', label: 'Compliance', icon: FileCheck, end: false },
+  { to: '/partners', label: 'Partner settlement', icon: Handshake, end: false },
+  { to: '/order-to-bill', label: 'Order-to-bill', icon: ShoppingCart, end: false },
+  { to: '/collections', label: 'Collections intel', icon: Banknote, end: false },
+  { to: '/commission', label: 'Commission leakage', icon: UserX, end: false },
+  { to: '/disputes', label: 'Billing disputes', icon: Gavel, end: false },
+];
+
 const SECONDARY_NAV = [
   { to: '/why', label: 'Why RA matters', icon: Lightbulb, end: false },
   { to: '/architecture', label: 'Architecture', icon: Waypoints, end: false },
@@ -49,12 +76,20 @@ const TITLES: Record<string, { title: string; sub: string }> = {
   '/agents': { title: 'Agent Workbench', sub: 'Deterministic agents over existing RA data — human-approved, no LLM' },
   '/ask': { title: 'Ask (Genie)', sub: 'Natural-language questions over the governed RA data' },
   '/why': { title: 'Why RA matters', sub: 'The business case, the challenges, and why Databricks — before the demo' },
+  '/recovery': { title: 'Recovery', sub: 'AI-ranked recovery opportunities with action plans' },
+  '/alerts': { title: 'Risk alerts', sub: 'Predictive alerting — emerging leakage signals and structured alerts' },
+  '/compliance': { title: 'Compliance', sub: 'Contract compliance scan — document fields vs billing records' },
+  '/partners': { title: 'Partner settlement', sub: 'Inter-carrier and wholesale settlement reconciliation' },
+  '/order-to-bill': { title: 'Order-to-bill', sub: 'Order, provisioning, and billing state misalignment — check type #13' },
+  '/collections': { title: 'Collections intelligence', sub: 'Dunning-leakage correlation — stop collecting wrong amounts' },
+  '/commission': { title: 'Commission leakage', sub: 'Agent fraud, clawback failures, and cap violations — 6 sub-check types' },
+  '/disputes': { title: 'Billing disputes', sub: 'Fraud patterns, SLA breaches, stale disputes, and regulatory escalation — 7 check types' },
   '/architecture': { title: 'Architecture', sub: 'The demo mapped onto the Databricks Data + AI Platform' },
 };
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-sidebar-foreground/50">
+    <div className="px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-sidebar-foreground/70">
       {children}
     </div>
   );
@@ -112,28 +147,39 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         </div>
         <div className="leading-tight">
           <div className="text-sm font-semibold text-sidebar-foreground">Lakelink Fiber</div>
-          <div className="text-[11px] text-sidebar-foreground/60">Revenue Assurance</div>
+          <div className="text-[11px] text-sidebar-foreground/70">Revenue Assurance</div>
         </div>
       </div>
 
-      <nav className="flex flex-col gap-0.5">
+      <nav aria-label="Workflow" className="flex flex-col gap-0.5">
         <SectionLabel>Workflow</SectionLabel>
         {NAV.map(({ to, label, icon, end }) => (
           <NavItem key={to} to={to} label={label} icon={icon} end={end} onNavigate={onNavigate} />
         ))}
       </nav>
 
-      <nav className="flex flex-col gap-0.5">
+      <nav aria-label="AI Agents" className="flex flex-col gap-0.5">
+        <SectionLabel>AI Agents</SectionLabel>
+        {AI_NAV.map(({ to, label, icon, end }) => (
+          <NavItem key={to} to={to} label={label} icon={icon} end={end} onNavigate={onNavigate} />
+        ))}
+      </nav>
+
+      <nav aria-label="Detection" className="flex flex-col gap-0.5">
         <SectionLabel>Detection</SectionLabel>
         <div className="flex items-center gap-2.5 rounded-md py-2 pl-3.5 pr-2.5 text-sm text-sidebar-foreground/40">
-          <SearchCheck className="h-4 w-4 shrink-0" /> Reconciliation rules
+          <SearchCheck className="h-4 w-4 shrink-0" />
+          <span>Reconciliation rules</span>
+          <span className="ml-auto text-[10px] font-medium uppercase tracking-wide">(coming soon)</span>
         </div>
         <div className="flex items-center gap-2.5 rounded-md py-2 pl-3.5 pr-2.5 text-sm text-sidebar-foreground/40">
-          <Zap className="h-4 w-4 shrink-0" /> Anomaly models
+          <Zap className="h-4 w-4 shrink-0" />
+          <span>Anomaly models</span>
+          <span className="ml-auto text-[10px] font-medium uppercase tracking-wide">(coming soon)</span>
         </div>
       </nav>
 
-      <nav className="flex flex-col gap-0.5">
+      <nav aria-label="Learn" className="flex flex-col gap-0.5">
         <SectionLabel>Learn</SectionLabel>
         {SECONDARY_NAV.map(({ to, label, icon, end }) => (
           <NavItem key={to} to={to} label={label} icon={icon} end={end} onNavigate={onNavigate} />
@@ -147,7 +193,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
           </div>
           <div className="min-w-0">
             <div className="truncate text-xs font-medium text-sidebar-foreground">{me.split('@')[0]}</div>
-            <div className="text-[11px] text-sidebar-foreground/60">RA Analyst · B2B Broadband</div>
+            <div className="text-[11px] text-sidebar-foreground/70">RA Analyst · B2B Broadband</div>
           </div>
         </div>
         <div className="border-t border-sidebar-border pt-3">
@@ -166,6 +212,13 @@ function Layout() {
 
   return (
     <div className="flex min-h-screen bg-background">
+      {/* Skip-to-content link — WCAG 2.4.1 bypass block */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-50 focus:rounded-md focus:bg-background focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-foreground focus:shadow-lg focus:ring-2 focus:ring-ring"
+      >
+        Skip to main content
+      </a>
       {/* Desktop sidebar */}
       <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar p-4 md:flex">
         <SidebarContent />
@@ -173,7 +226,7 @@ function Layout() {
 
       {/* Mobile sidebar */}
       <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
-        <SheetContent side="left" className="w-64 bg-sidebar p-4">
+        <SheetContent side="left" className="w-64 bg-sidebar p-4" aria-label="Main navigation">
           <SidebarContent onNavigate={() => setMobileNavOpen(false)} />
         </SheetContent>
       </Sheet>
@@ -206,7 +259,7 @@ function Layout() {
           </Button>
         </header>
 
-        <main className="flex-1 p-4 md:p-6">
+        <main id="main-content" className="flex-1 p-4 md:p-6">
           <Outlet />
         </main>
       </div>
@@ -223,6 +276,14 @@ const router = createBrowserRouter([
       { path: '/cases', element: <CasesPage /> },
       { path: '/agents', element: <AgentWorkbenchPage /> },
       { path: '/ask', element: <GeniePage /> },
+      { path: '/recovery', element: <RecoveryPage /> },
+      { path: '/alerts', element: <AlertsPage /> },
+      { path: '/compliance', element: <CompliancePage /> },
+      { path: '/partners', element: <PartnerSettlementPage /> },
+      { path: '/order-to-bill', element: <OrderToBillPage /> },
+      { path: '/collections', element: <CollectionsPage /> },
+      { path: '/commission', element: <CommissionPage /> },
+      { path: '/disputes', element: <DisputesPage /> },
       { path: '/why', element: <WhyItMattersPage /> },
       { path: '/architecture', element: <ArchitecturePage /> },
     ],

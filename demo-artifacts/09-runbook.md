@@ -9,7 +9,7 @@
 > - ❌ **Was:** ~2K customers, ~25K circuits; regenerate "from scratch"
 > - ✅ **Now:** ~10K customers, ~100K circuits (already in `cdm_tmforum`). "Reset" = re-run source-system simulation + anomaly injection + rebuild RA layer, **not** regenerate base data.
 > - ❌ **Was:** Golden baseline ~$1.9M/month leakage
-> - ✅ **Now:** ~$540M estimated impact across 10K seeded violations (tunable; cite Lumen's $250–312M as pitch framing, distinct from demo data).
+> - ✅ **Now:** ~$934M estimated impact across ~54K seeded exceptions / 14 check types (tunable; cite Lumen's $250–312M as pitch framing, distinct from demo data).
 > - ❌ **Was:** Azure asserted as fact
 > - ✅ **Now:** Deploy to `demo` FEVM workspace (confirm cloud at deploy time; don't assert Azure).
 > - ✅ **Verified:** `databricks bundle validate/deploy/run/destroy`, Lakeflow Declarative Pipelines, Databricks Apps stop/start, serverless SQL warehouse behavior all current and documented. All runbook commands accurate.
@@ -55,7 +55,7 @@ Work top to bottom. Do not start the live demo until every box is green.
 - [ ] Warehouse warm: run `databricks warehouses get <warehouse_id> -p demo` and confirm `state = RUNNING`. If `STOPPED`, start it now (see §5.1) — a cold serverless warehouse costs you 20–40s on the first query, which reads as a stall on stage.
 - [ ] Base data seeded in `cdm_tmforum`: confirm `tmf_resource.logical_resource`, `tmf_service.resource_facing_service`, `tmf_customer.bill` have rows (non-zero counts).
 - [ ] RA layer populated: quick count check (see command below) returns non-zero rows in `revenue_assurance` silver and gold materialized views.
-- [ ] `cdm_tmforum.revenue_assurance.gold_leakage_summary` has the expected seeded exception population (~48K / ~$601M, see golden numbers in §2.4).
+- [ ] `cdm_tmforum.revenue_assurance.gold_leakage_summary` has the expected seeded exception population (~54K / ~$934M across 14 check types, see golden numbers in §2.4).
 - [ ] Lakebase project `ra-console-lakebase` schema `ra` (tables `ra.cases` / `ra.case_notes`) is in a **clean demo state** — see §2. If a previous run left cases in `Recovered`/`WrittenOff`, reset (§2.2).
 - [ ] Latest pipeline run for `ra_medallion_pipeline` shows **all expectations green** (open Pipelines → `ra_medallion_pipeline` → latest update).
 
@@ -164,17 +164,26 @@ FROM cdm_tmforum.revenue_assurance.gold_leakage_summary;
 
 **Expected shape** (seeded population is deterministic; rebuild always produces the same totals):
 
-| check_type | Detection | Approx. $ at risk |
-| :---- | :---- | :---- |
-| `ar_collection_risk` | deterministic | ~$500M |
-| `unauthorized_discount` | deterministic | ~$13.9M |
-| `contract_price_mismatch` | deterministic | ~$1.6M |
-| `rev_rec_timing_mismatch` | deterministic | ~$85.7M |
-| `expired_quote_active` | deterministic | ~$0 |
-| `doc_contract_mismatch` | AI extract | present (AI-detected) |
-| `doc_invoice_mismatch` | AI extract | present (AI-detected) |
+| check_type | Count | Detection | Approx. $ at risk |
+| :---- | ----: | :---- | :---- |
+| `ar_collection_risk` | 6,244 | deterministic | ~$500.4M |
+| `rev_rec_timing_mismatch` | 73 | deterministic | ~$86.8M |
+| `usage_mediation_failure` | 1,684 | deterministic | ~$84.7M |
+| `usage_subscriber_mismatch` | 1,133 | deterministic | ~$57.2M |
+| `usage_data_quality` | 1,109 | deterministic | ~$54.6M |
+| `usage_late_cdr` | 1,071 | deterministic | ~$52.3M |
+| `usage_partial_rating` | 943 | deterministic | ~$46.8M |
+| `partner_settlement_variance` | 1,005 | deterministic | ~$32.2M |
+| `unauthorized_discount` | 33,747 | deterministic | ~$13.7M |
+| `fx_rate_deviation` | 876 | deterministic | ~$3.9M |
+| `contract_price_mismatch` | 3,380 | deterministic | ~$1.7M |
+| `doc_invoice_mismatch` | 5 | AI extract | ~$84K |
+| `expired_quote_active` | 2,924 | deterministic | $0 |
+| `doc_contract_mismatch` | 8 | AI extract | $0 |
 
-> **Baseline from fixed seed:** total exceptions ≈ 48K, total impact ≈ $601M. Once recorded, any deviation on a later reset means data drift — see §5.4. Keep this figure consistent with the number quoted in the dashboard and test-plan golden outputs. Note: demo leakage ~$601M across these 7 check types; the Lumen prospect pitch ($250–312M annually) is a separate business-case framing, not the demo's seeded figure.
+> **Legacy reference (original 7 checks):** The first 7 checks (contract_price_mismatch, unauthorized_discount, ar_collection_risk, rev_rec_timing_mismatch, expired_quote_active, doc_contract_mismatch, doc_invoice_mismatch) total ~47K exceptions / ~$601M. Extended checks (usage_mediation_failure, usage_subscriber_mismatch, usage_data_quality, usage_late_cdr, usage_partial_rating, partner_settlement_variance, fx_rate_deviation) add ~7K more exceptions / ~$333M.
+
+> **Baseline from fixed seed:** total exceptions ≈ 54,202 across 14 check types, total impact ≈ $934M. Once recorded, any deviation on a later reset means data drift — see §5.4. Keep this figure consistent with the number quoted in the dashboard and test-plan golden outputs. Note: demo leakage ~$934M across 14 check types; the Lumen prospect pitch ($250–312M annually) is a separate business-case framing, not the demo's seeded figure.
 
 ---
 
@@ -192,7 +201,7 @@ Deliver in this order. Each step lists the **action** (click/command), the **nar
 ### Step 2 — The unified leakage register (Priya) · 2:00
 
 - **Action:** Tab 3 → Catalog Explorer on `cdm_tmforum.revenue_assurance.gold_leakage_summary`. Show columns `check_type, severity, amount_at_risk, account_name, detection_method`.
-- **Narration:** "Leakage types are diverse — contract mismatches, unauthorized discounts, FX deviations, AR aging, revenue recognition timing, and AI-detected document anomalies. We built a unified register that surfaces all of them: 48K exceptions across 7 check types, ~$601M at risk. Each row traces back to the exact source data and the check that caught it — whether it's a hard rule or an anomaly flag."
+- **Narration:** "Leakage types are diverse — contract mismatches, unauthorized discounts, FX deviations, AR aging, revenue recognition timing, and AI-detected document anomalies. We built a unified register that surfaces all of them: 54K exceptions across 14 check types, ~$934M at risk. Each row traces back to the exact source data and the check that caught it — whether it's a hard rule, a usage mediation gap, or an AI-detected document anomaly."
 - **On screen:** The `gold_leakage_summary` schema; scroll to show rows grouped by `check_type`, point at the severity and amount columns.
 - **Timing:** 2:00
 
@@ -241,7 +250,7 @@ Deliver in this order. Each step lists the **action** (click/command), the **nar
 ### Step 9 — The meta-narrative & close · 1:00
 
 - **Action:** Return to Tab 1. Mention DABs + serverless + the Databricks Assistant used to build this.
-- **Narration:** "Everything you saw — pipeline, checks, dashboard, app — is one repo deployed with Databricks Asset Bundles on serverless, built with help from the Databricks Assistant. Governed, reproducible, and recoverable in minutes. That's how we turned Lakelink Fiber's $540M problem into daily controls — and it's exactly what Lumen's lakehouse could look like."
+- **Narration:** "Everything you saw — pipeline, checks, dashboard, app — is one repo deployed with Databricks Asset Bundles on serverless, built with help from the Databricks Assistant. Governed, reproducible, and recoverable in minutes. That's how we turned Lakelink Fiber's $934M problem into daily controls — and it's exactly what Lumen's lakehouse could look like."
 - **On screen:** Title / recap.
 - **Timing:** 1:00
 

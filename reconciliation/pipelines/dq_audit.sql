@@ -76,27 +76,27 @@ source_counts AS (
   UNION ALL
   SELECT 'salesforce_source.contract_line_item', COUNT(*), 50000, 150000 FROM salesforce_source.contract_line_item
   UNION ALL
-  SELECT 'salesforce_source.sbqq__quote__c', COUNT(*), 1000, 10000 FROM salesforce_source.sbqq__quote__c
+  SELECT 'salesforce_source.sbqq__quote__c', COUNT(*), 15000, 25000 FROM salesforce_source.sbqq__quote__c
   UNION ALL
-  SELECT 'salesforce_source.sbqq__quoteline__c', COUNT(*), 5000, 50000 FROM salesforce_source.sbqq__quoteline__c
+  SELECT 'salesforce_source.sbqq__quoteline__c', COUNT(*), 45000, 65000 FROM salesforce_source.sbqq__quoteline__c
   UNION ALL
   SELECT 'oracle_erp_source.ra_customer_trx_all', COUNT(*), 10000, CAST(NULL AS BIGINT) FROM oracle_erp_source.ra_customer_trx_all
   UNION ALL
-  SELECT 'oracle_erp_source.ra_customer_trx_lines_all', COUNT(*), 100000, CAST(NULL AS BIGINT) FROM oracle_erp_source.ra_customer_trx_lines_all
+  SELECT 'oracle_erp_source.ra_customer_trx_lines_all', COUNT(*), 25000, CAST(NULL AS BIGINT) FROM oracle_erp_source.ra_customer_trx_lines_all
   UNION ALL
-  SELECT 'oracle_erp_source.gl_je_lines', COUNT(*), 100000, CAST(NULL AS BIGINT) FROM oracle_erp_source.gl_je_lines
+  SELECT 'oracle_erp_source.gl_je_lines', COUNT(*), 15000, CAST(NULL AS BIGINT) FROM oracle_erp_source.gl_je_lines
   UNION ALL
   SELECT 'oracle_erp_source.gl_je_headers', COUNT(*), 10000, CAST(NULL AS BIGINT) FROM oracle_erp_source.gl_je_headers
   UNION ALL
-  SELECT 'oracle_erp_source.gl_budgets', COUNT(*), 1000, 5000 FROM oracle_erp_source.gl_budgets
+  SELECT 'oracle_erp_source.gl_budgets', COUNT(*), 50, 200 FROM oracle_erp_source.gl_budgets
   UNION ALL
   SELECT 'oracle_erp_source.revenue_recognition_schedule', COUNT(*), 50000, CAST(NULL AS BIGINT) FROM oracle_erp_source.revenue_recognition_schedule
   UNION ALL
   SELECT 'oracle_erp_source.ar_payment_schedules_all', COUNT(*), 10000, CAST(NULL AS BIGINT) FROM oracle_erp_source.ar_payment_schedules_all
   UNION ALL
-  SELECT 'refinitiv_fx_source.gl_daily_rates', COUNT(*), 500, 1000 FROM refinitiv_fx_source.gl_daily_rates
+  SELECT 'refinitiv_fx_source.gl_daily_rates', COUNT(*), 80000, 90000 FROM refinitiv_fx_source.gl_daily_rates
   UNION ALL
-  SELECT 'mdm_source.customer_crosswalk', COUNT(*), 9000, 11000 FROM mdm_source.customer_crosswalk
+  SELECT 'mdm_source.customer_crosswalk', COUNT(*), 18000, 25000 FROM mdm_source.customer_crosswalk
 ),
 source_volume_checks AS (
   SELECT

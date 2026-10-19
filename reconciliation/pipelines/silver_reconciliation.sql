@@ -163,9 +163,11 @@ CREATE OR REFRESH MATERIALIZED VIEW silver_fx_rate_validation (
   CONSTRAINT dq_market_rate_positive
     EXPECT (market_rate IS NULL OR market_rate > 0),
   CONSTRAINT dq_invoice_currency_present
-    EXPECT (INVOICE_CURRENCY_CODE IS NOT NULL)
+    EXPECT (INVOICE_CURRENCY_CODE IS NOT NULL),
+  CONSTRAINT dq_applied_rate_positive
+    EXPECT (applied_exchange_rate IS NULL OR applied_exchange_rate > 0)
 )
-COMMENT 'Validates FX rates applied to multi-currency invoices against Refinitiv market rates. Flags conversions deviating > 1% from mid-market.'
+COMMENT 'Validates FX rates applied to multi-currency invoices against Refinitiv market rates. Flags conversions where the billing-system applied rate deviates > 1% from Refinitiv mid-market.'
 AS
 SELECT
   trx.CUSTOMER_TRX_ID,
@@ -173,14 +175,22 @@ SELECT
   trx.TRX_DATE,
   trx.INVOICE_CURRENCY_CODE,
   trx.INVOICE_AMOUNT,
+  trx.APPLIED_EXCHANGE_RATE AS applied_exchange_rate,
   fx.CONVERSION_RATE AS market_rate,
   fx.CONVERSION_DATE,
   fx.SOURCE AS rate_source,
-  -- For USD-denominated invoices, the rate should be 1.0
-  -- For non-USD, check against market rate
+  -- RA-P1-FX-CUSTOMER-MAP + RA-P1-FX-IDENTITY-RESOLVE: resolve customer via
+  -- BILL_TO_CUSTOMER_ID → hz_cust_accounts.TMF_CUSTOMER_ID (100% coverage).
+  hz.TMF_CUSTOMER_ID AS customer_id,
+  hz.PARTY_NAME AS account_name,
+  -- Compare the rate the billing system actually applied vs Refinitiv market rate.
+  -- Flag when the applied rate deviates > 1% from the market rate.
+  -- USD invoices are excluded (no FX conversion needed).
   CASE
     WHEN trx.INVOICE_CURRENCY_CODE != 'USD'
-      AND ABS(fx.CONVERSION_RATE - 1.0) / NULLIF(fx.CONVERSION_RATE, 0) > 0.01
+      AND trx.APPLIED_EXCHANGE_RATE IS NOT NULL
+      AND fx.CONVERSION_RATE IS NOT NULL
+      AND ABS(trx.APPLIED_EXCHANGE_RATE - fx.CONVERSION_RATE) / NULLIF(fx.CONVERSION_RATE, 0) > 0.01
     THEN TRUE
     ELSE FALSE
   END AS rate_deviation_flag,
@@ -189,7 +199,9 @@ FROM oracle_erp_source.ra_customer_trx_all trx
 LEFT JOIN refinitiv_fx_source.gl_daily_rates fx
   ON fx.FROM_CURRENCY = trx.INVOICE_CURRENCY_CODE
   AND fx.TO_CURRENCY = 'USD'
-  AND fx.CONVERSION_DATE = trx.TRX_DATE;
+  AND fx.CONVERSION_DATE = trx.TRX_DATE
+LEFT JOIN oracle_erp_source.hz_cust_accounts hz
+  ON trx.BILL_TO_CUSTOMER_ID = hz.CUST_ACCOUNT_ID;
 
 
 -- -----------------------------------------------------------------------------
@@ -255,7 +267,7 @@ CREATE OR REFRESH MATERIALIZED VIEW silver_revenue_recognition_check (
   CONSTRAINT dq_period_name_present
     EXPECT (PERIOD_NAME IS NOT NULL)
 )
-COMMENT 'Compares ASC-606 revenue recognition schedule (RECOGNIZED vs DEFERRED) against actual GL journal postings. Flags timing mismatches where revenue was recognized early or deferred incorrectly.'
+COMMENT 'Compares ASC-606 revenue recognition schedule (RECOGNIZED vs DEFERRED) against actual GL journal postings. Flags timing mismatches where revenue was recognized early or deferred incorrectly. Customer attribution uses the dominant customer (highest scheduled_recognized) per period.'
 AS
 WITH rev_rec_by_period AS (
   SELECT
@@ -265,6 +277,25 @@ WITH rev_rec_by_period AS (
     COUNT(*) AS schedule_entries
   FROM oracle_erp_source.revenue_recognition_schedule
   GROUP BY PERIOD_NAME
+),
+-- Dominant customer per period: the customer with the largest scheduled
+-- recognized amount. Used for customer attribution since GL journal entries
+-- lack a customer dimension. Resolves RA-QA-BUG-REVREC-NULL.
+dominant_customer AS (
+  SELECT
+    rrs.PERIOD_NAME,
+    hz.TMF_CUSTOMER_ID AS customer_id,
+    hz.PARTY_NAME AS account_name,
+    ROW_NUMBER() OVER (
+      PARTITION BY rrs.PERIOD_NAME
+      ORDER BY SUM(CASE WHEN rrs.STATUS = 'RECOGNIZED' THEN rrs.RECOGNIZED_AMOUNT ELSE 0 END) DESC
+    ) AS rn
+  FROM oracle_erp_source.revenue_recognition_schedule rrs
+  JOIN oracle_erp_source.ra_customer_trx_all trx
+    ON rrs.CUSTOMER_TRX_ID = trx.CUSTOMER_TRX_ID
+  JOIN oracle_erp_source.hz_cust_accounts hz
+    ON trx.BILL_TO_CUSTOMER_ID = hz.CUST_ACCOUNT_ID
+  GROUP BY rrs.PERIOD_NAME, hz.TMF_CUSTOMER_ID, hz.PARTY_NAME
 ),
 gl_revenue_by_period AS (
   SELECT
@@ -280,6 +311,8 @@ gl_revenue_by_period AS (
 )
 SELECT
   COALESCE(rr.PERIOD_NAME, gl.PERIOD_NAME) AS PERIOD_NAME,
+  dc.customer_id,
+  dc.account_name,
   rr.scheduled_recognized,
   rr.scheduled_deferred,
   rr.schedule_entries,
@@ -296,4 +329,7 @@ SELECT
   'rule_based' AS detection_method
 FROM rev_rec_by_period rr
 FULL OUTER JOIN gl_revenue_by_period gl
-  ON rr.PERIOD_NAME = gl.PERIOD_NAME;
+  ON rr.PERIOD_NAME = gl.PERIOD_NAME
+LEFT JOIN dominant_customer dc
+  ON dc.PERIOD_NAME = COALESCE(rr.PERIOD_NAME, gl.PERIOD_NAME)
+  AND dc.rn = 1;

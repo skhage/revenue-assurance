@@ -19,15 +19,16 @@ import {
 import { sql } from '@databricks/appkit-ui/js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { Search } from 'lucide-react';
-import { SeverityBadge, StatusChip } from '../components/badges';
+import { Search, Shield } from 'lucide-react';
+import { SeverityBadge, StatusChip, PriorityBadge } from '../components/badges';
 import { ExceptionDrawer } from '../components/ExceptionDrawer';
 import { ToggleChip } from '../components/ToggleChip';
 import { RowActionButton } from '../components/RowActionButton';
 import { LoadingRegion, ErrorRegion } from '../components/StatusRegion';
 import { analyticsApi } from '../lib/analytics';
+import { triageApi } from '../lib/triage';
 import { usd, numCompact, checkLabel, accountLabel } from '../lib/format';
-import type { ExceptionRow } from '../lib/types';
+import type { ExceptionRow, TriageClassification, TriagePriority } from '../lib/types';
 
 const PAGE_SIZE = 25;
 
@@ -48,6 +49,10 @@ export function QueuePage() {
 
   const [selected, setSelected] = useState<ExceptionRow | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // AI triage: priority classifications keyed by exception_id.
+  const [triageMap, setTriageMap] = useState<Map<string, TriageClassification>>(new Map());
+  const [triageLoading, setTriageLoading] = useState(false);
 
   // Debounce the free-text search.
   // Skip the initial mount — the first fetch is already triggered by the
@@ -113,6 +118,34 @@ export function QueuePage() {
     return () => controller.abort();
   }, [filters, refreshKey]);
 
+  // Once rows load, classify each one via the triage UC function.
+  useEffect(() => {
+    if (rows.length === 0) return;
+    const ctrl = new AbortController();
+    setTriageLoading(true);
+    Promise.allSettled(
+      rows.map((row) =>
+        triageApi
+          .classify(
+            { check_type: row.check_type, amount_at_risk: row.amount_at_risk },
+            ctrl.signal
+          )
+          .then((result) => ({ id: row.exception_id, result }))
+      )
+    )
+      .then((outcomes) => {
+        const next = new Map<string, TriageClassification>();
+        for (const o of outcomes) {
+          if (o.status === 'fulfilled' && o.value.result) {
+            next.set(o.value.id, o.value.result);
+          }
+        }
+        setTriageMap(next);
+      })
+      .finally(() => { if (!ctrl.signal.aborted) setTriageLoading(false); });
+    return () => ctrl.abort();
+  }, [rows]);
+
   // Reflect the active filters in the URL so a view is shareable / deep-linkable.
   useEffect(() => {
     const next = new URLSearchParams();
@@ -133,14 +166,16 @@ export function QueuePage() {
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-4">
       {/* Filter bar */}
       <div className="flex flex-wrap items-center gap-2">
-        <ToggleChip active={checkType === 'ALL'} onClick={() => pickCheck('ALL')}>
-          All checks
-        </ToggleChip>
-        {(chips.data ?? []).map((c) => (
-          <ToggleChip key={c.check_type} active={checkType === c.check_type} onClick={() => pickCheck(c.check_type)}>
-            {checkLabel(c.check_type)} <span className="text-muted-foreground">{numCompact(c.exception_count)}</span>
+        <div role="group" aria-label="Check type filter" className="flex flex-wrap items-center gap-2">
+          <ToggleChip active={checkType === 'ALL'} onClick={() => pickCheck('ALL')}>
+            All checks
           </ToggleChip>
-        ))}
+          {(chips.data ?? []).map((c) => (
+            <ToggleChip key={c.check_type} active={checkType === c.check_type} onClick={() => pickCheck(c.check_type)}>
+              {checkLabel(c.check_type)} <span className="text-muted-foreground">{numCompact(c.exception_count)}</span>
+            </ToggleChip>
+          ))}
+        </div>
 
         <div className="ml-auto flex items-center gap-2">
           <Select value={severity} onValueChange={pickSeverity}>
@@ -201,6 +236,11 @@ export function QueuePage() {
                   <TableHead>Account</TableHead>
                   <TableHead>Root cause</TableHead>
                   <TableHead>Severity</TableHead>
+                  <TableHead>
+                    <span className="inline-flex items-center gap-1">
+                      <Shield className="h-3.5 w-3.5" /> Priority
+                    </span>
+                  </TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Assignee</TableHead>
                   <TableHead className="text-right">$ at risk</TableHead>
@@ -220,15 +260,24 @@ export function QueuePage() {
                         {row.reference_id || '—'}
                       </RowActionButton>
                     </TableCell>
-                    <TableCell className="max-w-48 truncate">{accountLabel(row.account_name)}</TableCell>
+                    <TableCell className="max-w-48 truncate" title={row.account_name}>{accountLabel(row.account_name)}</TableCell>
                     <TableCell className="text-muted-foreground">{checkLabel(row.check_type)}</TableCell>
                     <TableCell>
                       <SeverityBadge severity={row.severity} />
                     </TableCell>
                     <TableCell>
+                      {triageMap.has(row.exception_id) ? (
+                        <PriorityBadge priority={triageMap.get(row.exception_id)!.priority} />
+                      ) : triageLoading ? (
+                        <span className="text-xs text-muted-foreground">…</span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
                       <StatusChip status={row.status} />
                     </TableCell>
-                    <TableCell className="max-w-40 truncate text-muted-foreground">
+                    <TableCell className="max-w-40 truncate text-muted-foreground" title={row.assignee || 'Unassigned'}>
                       {row.assignee?.split('@')[0] ?? 'Unassigned'}
                     </TableCell>
                     <TableCell className="text-right font-mono font-semibold tabular-nums text-destructive">
@@ -243,12 +292,13 @@ export function QueuePage() {
       </Card>
 
       {/* Pagination */}
-      <div className="flex items-center justify-between text-sm text-muted-foreground">
+      <nav aria-label="Exception queue pagination" className="flex items-center justify-between text-sm text-muted-foreground">
         <span>Sorted by $ at risk, high → low · page {page}</span>
         <div className="flex gap-2">
           <Button
             variant="outline"
             size="sm"
+            aria-label="Go to previous page"
             disabled={offset === 0 || loading}
             onClick={() => {
               setLoading(true);
@@ -261,6 +311,7 @@ export function QueuePage() {
           <Button
             variant="outline"
             size="sm"
+            aria-label="Go to next page"
             disabled={loading || rows.length < PAGE_SIZE}
             onClick={() => {
               setLoading(true);
@@ -271,7 +322,7 @@ export function QueuePage() {
             Next
           </Button>
         </div>
-      </div>
+      </nav>
 
       <ExceptionDrawer
         exception={selected}

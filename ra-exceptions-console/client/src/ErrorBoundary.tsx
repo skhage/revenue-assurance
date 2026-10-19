@@ -1,6 +1,6 @@
 import React, { Component } from 'react';
 import type { ReactNode } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '@databricks/appkit-ui/react';
+import { Card, CardContent, CardHeader, CardTitle, Button } from '@databricks/appkit-ui/react';
 
 interface Props {
   children: ReactNode;
@@ -63,6 +63,10 @@ export class ErrorBoundary extends Component<Props, State> {
                     <pre className="bg-muted p-3 rounded text-sm overflow-auto max-h-96">{this.state.error.stack}</pre>
                   </div>
                 )}
+                <div className="flex gap-3 pt-2">
+                  <Button variant="default" onClick={() => window.location.reload()}>Reload page</Button>
+                  <Button variant="outline" onClick={() => (window.location.href = '/')}>Go to overview</Button>
+                </div>
               </div>
             </CardContent>
           </Card>

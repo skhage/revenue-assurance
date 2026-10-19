@@ -14,6 +14,11 @@ resources:
         timezone_id: UTC
         pause_status: UNPAUSED
 
+      # Prevent overlapping runs when a previous training cycle is still in
+      # progress — the feature table and model registry are not designed for
+      # concurrent writers.
+      max_concurrent_runs: 1
+
       parameters:
         - name: catalog
           default: ${var.catalog}

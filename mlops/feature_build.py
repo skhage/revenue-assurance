@@ -1,4 +1,8 @@
-"""Build the exception-grain Unity Catalog feature table."""
+"""Build the exception-grain Unity Catalog feature table.
+
+RA-AI-ML-RECALIBRATION (2026-10-06): Enhanced with recovery-feedback
+aggregate features at check_type and customer_id grains.
+"""
 
 from __future__ import annotations
 
@@ -25,6 +29,7 @@ def build_feature_frame(spark: SparkSession, catalog: str, schema: str) -> DataF
     leakage_table = f"`{catalog}`.`{schema}`.`gold_leakage_summary`"
     scorecard_table = f"`{catalog}`.`{schema}`.`gold_reconciliation_scorecard`"
     customer_table = f"`{catalog}`.`tmf_customer`.`customer`"
+    feedback_table = f"`{catalog}`.`{schema}`.`recovery_feedback`"
 
     return spark.sql(
         f"""
@@ -41,6 +46,10 @@ def build_feature_frame(spark: SparkSession, catalog: str, schema: str) -> DataF
               ORDER BY COALESCE(account_name, ''), COALESCE(detection_method, '')
             ) AS duplicate_ordinal
           FROM {leakage_table}
+          -- RA-ML-FEATURE-EXCLUDE-OTB: OTB has its own dedicated scorer
+          -- (score_order_to_bill) that builds features directly from
+          -- gold_order_to_bill_leakage. Exclude from general feature table.
+          WHERE check_type != 'order_to_bill_reconciliation'
         ),
         exception_enriched AS (
           SELECT
@@ -74,16 +83,74 @@ def build_feature_frame(spark: SparkSession, catalog: str, schema: str) -> DataF
             CAST(COALESCE(s.total_exceptions, 0.0) AS DOUBLE) AS scorecard_total_exceptions,
             CAST(COALESCE(s.total_amount_at_risk, 0.0) AS DOUBLE) AS scorecard_total_amount_at_risk,
             CAST(CASE COALESCE(s.risk_tier, 'GREEN') WHEN 'RED' THEN 2.0 WHEN 'AMBER' THEN 1.0 ELSE 0.0 END AS DOUBLE) AS risk_tier_weight,
-            CAST(CASE COALESCE(c.credit_class, '') WHEN 'HIGH_RISK' THEN 2.0 WHEN 'MEDIUM_RISK' THEN 1.0 ELSE 0.0 END AS DOUBLE) AS credit_risk_weight,
-            CAST(CASE COALESCE(c.arpu_tier, s.arpu_tier, '') WHEN 'HIGH' THEN 2.0 WHEN 'MEDIUM' THEN 1.0 ELSE 0.0 END AS DOUBLE) AS arpu_tier_weight,
+            CAST(CASE
+              WHEN COALESCE(c.credit_class, '') IN ('d', 'unrated') THEN 2.0
+              WHEN COALESCE(c.credit_class, '') IN ('c', 'cc', 'ccc') THEN 1.5
+              WHEN COALESCE(c.credit_class, '') IN ('b', 'bb', 'bbb') THEN 1.0
+              ELSE 0.0
+            END AS DOUBLE) AS credit_risk_weight,
+            CAST(CASE COALESCE(c.arpu_tier, s.arpu_tier, '')
+              WHEN 'tier_1_high' THEN 2.0
+              WHEN 'tier_2_medium' THEN 1.0
+              WHEN 'tier_3_low' THEN 0.5
+              ELSE 0.0
+            END AS DOUBLE) AS arpu_tier_weight,
             CURRENT_TIMESTAMP() AS feature_updated_at
           FROM exception_base e
           LEFT JOIN {scorecard_table} s
             ON e.customer_id = s.customer_id
           LEFT JOIN {customer_table} c
             ON e.customer_id = c.customer_id
+        ),
+        -- RA-AI-ML-RECALIBRATION: Recovery feedback aggregates
+        check_type_recovery AS (
+          SELECT
+            check_type,
+            CAST(COUNT(*) AS DOUBLE) AS ct_feedback_count,
+            CAST(SUM(CASE WHEN outcome = 'RECOVERED' THEN 1 ELSE 0 END) / GREATEST(COUNT(*), 1) AS DOUBLE) AS ct_recovery_rate,
+            CAST(SUM(CASE WHEN outcome = 'WRITTEN_OFF' THEN 1 ELSE 0 END) / GREATEST(COUNT(*), 1) AS DOUBLE) AS ct_writeoff_rate,
+            CAST(SUM(CASE WHEN outcome = 'FALSE_POSITIVE' THEN 1 ELSE 0 END) / GREATEST(COUNT(*), 1) AS DOUBLE) AS ct_false_positive_rate,
+            CAST(AVG(recovery_pct) AS DOUBLE) AS ct_avg_recovery_pct,
+            CAST(AVG(investigation_hours) AS DOUBLE) AS ct_avg_investigation_hours,
+            CAST(AVG(CAST(triage_was_accurate AS INT)) AS DOUBLE) AS ct_triage_accuracy
+          FROM {feedback_table}
+          GROUP BY check_type
+        ),
+        customer_recovery AS (
+          SELECT
+            customer_id,
+            CAST(COUNT(*) AS DOUBLE) AS cust_feedback_count,
+            CAST(SUM(CASE WHEN outcome = 'RECOVERED' THEN 1 ELSE 0 END) / GREATEST(COUNT(*), 1) AS DOUBLE) AS cust_recovery_rate,
+            CAST(SUM(CASE WHEN outcome = 'WRITTEN_OFF' THEN 1 ELSE 0 END) / GREATEST(COUNT(*), 1) AS DOUBLE) AS cust_writeoff_rate,
+            CAST(AVG(recovery_pct) AS DOUBLE) AS cust_avg_recovery_pct,
+            CAST(AVG(investigation_hours) AS DOUBLE) AS cust_avg_investigation_hours
+          FROM {feedback_table}
+          WHERE customer_id IS NOT NULL
+          GROUP BY customer_id
         )
-        SELECT * FROM exception_enriched
+        SELECT
+          ee.*,
+          CAST(COALESCE(ctr.ct_feedback_count, 0.0) AS DOUBLE) AS ct_feedback_count,
+          CAST(COALESCE(ctr.ct_recovery_rate, 0.5) AS DOUBLE) AS ct_recovery_rate,
+          CAST(COALESCE(ctr.ct_writeoff_rate, 0.0) AS DOUBLE) AS ct_writeoff_rate,
+          CAST(COALESCE(ctr.ct_false_positive_rate, 0.0) AS DOUBLE) AS ct_false_positive_rate,
+          CAST(COALESCE(ctr.ct_avg_recovery_pct, 0.5) AS DOUBLE) AS ct_avg_recovery_pct,
+          CAST(COALESCE(ctr.ct_avg_investigation_hours, 8.0) AS DOUBLE) AS ct_avg_investigation_hours,
+          CAST(COALESCE(ctr.ct_triage_accuracy, 0.5) AS DOUBLE) AS ct_triage_accuracy,
+          CAST(COALESCE(cr.cust_feedback_count, 0.0) AS DOUBLE) AS cust_feedback_count,
+          CAST(COALESCE(cr.cust_recovery_rate, 0.5) AS DOUBLE) AS cust_recovery_rate,
+          CAST(COALESCE(cr.cust_writeoff_rate, 0.0) AS DOUBLE) AS cust_writeoff_rate,
+          CAST(COALESCE(cr.cust_avg_recovery_pct, 0.5) AS DOUBLE) AS cust_avg_recovery_pct,
+          CAST(COALESCE(cr.cust_avg_investigation_hours, 8.0) AS DOUBLE) AS cust_avg_investigation_hours,
+          CAST(
+            0.4 * COALESCE(1.0 - ctr.ct_recovery_rate, 0.5)
+            + 0.3 * COALESCE(ctr.ct_writeoff_rate, 0.0) * 3.0
+            + 0.2 * COALESCE(cr.cust_writeoff_rate, 0.0) * 3.0
+            + 0.1 * LEAST(COALESCE(ctr.ct_avg_investigation_hours, 8.0) / 15.0, 1.0)
+          AS DOUBLE) AS recovery_difficulty_score
+        FROM exception_enriched ee
+        LEFT JOIN check_type_recovery ctr ON ee.check_type = ctr.check_type
+        LEFT JOIN customer_recovery cr ON ee.customer_id = cr.customer_id
         """
     )
 
@@ -101,9 +168,22 @@ def main() -> None:
 
     feature_client = FeatureEngineeringClient(model_registry_uri="databricks-uc")
     if spark.catalog.tableExists(feature_table):
+        # ── MERGE instead of DELETE-then-write to prevent data loss ──
+        # BUG-FEATURE-TABLE-EMPTY: The old pattern (DELETE all → write_table)
+        # left the table empty when write_table failed after the DELETE.
+        # MERGE INTO is transactional: either the full swap succeeds or
+        # the table retains its prior state.  Also preserves column-level
+        # COMMENT ON metadata per CEO directive #2.
+        feature_frame.createOrReplaceTempView("_rebuilt_features")
         feature_table_sql = f"`{args.catalog}`.`{args.schema}`.`{FEATURE_TABLE_NAME}`"
-        spark.sql(f"DELETE FROM {feature_table_sql}")
-        feature_client.write_table(name=feature_table, df=feature_frame, mode="merge")
+        spark.sql(f"""
+            MERGE INTO {feature_table_sql} AS target
+            USING _rebuilt_features AS source
+            ON target.exception_id = source.exception_id
+            WHEN MATCHED THEN UPDATE SET *
+            WHEN NOT MATCHED BY TARGET THEN INSERT *
+            WHEN NOT MATCHED BY SOURCE THEN DELETE
+        """)
     else:
         feature_client.create_table(
             name=feature_table,

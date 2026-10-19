@@ -25,6 +25,12 @@
         "question": [
           "How do actual revenue, forecast revenue, and budget compare by month?"
         ]
+      },
+      {
+        "id": "10000000000000000000000000000005",
+        "question": [
+          "Which contract PDFs show SLA mismatches between the document and the system of record?"
+        ]
       }
     ]
   },
@@ -70,7 +76,7 @@
           "Which accounts have the lowest reconciliation health scores?"
         ],
         "sql": [
-          "SELECT customer_id, account_name, composite_health_score, risk_tier, total_amount_at_risk, total_exceptions\n",
+          "SELECT COALESCE(CAST(customer_id AS STRING), 'Masked') AS customer_id, COALESCE(account_name, 'Masked') AS account_name, composite_health_score, risk_tier, total_amount_at_risk, total_exceptions\n",
           "FROM cdm_tmforum.revenue_assurance.gold_reconciliation_scorecard\n",
           "ORDER BY composite_health_score ASC, total_amount_at_risk DESC\n",
           "LIMIT 25"
@@ -82,7 +88,7 @@
           "Show the highest-priority anomaly scores for analyst review."
         ],
         "sql": [
-          "SELECT item_id, check_type, customer_id, account_name, amount_at_risk, composite_anomaly_score, anomaly_rank, review_priority\n",
+          "SELECT item_id, check_type, COALESCE(CAST(customer_id AS STRING), 'Masked') AS customer_id, COALESCE(account_name, 'Masked') AS account_name, amount_at_risk, composite_anomaly_score, anomaly_rank, review_priority\n",
           "FROM cdm_tmforum.revenue_assurance.gold_anomaly_scores\n",
           "ORDER BY anomaly_rank ASC, amount_at_risk DESC\n",
           "LIMIT 25"
@@ -98,6 +104,18 @@
           "FROM cdm_tmforum.revenue_assurance.gold_revenue_forecast_anomalies\n",
           "ORDER BY revenue_month"
         ]
+      },
+      {
+        "id": "20000000000000000000000000000005",
+        "question": [
+          "Which contract PDFs show SLA mismatches between the document and the system of record?"
+        ],
+        "sql": [
+          "SELECT file_name, doc_contract_number, COALESCE(account_name, 'Masked') AS account_name, doc_sla_tier, db_sla_tier, sla_mismatch, term_mismatch, total_mismatches\n",
+          "FROM cdm_tmforum.revenue_assurance.silver_doc_intelligence_contracts\n",
+          "WHERE sla_mismatch = true\n",
+          "ORDER BY total_mismatches DESC"
+        ]
       }
     ],
     "text_instructions": [
@@ -110,6 +128,12 @@
           "Use cdm_tmforum.revenue_assurance.gold_revenue_forecast_anomalies for monthly actual, forecast, confidence-bound, budget, and anomaly questions.\n",
           "Use the silver_doc_intelligence tables only for contract or invoice document-extraction evidence.\n",
           "Do not invent case status or assignee values: operational case state lives in Lakebase Postgres ra.cases and is not available in these Unity Catalog tables. Always use proper three-level Unity Catalog names in generated SQL."
+        ]
+      },
+      {
+        "id": "30000000000000000000000000000002",
+        "content": [
+          "PII MASKING: The customer_id and account_name columns in gold_leakage_summary, gold_reconciliation_scorecard, gold_anomaly_scores, and silver_doc_intelligence_contracts are protected by Unity Catalog column masks. Users in the ra_analyst group will see NULL for customer_id and a truncated value (e.g. 'Ca****') for account_name. Customer-level drill-down requires ra_admin group membership. When generating SQL that displays these columns, use COALESCE(CAST(customer_id AS STRING), 'Masked') AS customer_id and COALESCE(account_name, 'Masked') AS account_name so results render cleanly for all user roles. Metric views (mv_*) inherit this masking from their source tables — the same COALESCE pattern applies."
         ]
       }
     ]
