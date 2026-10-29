@@ -147,6 +147,22 @@ real golden customers, in these schemas — use these real provider names, not i
 `refinitiv_fx_source` (`GL_DAILY_RATES`), `ironclad_clm_source` (contract PDFs),
 `mdm_source` (`customer_crosswalk`).
 
+**Snapshot status (decision DEC-PM-SIM-ONE-SHOT, 2026-10-28).** The `*_source` schemas are a
+**static one-shot seed**, not a live feed. The `simulate_source_systems` job is **unscheduled by
+design** (no schedule or trigger); its last successful run finished **2026-08-28 00:39 UTC**, and
+21 of the 28 `*_source` tables were last written by that run. Six tables received targeted,
+out-of-band data fixes after the seed (Delta history, last data write per table):
+`salesforce_source.account` (MERGE, 2026-09-22), `salesforce_source.contact` (UPDATE, 2026-09-22),
+`refinitiv_fx_source.gl_daily_rates` (WRITE, 2026-10-01), `ironclad_clm_source.contract_record`
+(WRITE, 2026-10-01), `oracle_erp_source.ra_customer_trx_all` (MERGE, 2026-10-03), and
+`salesforce_source.contract` (WRITE, 2026-10-16). `refinitiv_fx_source.copper_commodity_price` was
+created separately on 2026-09-12. The other post-seed history entries are metadata only (column
+comments, table properties). **All acceptance figures are baselined on this snapshot** —
+the headline register (`v_gold_leakage_summary`: 1,350,616 exceptions / $60.07B at risk / 60
+`check_type`s, re-verified 2026-10-29), the ML champion baselines, and S2 seeded-violation
+detection. Re-running the generator would move those counts and amounts, so do not re-run it before
+the demo; if it is re-run afterwards, rebaseline every acceptance figure.
+
 ### 4. The reconciliation checks map to real source data → `gold_leakage_summary`
 Each check is a **silver materialized view** over the simulated `*_source` systems (joined to the
 `tmf_*` golden data). Their flagged rows are unioned into **`gold_leakage_summary`** — the unified
