@@ -269,3 +269,6 @@ data-source-assessment.md
 
 # Empty scaffold folder (app lives in ra-exceptions-console/).
 app/
+
+# Committed workspace notebook (scrubbed, no outputs): B4 fair per-check rescore.
+!mlops/rescore_per_check_fair.ipynb

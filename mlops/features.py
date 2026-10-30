@@ -3,11 +3,17 @@
 RA-AI-ML-RECALIBRATION (2026-10-06): Added 13 recovery-feedback features
 to improve outcome differentiation (RECOVERED vs WRITTEN_OFF vs PARTIALLY_RECOVERED).
 Model v40 trained on 28 features; gap improved 8.9x (0.03 → 0.22).
+
+RA-ML-DROP-ARPU-TIER-WEIGHT-1026 (2026-10-26): Removed arpu_tier_weight.
+It pushed HIGH-priority rates toward high-ARPU / residential customers
+(arpu_tier gap 0.046, segment gap 0.047 on v67 vs 0.016 / 0.032 on the
+27-feature v64). The model now trains on 27 features. train.py gates
+champion promotion on these fairness gaps.
 """
 
 FEATURE_TABLE_NAME = "feature_account_anomaly"
 
-# --- Original exception + scorecard + customer features (15) ---
+# --- Original exception + scorecard + customer features (14) ---
 _ORIGINAL_FEATURE_COLUMNS = [
     "amount_at_risk",
     "amount_at_risk_log",
@@ -23,7 +29,7 @@ _ORIGINAL_FEATURE_COLUMNS = [
     "scorecard_total_amount_at_risk",
     "risk_tier_weight",
     "credit_risk_weight",
-    "arpu_tier_weight",
+    # arpu_tier_weight removed: RA-ML-DROP-ARPU-TIER-WEIGHT-1026 (fairness)
 ]
 
 # --- Recovery-feedback features (13) — RA-AI-ML-RECALIBRATION ---

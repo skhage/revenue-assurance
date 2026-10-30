@@ -89,12 +89,8 @@ def build_feature_frame(spark: SparkSession, catalog: str, schema: str) -> DataF
               WHEN COALESCE(c.credit_class, '') IN ('b', 'bb', 'bbb') THEN 1.0
               ELSE 0.0
             END AS DOUBLE) AS credit_risk_weight,
-            CAST(CASE COALESCE(c.arpu_tier, s.arpu_tier, '')
-              WHEN 'tier_1_high' THEN 2.0
-              WHEN 'tier_2_medium' THEN 1.0
-              WHEN 'tier_3_low' THEN 0.5
-              ELSE 0.0
-            END AS DOUBLE) AS arpu_tier_weight,
+            -- arpu_tier_weight removed (RA-ML-DROP-ARPU-TIER-WEIGHT-1026): it
+            -- skewed HIGH-priority rates across arpu_tier / segment_classification.
             CURRENT_TIMESTAMP() AS feature_updated_at
           FROM exception_base e
           LEFT JOIN {scorecard_table} s
@@ -176,14 +172,28 @@ def main() -> None:
         # COMMENT ON metadata per CEO directive #2.
         feature_frame.createOrReplaceTempView("_rebuilt_features")
         feature_table_sql = f"`{args.catalog}`.`{args.schema}`.`{FEATURE_TABLE_NAME}`"
+        # Explicit column lists (not SET * / INSERT *) so that legacy target
+        # columns no longer produced here (e.g. the deprecated arpu_tier_weight)
+        # don't break the MERGE. Legacy columns get NULL on insert and are
+        # NULLed below on update.
+        target_columns = set(spark.table(feature_table).columns)
+        source_columns = [col for col in feature_frame.columns if col in target_columns]
+        set_clause = ", ".join(f"target.`{col}` = source.`{col}`" for col in source_columns)
+        insert_cols = ", ".join(f"`{col}`" for col in source_columns)
+        insert_vals = ", ".join(f"source.`{col}`" for col in source_columns)
         spark.sql(f"""
             MERGE INTO {feature_table_sql} AS target
             USING _rebuilt_features AS source
             ON target.exception_id = source.exception_id
-            WHEN MATCHED THEN UPDATE SET *
-            WHEN NOT MATCHED BY TARGET THEN INSERT *
+            WHEN MATCHED THEN UPDATE SET {set_clause}
+            WHEN NOT MATCHED BY TARGET THEN INSERT ({insert_cols}) VALUES ({insert_vals})
             WHEN NOT MATCHED BY SOURCE THEN DELETE
         """)
+        if "arpu_tier_weight" in target_columns:
+            spark.sql(
+                f"UPDATE {feature_table_sql} SET arpu_tier_weight = NULL "
+                "WHERE arpu_tier_weight IS NOT NULL"
+            )
     else:
         feature_client.create_table(
             name=feature_table,
