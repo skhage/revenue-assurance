@@ -7,6 +7,7 @@
 >   Code, or bulk-imported) and cited by Genie. Pairs with [`11-metric-views.md`](11-metric-views.md)
 >   (metrics) and [`12-domains-and-tags.md`](12-domains-and-tags.md) (domains). Grounded in the
 >   real `cdm_tmforum` objects.
+> - ✅ **2026-11-01:** Added the severity as-of-date caveat under §C (DEC-PM-SEVERITY-ASOF-1101).
 
 **How to use.** Section **A** (contested terms) is the priority — those are the Pages that resolve
 cross-functional ambiguity and that Genie should cite. Author each entry as a Page in its owning
@@ -100,6 +101,12 @@ Marketing: retention loss / churn risk (`tmf_customer.customer.churn_risk_score`
 | `doc_contract_mismatch` | Contract PDF ≠ system of record | Sales/RA | `silver_doc_intelligence_contracts` | HIGH |
 | `doc_invoice_mismatch` | Invoice PDF amount ≠ system | Finance/RA | `silver_doc_intelligence_invoices` | HIGH |
 > `silver_fx_rate_validation` produces FX deviations tracked separately (not unioned into the leakage register).
+
+> **Severity is as-of-date (DEC-PM-SEVERITY-ASOF-1101, 2026-11-01).** In the 60-type register
+> `v_gold_leakage_summary`, severity is lowercase (`critical`/`high`/`medium`/`low`). The aging checks
+> `stale_dispute` (>365d critical, >270d high) and `stale_incident` (>365d critical, >180d high, >90d
+> medium) use `CURRENT_DATE()`, so the split shifts daily while totals stay fixed. Quote any severity
+> count with its as-of date (UTC).
 
 ---
 
