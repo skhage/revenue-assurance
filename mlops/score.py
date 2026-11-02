@@ -158,6 +158,9 @@ def main() -> None:
         functions.lit(model_name).alias("registered_model_name"),
         functions.lit("champion").alias("registered_model_alias"),
         functions.current_timestamp().alias("scored_at"),
+        # RA-ML-FIRST-DETECTED-AT (2026-11-01): only used on INSERT; the MERGE
+        # below excludes it from UPDATE so exception age survives rescoring.
+        functions.current_timestamp().alias("first_detected_at"),
     )
 
     # ── MERGE instead of overwrite to preserve column-level COMMENT ON metadata ──
@@ -187,11 +190,18 @@ def main() -> None:
     if not spark.catalog.tableExists(output_table):
         result.write.format("delta").saveAsTable(output_table)
     else:
+        # RA-ML-FIRST-DETECTED-AT: explicit UPDATE list that never touches
+        # first_detected_at (set once on INSERT, backfilled to 2026-08-28 00:39).
+        update_set = ", ".join(
+            f"target.`{column}` = source.`{column}`"
+            for column in result.columns
+            if column not in ("exception_id", "first_detected_at")
+        )
         spark.sql(f"""
             MERGE INTO {output_table_sql} AS target
             USING _ml_scored_anomalies AS source
             ON target.exception_id = source.exception_id
-            WHEN MATCHED THEN UPDATE SET *
+            WHEN MATCHED THEN UPDATE SET {update_set}
             WHEN NOT MATCHED BY TARGET THEN INSERT *
             WHEN NOT MATCHED BY SOURCE
                 AND target.check_type IN ({','.join(repr(ct) for ct in source_check_types)})
