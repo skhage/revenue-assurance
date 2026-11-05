@@ -1,18 +1,30 @@
 # Unified end-to-end orchestration job for the Revenue Assurance demo.
 #
 # Chains every pipeline stage in dependency order on serverless compute:
+#   0. check_skip_simulation    — condition: run stage 1 only when the job
+#                                  parameter skip_simulation == 'false'
 #   1. simulate_source_systems  — regenerate *_source tables from data-sim
+#                                  (SKIPPED by default; DEC-PM-SIM-ONE-SHOT /
+#                                  DEC-PM-E2E-SKIP-SIM-1103: the *_source
+#                                  schemas are a static one-shot seed and any
+#                                  re-run requires rebaselining)
 #   2. reconciliation_pipeline  — refresh silver + gold MVs via the SDP
+#                                  (runs whether stage 1 ran or was skipped)
 #   3. ml_feature_build          — build exception features (parallel with 4)
 #   4. forecast_refresh          — ai_forecast gold MV on SQL warehouse
 #   5. ml_train                  — train IsolationForest (after 3)
 #   6. ml_score                  — publish anomaly scores (after 5)
+#   7. leakage_rollup_refresh    — rebuild mv_gold_leakage_rollup snapshot
+#                                  (after 6, on SQL warehouse)
 #
 # Stages 3+5+6 and 4 run in parallel after the reconciliation pipeline
 # completes, so ML and forecast work overlap for minimum wall-clock time.
 #
 # Usage:
 #   databricks bundle run ra_e2e_orchestration --profile <name>
+#   # Re-seed sources too (requires rebaselining acceptance figures):
+#   databricks bundle run ra_e2e_orchestration --profile <name> \
+#     --params skip_simulation=false
 #
 # This file is auto-included by databricks.yml's `include: resources/*.yml`
 # glob. It does NOT modify any other resource file.
@@ -38,12 +50,17 @@ resources:
           default: ${var.schema}
         - name: experiment_name
           default: /Shared/revenue-assurance/anomaly-detection
+        # 'true' (default) skips simulate_source_systems so the one-shot
+        # *_source snapshot is preserved. Set to 'false' only to re-seed.
+        - name: skip_simulation
+          default: "true"
 
       # ML tasks need extra Python packages beyond the base serverless image.
       environments:
         - environment_key: ml_runtime
           spec:
-            client: "1"
+            # Client 4 ships numpy 2, which the champion (v64+) pickle needs.
+            client: "4"
             dependencies:
               - mlflow>=2.22.0,<4
               - databricks-feature-engineering>=0.16.0
@@ -52,11 +69,25 @@ resources:
               - numpy>=1.26.0
 
       tasks:
+        # ─── Stage 0: Gate the simulation stage ──────────────────────────
+        - task_key: check_skip_simulation
+          description: >-
+            Evaluates to true only when skip_simulation is 'false', so the
+            source re-seed runs only on explicit opt-in.
+          condition_task:
+            op: EQUAL_TO
+            left: "{{job.parameters.skip_simulation}}"
+            right: "false"
+
         # ─── Stage 1: Simulate upstream source systems ───────────────────
         - task_key: simulate_source_systems
           description: >-
             Regenerate salesforce_source, oracle_erp_source, refinitiv_fx_source,
             ironclad_clm_source, and mdm_source tables from data-sim config.
+            Runs only on the true branch of check_skip_simulation.
+          depends_on:
+            - task_key: check_skip_simulation
+              outcome: "true"
           notebook_task:
             notebook_path: ../data-sim/simulate_source_systems.py
             base_parameters:
@@ -68,8 +99,14 @@ resources:
           description: >-
             Trigger the ra_medallion_pipeline SDP to refresh all 7 silver and
             4 gold materialized views. Waits for the update to complete.
+            Runs on the false branch (simulation skipped) or after a
+            successful simulation; NONE_FAILED treats the excluded branch
+            as success, and a failed simulation still blocks this task.
           depends_on:
+            - task_key: check_skip_simulation
+              outcome: "false"
             - task_key: simulate_source_systems
+          run_if: NONE_FAILED
           pipeline_task:
             pipeline_id: ${resources.pipelines.ra_medallion_pipeline.id}
             full_refresh: false
@@ -134,6 +171,19 @@ resources:
           sql_task:
             file:
               path: ../reconciliation/warehouse/gold_revenue_forecast_anomalies.sql
+            warehouse_id: ${var.sql_warehouse_id}
+
+        # ─── Stage 5: Rebuild pre-aggregated leakage rollup ──────────────
+        - task_key: leakage_rollup_refresh
+          description: >-
+            Rebuild the mv_gold_leakage_rollup snapshot table (INSERT OVERWRITE
+            from v_gold_leakage_summary) after gold refresh and ML scoring, so
+            dashboard and Genie headline tiles match the detail view.
+          depends_on:
+            - task_key: ml_score
+          sql_task:
+            file:
+              path: ../reconciliation/warehouse/gold_leakage_rollup_refresh.sql
             warehouse_id: ${var.sql_warehouse_id}
 
       # One run at a time; no schedule (triggered on demand for demos).
