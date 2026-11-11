@@ -253,29 +253,25 @@ export function CommissionPage() {
               return (
                 <Card
                   key={b.sub_check_type}
-                  className="shadow-sm transition-colors hover:border-primary/30 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  onClick={() => {
-                    setSubCheckFilter(b.sub_check_type as CommissionSubCheckType);
-                    setView('detail');
-                  }}
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`View ${subCheckLabel(b.sub_check_type)} exceptions`}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      setSubCheckFilter(b.sub_check_type as CommissionSubCheckType);
-                      setView('detail');
-                    }
-                  }}
+                  // V24 (b): stretched-button pattern. The Card is no longer role=button,
+                  // so the severity badge and the 3 metrics stay readable by screen readers.
+                  className="relative shadow-sm transition-colors hover:border-primary/30 cursor-pointer focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2"
                 >
                   <CardContent className="flex flex-col gap-3 p-5">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <Icon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-                        <span className="text-sm font-medium text-foreground">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSubCheckFilter(b.sub_check_type as CommissionSubCheckType);
+                            setView('detail');
+                          }}
+                          className="text-left text-sm font-medium text-foreground after:absolute after:inset-0 focus-visible:outline-none"
+                        >
                           {subCheckLabel(b.sub_check_type)}
-                        </span>
+                          <span className="sr-only"> - view exceptions</span>
+                        </button>
                       </div>
                       <SeverityBadge severity={b.severity_mode} />
                     </div>

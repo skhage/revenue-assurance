@@ -34,7 +34,7 @@ export function SeverityBadge({ severity }: { severity: string }) {
 
 const CONFIDENCE_STYLES: Record<string, string> = {
   HIGH: 'bg-success/10 text-green-800 dark:text-success',
-  MEDIUM: 'bg-warning/15 text-amber-800 dark:text-warning',
+  MEDIUM: 'bg-warning/15 text-warning', // V23 L1: light --warning is AA-darkened, raw amber-800 not needed
   LOW: 'bg-muted text-muted-foreground',
   INSUFFICIENT: 'bg-muted text-muted-foreground',
 };
@@ -56,16 +56,17 @@ export function ConfidenceBadge({ confidence }: { confidence: string }) {
 const STATUS_DOT: Record<string, string> = {
   New: 'bg-destructive',
   Investigating: 'bg-warning',
-  Recovering: 'bg-primary',
+  Recovering: 'bg-chart-2', // V22 N4: blue, hue-distinct from New (destructive red)
   Recovered: 'bg-success',
   WrittenOff: 'bg-muted-foreground',
 };
 
-// AI-triage priority badge (P1–P4).
-const PRIORITY_STYLES: Record<string, string> = {
+// AI-triage priority badge (P1–P4). Exported so OverviewPage reuses one source (V23 L1).
+export const PRIORITY_STYLES: Record<string, string> = {
   P1: 'bg-destructive text-destructive-foreground',
-  P2: 'bg-orange-500 text-orange-950',
-  P3: 'bg-yellow-500 text-yellow-950',
+  // V22 N4: on-token (was raw orange-500 / yellow-500).
+  P2: 'bg-warning text-warning-foreground',
+  P3: 'bg-warning/15 text-warning ring-1 ring-inset ring-warning/40',
   P4: 'bg-muted text-muted-foreground',
 };
 
@@ -77,6 +78,35 @@ export function PriorityBadge({ priority }: { priority: string }) {
       }`}
     >
       {priority}
+    </span>
+  );
+}
+
+// Urgency tier badge (Smart Queue — IMMEDIATE / PRIORITY / STANDARD).
+const URGENCY_STYLES: Record<string, string> = {
+  IMMEDIATE: 'bg-destructive text-destructive-foreground',
+  // R193: on-token, matches PriorityBadge P2 (V22 N4) — was raw orange-500.
+  PRIORITY: 'bg-warning text-warning-foreground',
+  STANDARD: 'bg-muted text-muted-foreground',
+};
+
+const URGENCY_DOT: Record<string, string> = {
+  IMMEDIATE: 'animate-pulse bg-destructive-foreground',
+  PRIORITY: 'bg-warning-foreground',
+  STANDARD: 'bg-muted-foreground',
+};
+
+export function UrgencyBadge({ tier }: { tier: string }) {
+  const key = (tier || 'STANDARD').toUpperCase();
+  const label = key === 'IMMEDIATE' ? 'Immediate' : key === 'PRIORITY' ? 'Priority' : 'Standard';
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+        URGENCY_STYLES[key] ?? URGENCY_STYLES.STANDARD
+      }`}
+    >
+      <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${URGENCY_DOT[key] ?? URGENCY_DOT.STANDARD}`} />
+      {label}
     </span>
   );
 }

@@ -108,7 +108,7 @@ export function RecoveryPage() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <Table>
+              <Table aria-label="Recovery action plan">
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-10">#</TableHead>

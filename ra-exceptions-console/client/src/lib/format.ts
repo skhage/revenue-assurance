@@ -107,6 +107,15 @@ const CHECK_LABELS: Record<string, string> = {
   sla_breach: 'SLA breach',
   sla_breach_disagreement: 'SLA breach disagreement',
   stale_incident: 'Stale incident',
+  // Order-to-provisioning integrity (gold_order_provisioning_leakage)
+  phantom_service_no_order: 'Phantom service (no order)',
+  sla_breach_revenue_impact: 'SLA breach revenue impact',
+  late_provisioning: 'Late provisioning',
+  dual_system_order_conflict: 'Dual-system order conflict',
+  inactive_service_billing: 'Inactive service billing',
+  approval_state_mismatch: 'Approval state mismatch',
+  orphan_order_no_service: 'Orphan order (no service)',
+  completed_rejected: 'Completed/rejected order',
 };
 
 export function checkLabel(check: string | null | undefined): string {
@@ -142,6 +151,7 @@ const SOURCE_LABELS: Record<string, string> = {
   gold_fee_leakage: 'Fee regulatory compliance',
   gold_billing_dispute_leakage: 'Billing disputes',
   gold_network_incident_leakage: 'Network incidents',
+  gold_order_provisioning_leakage: 'Order-to-provisioning',
 };
 
 export function sourceLabel(table: string | null | undefined): string {

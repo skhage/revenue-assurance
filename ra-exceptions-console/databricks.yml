@@ -52,6 +52,39 @@ variables:
     description: Display name of the RA Genie space (for the app resource binding).
     default: "Lakelink Fiber Revenue Assurance Analyst"
 
+  # Agent Bricks supervisors proxied by server/routes/command-center.ts and the
+  # recovery orchestrator used by server/routes/chat.ts. The app SP gets
+  # CAN_QUERY on each via the serving_endpoint resources below
+  # (RA-APP-SERVING-ENDPOINT-RESOURCES). Each name is injected into the app as
+  # an env var via config.env value_from (RA-APP-AGENT-ENDPOINTS-PARAM-1110).
+  # Public repo: supply the real names with --var at deploy time; the server
+  # answers 503 for any agent whose value is still a REPLACE_WITH_* placeholder.
+  command_center_endpoint:
+    description: Revenue Recovery Command Center supervisor (Agent Bricks MAS). Env COMMAND_CENTER_ENDPOINT.
+    default: "REPLACE_WITH_COMMAND_CENTER_ENDPOINT"
+  contract_risk_endpoint:
+    description: Contract-risk specialist supervisor (Agent Bricks MAS). Env CONTRACT_RISK_ENDPOINT.
+    default: "REPLACE_WITH_CONTRACT_RISK_ENDPOINT"
+  adjustment_fraud_endpoint:
+    description: Adjustment-fraud specialist supervisor (Agent Bricks MAS). Env ADJUSTMENT_FRAUD_ENDPOINT.
+    default: "REPLACE_WITH_ADJUSTMENT_FRAUD_ENDPOINT"
+  order_provisioning_endpoint:
+    description: Order-to-Provisioning Integrity supervisor (Agent Bricks MAS). Env ORDER_PROVISIONING_ENDPOINT.
+    default: "REPLACE_WITH_ORDER_PROVISIONING_ENDPOINT"
+  triage_analytics_endpoint:
+    description: Triage / root-cause supervisor (Agent Bricks MAS). Env TRIAGE_ANALYTICS_ENDPOINT.
+    default: "REPLACE_WITH_TRIAGE_ANALYTICS_ENDPOINT"
+  recovery_orchestrator_endpoint:
+    description: Recovery orchestrator agent used by the /api/chat route. Env RECOVERY_ORCHESTRATOR_ENDPOINT.
+    default: "REPLACE_WITH_RECOVERY_ORCHESTRATOR_ENDPOINT"
+  playbook_ka_endpoint:
+    description: >-
+      RA Investigation Playbook Knowledge Assistant serving endpoint used by
+      /api/playbook-guidance. Injected into the app as PLAYBOOK_KA_ENDPOINT via
+      the playbook-ka-agent resource. Public repo: supply the real name with
+      --var playbook_ka_endpoint=<name> at deploy time.
+    default: "REPLACE_WITH_PLAYBOOK_KA_ENDPOINT"
+
 resources:
   apps:
     app:
@@ -84,6 +117,35 @@ resources:
             name: ${var.genie_space_name}
             space_id: ${var.ra_genie_space_id}
             permission: CAN_RUN
+        # Serving endpoints called server-side as the app SP (no DATABRICKS_TOKEN).
+        - name: command-center-agent
+          serving_endpoint:
+            name: ${var.command_center_endpoint}
+            permission: CAN_QUERY
+        - name: contract-risk-agent
+          serving_endpoint:
+            name: ${var.contract_risk_endpoint}
+            permission: CAN_QUERY
+        - name: adjustment-fraud-agent
+          serving_endpoint:
+            name: ${var.adjustment_fraud_endpoint}
+            permission: CAN_QUERY
+        - name: order-provisioning-agent
+          serving_endpoint:
+            name: ${var.order_provisioning_endpoint}
+            permission: CAN_QUERY
+        - name: triage-analytics-agent
+          serving_endpoint:
+            name: ${var.triage_analytics_endpoint}
+            permission: CAN_QUERY
+        - name: recovery-orchestrator-agent
+          serving_endpoint:
+            name: ${var.recovery_orchestrator_endpoint}
+            permission: CAN_QUERY
+        - name: playbook-ka-agent
+          serving_endpoint:
+            name: ${var.playbook_ka_endpoint}
+            permission: CAN_QUERY
 
       # App runtime environment. NOTE: this bundle-level `config.env` REPLACES
       # app.yaml's `env` block on deploy (it does not merge), so the resource
@@ -112,6 +174,22 @@ resources:
             value_from: genie-space
           - name: RA_LAKEBASE_PROJECT
             value: ${var.postgres_project}
+          # Playbook KA endpoint name for /api/playbook-guidance (not hardcoded).
+          - name: PLAYBOOK_KA_ENDPOINT
+            value_from: playbook-ka-agent
+          # Agent Bricks supervisor + orchestrator endpoint names (not hardcoded).
+          - name: COMMAND_CENTER_ENDPOINT
+            value_from: command-center-agent
+          - name: CONTRACT_RISK_ENDPOINT
+            value_from: contract-risk-agent
+          - name: ADJUSTMENT_FRAUD_ENDPOINT
+            value_from: adjustment-fraud-agent
+          - name: ORDER_PROVISIONING_ENDPOINT
+            value_from: order-provisioning-agent
+          - name: TRIAGE_ANALYTICS_ENDPOINT
+            value_from: triage-analytics-agent
+          - name: RECOVERY_ORCHESTRATOR_ENDPOINT
+            value_from: recovery-orchestrator-agent
 
 targets:
   default:
@@ -127,7 +205,17 @@ targets:
       #     --var sql_warehouse_id=<id> \
       #     --var postgres_branch=projects/<project>/branches/production \
       #     --var postgres_database=projects/<project>/branches/production/databases/databricks-postgres \
-      #     --var postgres_project=projects/<project>
+      #     --var postgres_project=projects/<project> \
+      #     --var playbook_ka_endpoint=<ka-endpoint-name> \
+      #     --var command_center_endpoint=<command-center-mas-endpoint> \
+      #     --var contract_risk_endpoint=<contract-risk-mas-endpoint> \
+      #     --var adjustment_fraud_endpoint=<adjustment-fraud-mas-endpoint> \
+      #     --var order_provisioning_endpoint=<order-provisioning-mas-endpoint> \
+      #     --var triage_analytics_endpoint=<triage-analytics-mas-endpoint> \
+      #     --var recovery_orchestrator_endpoint=<recovery-orchestrator-endpoint>
+      #   Optional (Architecture page links / Genie tab): --var ra_pipeline_id, ra_ml_job_id,
+      #   ra_datasim_job_id, ra_dashboard_id, ra_genie_space_id, genie_space_name.
+      # Keep the real values outside the repo (e.g. an untracked local vars file).
       sql_warehouse_id: REPLACE_WITH_SQL_WAREHOUSE_ID
       postgres_branch: REPLACE_WITH_POSTGRES_BRANCH
       postgres_database: REPLACE_WITH_POSTGRES_DATABASE

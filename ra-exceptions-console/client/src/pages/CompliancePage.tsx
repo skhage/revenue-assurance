@@ -184,7 +184,7 @@ export function CompliancePage() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <Table>
+              <Table aria-label="Contract compliance scan">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Contract</TableHead>

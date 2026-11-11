@@ -402,7 +402,194 @@ export interface DisputeCustomerSummary {
   regulatory_count: number;
 }
 
-// Chat types — for the recovery orchestrator assistant (ra-recovery-orchestrator-v2).
+// Smart Queue / Predictive Recovery types — from UC functions built by @ai-engineer (RA-AI-PREDICTIVE-RECOVERY).
+
+export type UrgencyTier = 'IMMEDIATE' | 'PRIORITY' | 'STANDARD';
+
+export interface SmartQueueItem {
+  queue_position: number;
+  exception_id: string;
+  check_type: string;
+  customer_id: number;
+  account_name: string;
+  amount_at_risk: number;
+  predicted_recovery_value: number;
+  predicted_recovery_rate: number;
+  roi_per_hour: number;
+  expected_hours: number;
+  urgency_tier: UrgencyTier;
+  investigation_starter: string;
+}
+
+export interface SmartQueueSummary {
+  queue_size: number;
+  total_predicted_recovery: number;
+  total_at_risk: number;
+  avg_roi_per_hour: number;
+}
+
+export interface PredictedRecoveryItem {
+  opportunity_rank: number;
+  exception_id: string;
+  check_type: string;
+  customer_id: number;
+  account_name: string;
+  amount_at_risk: number;
+  predicted_recovery_rate: number;
+  predicted_recovery_value: number;
+  confidence: string;
+  review_priority: string;
+  composite_anomaly_score: number;
+  customer_risk_tier: string;
+  recovery_reasoning: string;
+}
+
+export interface TriageEffectivenessRow {
+  check_type: string;
+  total_cases: number;
+  triage_accuracy_pct: number;
+  avg_priority_error: string;
+  most_common_misclass: string;
+  recommended_adjustment: string;
+  recovery_rate_when_accurate: number;
+  recovery_rate_when_inaccurate: number;
+  accuracy_delta_impact_pct: number;
+}
+
+// Prevention Intelligence types — from UC functions built by @ai-engineer (RA-AI-CLOSEDLOOP-RECOVERY-V2).
+
+export type ImplementationComplexity = 'HIGH' | 'MEDIUM' | 'LOW';
+
+export interface PreventionIntelligenceRow {
+  prevention_category: string;
+  check_type: string;
+  systemic_root_cause: string;
+  affected_customers: number;
+  total_exceptions: number;
+  annual_leakage_at_risk: number;
+  annual_written_off: number;
+  prevention_rate_estimate: number;
+  preventable_amount: number;
+  recurrence_rate: number;
+  avg_detection_to_resolution_hrs: number;
+  recommended_control: string;
+  implementation_complexity: ImplementationComplexity;
+  priority_score: number;
+}
+
+export interface PreventionSummary {
+  root_cause_count: number;
+  total_preventable: number;
+  total_written_off: number;
+  category_count: number;
+  avg_prevention_rate: number;
+}
+
+export interface PreventionRuleRow {
+  rule_id: string;
+  rule_name: string;
+  prevention_category: string;
+  target_check_types: string;
+  trigger_condition: string;
+  validation_logic: string;
+  enforcement_point: string;
+  estimated_annual_prevention: number;
+  affected_customer_count: number;
+  exception_reduction_pct: number;
+  implementation_steps: string;
+  data_sources_required: string;
+  complexity: ImplementationComplexity;
+  roi_score: number;
+}
+
+export interface PreventionRoiRow {
+  initiative_name: string;
+  prevention_category: string;
+  check_types_covered: string;
+  annual_leakage_prevented: number;
+  annual_investigation_cost_saved: number;
+  annual_write_off_avoided: number;
+  total_annual_benefit: number;
+  estimated_implementation_cost: number;
+  payback_period_months: number;
+  net_roi_pct: number;
+  cumulative_benefit: number;
+  customers_protected: number;
+  exceptions_eliminated: number;
+  priority_rank: number;
+  recommendation: string;
+}
+
+// Contract Compliance types — from UC functions built by @ai-engineer (RA-AI-CONTRACT-COMPLIANCE-AGENT).
+
+export interface ContractViolationRow {
+  compliance_check: string;
+  severity: string;
+  customer_id: number;
+  account_name: string;
+  contract_number: string;
+  finding: string;
+  amount_at_risk: number;
+  recommended_action: string;
+  data_sources: string;
+}
+
+export interface ExpiringContractRow {
+  urgency: string;
+  customer_id: number;
+  account_name: string;
+  contract_number: string;
+  sla_tier: string;
+  contract_status: string;
+  start_date: string;
+  end_date: string;
+  days_until_expiry: number;
+  term_months: number;
+  auto_renew: boolean;
+  annual_revenue: number;
+  risk_category: string;
+  recommended_action: string;
+}
+
+export interface LifecycleRiskRow {
+  contract_id: string;
+  contract_number: string;
+  customer_id: number;
+  account_name: string;
+  sla_tier: string;
+  contract_status: string;
+  contract_term_months: number;
+  start_date: string;
+  end_date: string;
+  auto_renew: boolean;
+  days_to_expiry: number;
+  line_item_count: number;
+  total_mrr: number;
+  risk_type: string;
+  risk_score: number;
+  risk_detail: string;
+  recommended_action: string;
+  existing_exceptions: number;
+  existing_leakage_amount: number;
+}
+
+export interface ContractRiskReportRow {
+  section: string;
+  section_order: number;
+  metric_name: string;
+  metric_value: string;
+  detail: string;
+}
+
+export interface ContractComplianceSummary {
+  violation_count: number;
+  total_at_risk: number;
+  customers_affected: number;
+  expiring_count: number;
+  high_risk_count: number;
+}
+
+// Chat types — for the recovery orchestrator assistant (/api/chat).
 
 export interface ChatMessage {
   role: 'user' | 'assistant';

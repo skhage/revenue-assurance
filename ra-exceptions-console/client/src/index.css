@@ -78,7 +78,7 @@
   --popover-foreground: #e6ecee;
 
   --primary: #ff4b33; /* Lava, brightened for dark bg */
-  --primary-foreground: #ffffff;
+  --primary-foreground: #1a0503; /* V22 N1: 5.91:1 on #ff4b33 (white was 3.33 FAIL) */
 
   --secondary: #1e333b;
   --secondary-foreground: #e6ecee;
@@ -87,8 +87,8 @@
   --accent: #21363e;
   --accent-foreground: #e6ecee;
 
-  --destructive: #f0625a;
-  --destructive-foreground: #ffffff;
+  --destructive: #f47a72; /* V21 F2: badge 5.04:1 on card (WCAG 1.4.3) */
+  --destructive-foreground: #2a0a07;
   --success: #34d399;
   --success-foreground: #04241a;
   --warning: #fbbf24;
@@ -107,7 +107,7 @@
   --sidebar: #0b171c;
   --sidebar-foreground: #c7d2d6;
   --sidebar-primary: #ff4b33;
-  --sidebar-primary-foreground: #ffffff;
+  --sidebar-primary-foreground: #1a0503; /* V22 N1 */
   --sidebar-accent: #1b2e35;
   --sidebar-accent-foreground: #ffffff;
   --sidebar-border: #1b2e35;
@@ -123,4 +123,6 @@
 @theme inline {
   --color-brand: var(--brand);
   --color-brand-foreground: var(--brand-foreground);
+  /* V22 N4: guarantee bg-chart-2 utility for the Recovering status dot. */
+  --color-chart-2: var(--chart-2);
 }

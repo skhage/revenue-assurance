@@ -15,6 +15,12 @@ import { setupOrderToBillRoutes } from './routes/order-to-bill';
 import { setupCollectionsRoutes } from './routes/collections';
 import { setupCommissionRoutes } from './routes/commission';
 import { setupDisputeRoutes } from './routes/disputes';
+import { setupCommandCenterRoutes } from './routes/command-center';
+import { setupSmartQueueRoutes } from './routes/smart-queue';
+import { setupPreventionRoutes } from './routes/prevention';
+import { setupAgentPortfolioRoutes } from './routes/agent-portfolio';
+import { setupContractComplianceRoutes } from './routes/contract-compliance';
+import { setupPlaybookGuidanceRoutes } from './routes/playbook-guidance';
 
 createApp({
   plugins: [analytics(), lakebase(), server(), genie()],
@@ -35,5 +41,11 @@ createApp({
     setupCollectionsRoutes(appkit);
     setupCommissionRoutes(appkit);
     setupDisputeRoutes(appkit);
+    setupCommandCenterRoutes(appkit);
+    setupSmartQueueRoutes(appkit);
+    setupPreventionRoutes(appkit);
+    setupAgentPortfolioRoutes(appkit);
+    setupContractComplianceRoutes(appkit);
+    setupPlaybookGuidanceRoutes(appkit);
   },
 }).catch(console.error);

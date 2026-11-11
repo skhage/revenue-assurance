@@ -229,7 +229,7 @@ export function QueuePage() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <Table>
+            <Table aria-label="Exception queue">
               <TableHeader>
                 <TableRow>
                   <TableHead>Reference</TableHead>

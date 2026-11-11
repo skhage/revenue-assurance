@@ -1,10 +1,10 @@
 -- Exception queue: the triage grid, ranked by dollars at risk.
 -- Filters are optional; pass the 'ALL' / '' sentinels to disable a filter.
 -- A stable exception_id is synthesized so case state (Lakebase) can key on it
--- without materializing all ~1.1M exceptions into Postgres.
+-- without materializing all ~1.35M exceptions into Postgres.
 --
--- Source: v_gold_leakage_summary (read-time UNION of 8 gold sources, 52 types,
--- ~1.1M rows / ~$41.8B). Includes PII masking via UC row-level security.
+-- Source: v_gold_leakage_summary (read-time UNION of 22 sources, 60 types,
+-- ~1.35M rows / ~$60B). Includes PII masking via UC row-level security.
 -- @param check_type STRING = ALL
 -- @param severity STRING = ALL
 -- @param search STRING

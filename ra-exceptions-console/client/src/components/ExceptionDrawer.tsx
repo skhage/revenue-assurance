@@ -23,10 +23,11 @@ import { sql } from '@databricks/appkit-ui/js';
 import { useEffect, useState } from 'react';
 import { SeverityBadge, StatusChip, ConfidenceBadge } from './badges';
 import { LoadingRegion, ErrorRegion } from './StatusRegion';
-import { FileText, ExternalLink, Shield, ChevronRight, BrainCircuit, AlertTriangle } from 'lucide-react';
+import { FileText, ExternalLink, Shield, ChevronRight, BrainCircuit, AlertTriangle, BookOpen } from 'lucide-react';
 import { usd, num, checkLabel, accountLabel, detectionLabel, sourceLabel } from '../lib/format';
 import { casesApi, NEXT_STATUS, type CasePayload, type Status, type ExceptionMeta } from '../lib/cases';
 import { triageApi } from '../lib/triage';
+import { playbookGuidanceApi } from '../lib/playbook-guidance';
 import { evidenceApi, type EvidencePayload, type EvidenceRow, type EvidenceFormat } from '../lib/evidence';
 import { architectureApi, exploreDataUrl, type ArchitectureConfig } from '../lib/architecture';
 import { useWhoAmI } from '../lib/whoami';
@@ -186,6 +187,27 @@ function KV({ k, v }: { k: string; v: React.ReactNode }) {
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return <h3 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{children}</h3>;
+}
+
+/** Collapsible wrapper using native <details>/<summary> for accessibility. */
+function CollapsibleSection({
+  title,
+  defaultOpen = false,
+  children,
+}: {
+  title: React.ReactNode;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <details open={defaultOpen || undefined} className="group">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground [&::-webkit-details-marker]:hidden">
+        <ChevronRight className="h-3 w-3 shrink-0 transition-transform group-open:rotate-90" aria-hidden="true" />
+        {title}
+      </summary>
+      <div className="flex flex-col gap-2.5 pt-2">{children}</div>
+    </details>
+  );
 }
 
 function CustomerScorecard({ exceptionId, onRetry }: { exceptionId: string; onRetry: () => void }) {
@@ -424,6 +446,80 @@ function InvestigationPlaybook({ exception }: { exception: ExceptionRow }) {
   );
 }
 
+/**
+ * On-demand guidance from the RA Investigation Playbook Knowledge Assistant
+ * (via /api/playbook-guidance). Fetched only when the analyst asks, since KA calls take
+ * several seconds and every drawer open would otherwise hit the endpoint.
+ */
+function PlaybookGuidancePanel({ exception }: { exception: ExceptionRow }) {
+  const [content, setContent] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  // V41 L2: fixed friendly copy in the UI; the raw server message goes to the console only.
+  const [failed, setFailed] = useState(false);
+  const [ctrl, setCtrl] = useState<AbortController | null>(null);
+
+  useEffect(() => () => ctrl?.abort(), [ctrl]);
+
+  const ask = () => {
+    // V41 M1: the button stays focusable (aria-disabled, not disabled), so guard re-entry here.
+    if (loading) return;
+    ctrl?.abort();
+    const c = new AbortController();
+    setCtrl(c);
+    setLoading(true);
+    setFailed(false);
+    playbookGuidanceApi
+      .get(exception.check_type, exception.severity, c.signal)
+      .then((r) => setContent(r.content))
+      .catch((e: unknown) => {
+        if (c.signal.aborted) return;
+        console.error('[playbook-guidance]', e);
+        // V41 L1: one state on screen at a time; drop the previous answer on a failed retry.
+        setContent(null);
+        setFailed(true);
+      })
+      .finally(() => {
+        if (!c.signal.aborted) setLoading(false);
+      });
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-xs text-muted-foreground">
+        Investigation steps and resolution patterns for {checkLabel(exception.check_type)}, from the RA
+        Investigation Playbook assistant.
+      </p>
+      <div role="status" aria-live="polite" className={loading ? 'text-xs text-muted-foreground' : 'sr-only'}>
+        {loading ? 'Asking the playbook assistant. This usually takes 10–30 seconds.' : content ? 'Playbook guidance loaded.' : ''}
+      </div>
+      {loading && <Skeleton className="h-20 w-full" aria-hidden="true" />}
+      {failed && !loading && (
+        <div role="alert" className="text-sm text-destructive">
+          The playbook assistant isn’t responding right now. Try again in a moment.
+        </div>
+      )}
+      {content && !loading && (
+        <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-foreground">
+          {content}
+        </div>
+      )}
+      <div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={ask}
+          aria-disabled={loading || undefined}
+          className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+        >
+          <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+          {content || failed ? 'Ask again' : 'Get playbook guidance'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 interface Props {
   exception: ExceptionRow | null;
   open: boolean;
@@ -525,8 +621,7 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
 
         <div className="flex flex-col gap-6 p-5">
           {/* Summary */}
-          <div className="flex flex-col gap-2.5">
-            <SectionTitle>Detection</SectionTitle>
+          <CollapsibleSection title="Detection" defaultOpen>
             <KV k="Check" v={checkLabel(exception.check_type)} />
             <KV k="Method" v={detectionLabel(exception.detection_method)} />
             <KV k="Source system" v={<span className="text-xs">{sourceLabel(exception.source_table)}</span>} />
@@ -543,65 +638,58 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
                 <ExternalLink className="h-3.5 w-3.5 opacity-70" />
               </a>
             )}
-          </div>
+          </CollapsibleSection>
 
           <Separator />
 
           {/* Check-type-aware reconciliation evidence */}
-          <div className="flex flex-col gap-2.5">
-            <SectionTitle>Reconciliation evidence</SectionTitle>
+          <CollapsibleSection title="Reconciliation evidence">
             <EvidenceSection key={exception.exception_id} exception={exception} />
-          </div>
+          </CollapsibleSection>
 
           <Separator />
 
           {/* Customer scorecard evidence */}
-          <div className="flex flex-col gap-2.5">
-            <SectionTitle>Customer reconciliation scorecard</SectionTitle>
+          <CollapsibleSection title="Customer reconciliation scorecard">
             <CustomerScorecard
               key={scorecardRefreshKey}
               exceptionId={exception.exception_id}
               onRetry={() => setScorecardRefreshKey((k) => k + 1)}
             />
-          </div>
+          </CollapsibleSection>
 
           <Separator />
 
           {/* AI triage classification */}
-          <div className="flex flex-col gap-2.5">
-            <SectionTitle>
-              <span className="inline-flex items-center gap-1">
-                <Shield className="h-3.5 w-3.5" /> AI triage
-              </span>
-            </SectionTitle>
+          <CollapsibleSection title={<span className="inline-flex items-center gap-1"><Shield className="h-3.5 w-3.5" /> AI triage</span>}>
             <TriagePanel key={`triage-${exception.exception_id}`} exception={exception} />
-          </div>
+          </CollapsibleSection>
 
           <Separator />
 
           {/* Adaptive triage — learning-informed recommendation */}
-          <div className="flex flex-col gap-2.5">
-            <SectionTitle>
-              <span className="inline-flex items-center gap-1">
-                <BrainCircuit className="h-3.5 w-3.5" /> Adaptive triage
-              </span>
-            </SectionTitle>
+          <CollapsibleSection title={<span className="inline-flex items-center gap-1"><BrainCircuit className="h-3.5 w-3.5" /> Adaptive triage</span>}>
             <AdaptiveTriagePanel key={`adaptive-${exception.exception_id}`} exception={exception} />
-          </div>
+          </CollapsibleSection>
 
           <Separator />
 
           {/* Investigation playbook */}
-          <div className="flex flex-col gap-2.5">
-            <SectionTitle>Investigation playbook</SectionTitle>
+          <CollapsibleSection title="Investigation playbook">
             <InvestigationPlaybook key={`playbook-${exception.exception_id}`} exception={exception} />
-          </div>
+          </CollapsibleSection>
+
+          <Separator />
+
+          {/* Playbook KA guidance (RA-APP-PLAYBOOK-KA-INTEGRATION) */}
+          <CollapsibleSection title={<span className="inline-flex items-center gap-1"><BookOpen className="h-3.5 w-3.5" aria-hidden="true" /> Playbook assistant</span>}>
+            <PlaybookGuidancePanel key={`playbook-ka-${exception.exception_id}`} exception={exception} />
+          </CollapsibleSection>
 
           <Separator />
 
           {/* Case management */}
-          <div className="flex flex-col gap-3">
-            <SectionTitle>Case</SectionTitle>
+          <CollapsibleSection title="Case" defaultOpen>
 
             {actionError && (
               <Alert variant="destructive">
@@ -764,7 +852,7 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
                 </Button>
               </div>
             )}
-          </div>
+          </CollapsibleSection>
         </div>
       </SheetContent>
     </Sheet>

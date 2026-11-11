@@ -6,3 +6,17 @@ env:
     valueFrom: genie-space
   - name: LAKEBASE_ENDPOINT
     valueFrom: postgres
+  - name: PLAYBOOK_KA_ENDPOINT
+    valueFrom: playbook-ka-agent
+  - name: COMMAND_CENTER_ENDPOINT
+    valueFrom: command-center-agent
+  - name: CONTRACT_RISK_ENDPOINT
+    valueFrom: contract-risk-agent
+  - name: ADJUSTMENT_FRAUD_ENDPOINT
+    valueFrom: adjustment-fraud-agent
+  - name: ORDER_PROVISIONING_ENDPOINT
+    valueFrom: order-provisioning-agent
+  - name: TRIAGE_ANALYTICS_ENDPOINT
+    valueFrom: triage-analytics-agent
+  - name: RECOVERY_ORCHESTRATOR_ENDPOINT
+    valueFrom: recovery-orchestrator-agent

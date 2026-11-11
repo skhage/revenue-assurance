@@ -26,7 +26,7 @@ import type { EmergingRisk, LeakageAlert, CriticalSummary } from '../lib/types';
 
 const SIGNAL_STYLES: Record<string, string> = {
   CRITICAL: 'bg-destructive/10 text-destructive',
-  ELEVATED: 'bg-warning/15 text-amber-800 dark:text-warning',
+  ELEVATED: 'bg-warning/15 text-warning', // V23 L1: on-token
   WATCH: 'bg-muted text-muted-foreground',
 };
 
@@ -52,7 +52,7 @@ function SignalBadge({ signal }: { signal: string }) {
 
 const ALERT_SEVERITY_STYLES: Record<string, string> = {
   CRITICAL: 'bg-destructive text-destructive-foreground dark:bg-red-900 dark:text-red-100',
-  ELEVATED: 'bg-orange-500 text-orange-950',
+  ELEVATED: 'bg-warning text-warning-foreground', // R193: on-token (was raw orange-500)
   WATCH: 'bg-muted text-muted-foreground',
 };
 
@@ -106,7 +106,7 @@ function EmergingRiskTable({
   }
   return (
     <div className="overflow-x-auto">
-      <Table>
+      <Table aria-label="Emerging risks">
         <TableHeader>
           <TableRow>
             <TableHead>Account</TableHead>
@@ -183,7 +183,7 @@ function LeakageAlertTable({
   }
   return (
     <div className="overflow-x-auto">
-      <Table>
+      <Table aria-label="Leakage alerts">
         <TableHeader>
           <TableRow>
             <TableHead>Severity</TableHead>

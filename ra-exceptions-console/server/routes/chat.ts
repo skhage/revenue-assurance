@@ -1,10 +1,14 @@
-// Chat route — proxies analyst Q&A to the ra-recovery-orchestrator-v2 serving endpoint.
+// Chat route — proxies analyst Q&A to the recovery orchestrator serving endpoint.
 //
 // The endpoint is a Databricks Agent (supervisor v2) that can answer questions
 // about recovery strategy, exception patterns, and leakage root causes.
+// Its name is injected as RECOVERY_ORCHESTRATOR_ENDPOINT from the
+// `recovery-orchestrator-agent` serving_endpoint app resource (RA-APP-AGENT-ENDPOINTS-PARAM-1110).
 
 import { z } from 'zod';
 import type { Application } from 'express';
+import { getServingAuth } from '../serving-auth';
+import { resolveEndpointName } from './command-center';
 
 interface AppKitWithServer {
   server: {
@@ -12,7 +16,8 @@ interface AppKitWithServer {
   };
 }
 
-const ENDPOINT_NAME = 'ra-recovery-orchestrator-v2';
+/** Env var populated from the `recovery-orchestrator-agent` serving_endpoint app resource. */
+export const RECOVERY_ORCHESTRATOR_ENDPOINT_ENV = 'RECOVERY_ORCHESTRATOR_ENDPOINT';
 
 const ChatRequest = z.object({
   messages: z.array(
@@ -33,21 +38,36 @@ export function setupChatRoutes(appkit: AppKitWithServer) {
         return;
       }
 
-      const host = process.env.DATABRICKS_HOST;
-      const token = process.env.DATABRICKS_TOKEN;
-      if (!host || !token) {
+      const endpoint = resolveEndpointName(RECOVERY_ORCHESTRATOR_ENDPOINT_ENV);
+      if (!endpoint) {
+        console.error(`[chat] ${RECOVERY_ORCHESTRATOR_ENDPOINT_ENV} is not configured`);
+        res.status(503).json({ error: 'Recovery orchestrator not configured' });
+        return;
+      }
+
+      // Auth as the app service principal (CAN_QUERY via databricks.yml);
+      // DATABRICKS_TOKEN is a local-dev fallback only.
+      let auth;
+      try {
+        auth = await getServingAuth();
+      } catch (err) {
+        console.error('[chat] Auth error:', err);
+        res.status(503).json({ error: 'Databricks credentials not available' });
+        return;
+      }
+      if (!auth) {
         res.status(503).json({ error: 'Databricks credentials not available' });
         return;
       }
 
-      const url = `${host.replace(/\/$/, '')}/serving-endpoints/${ENDPOINT_NAME}/invocations`;
+      const url = `${auth.host}/serving-endpoints/${endpoint}/invocations`;
 
       try {
         const upstream = await fetch(url, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
+            ...auth.headers,
           },
           body: JSON.stringify({ messages: parsed.data.messages }),
         });

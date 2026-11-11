@@ -51,12 +51,14 @@ export function AgentWorkbenchPage() {
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-4">
       <Tabs defaultValue="reliability">
+        <div className="overflow-x-auto">
         <TabsList>
           <TabsTrigger value="reliability">Pipeline reliability</TabsTrigger>
           <TabsTrigger value="investigate">Investigate</TabsTrigger>
           <TabsTrigger value="prioritize">Prioritize &amp; route</TabsTrigger>
           <TabsTrigger value="recovery">Recovery playbook</TabsTrigger>
         </TabsList>
+        </div>
 
         <TabsContent value="reliability">
           <PipelineReliabilityPanel result={pipelineHealthResult} />

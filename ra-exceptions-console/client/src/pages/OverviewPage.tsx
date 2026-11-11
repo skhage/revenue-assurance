@@ -15,6 +15,7 @@ import {
 import { sql } from '@databricks/appkit-ui/js';
 import { useEffect, useState } from 'react';
 import { KpiTile } from '../components/KpiTile';
+import { PRIORITY_STYLES } from '../components/badges';
 import { LoadingRegion, ErrorRegion } from '../components/StatusRegion';
 import { analyticsApi } from '../lib/analytics';
 import { triageApi } from '../lib/triage';
@@ -22,6 +23,7 @@ import { usdCompact, num, numCompact, checkLabel } from '../lib/format';
 import { casesApi, STATUSES, type Status } from '../lib/cases';
 import type { KpiSummary, P1Summary, PriorityDistribution } from '../lib/types';
 import { AlertTriangle, Shield } from 'lucide-react';
+import { Link } from 'react-router';
 
 function CaseProgress() {
   const [stats, setStats] = useState<Record<Status, number> | null>(null);
@@ -151,12 +153,12 @@ function P1AlertBanner() {
           {usdCompact(p1.p1_amount)} at risk · SLA: 4 hours · Assigned to Dana Whitfield (VP RA)
         </div>
       </div>
-      <a
-        href="/queue?severity=HIGH"
+      <Link
+        to="/queue?severity=HIGH"
         className="shrink-0 rounded-md bg-destructive px-3 py-1.5 text-xs font-medium text-destructive-foreground transition-colors hover:bg-destructive/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       >
         Triage now
-      </a>
+      </Link>
     </div>
   );
 }
@@ -175,12 +177,8 @@ function PriorityBreakdown() {
     return () => ctrl.abort();
   }, []);
 
-  const priorityColors: Record<string, string> = {
-    P1: 'bg-destructive text-destructive-foreground',
-    P2: 'bg-orange-500 text-orange-950',
-    P3: 'bg-yellow-500 text-yellow-950',
-    P4: 'bg-muted text-muted-foreground',
-  };
+  // V23 L1: single source of truth with PriorityBadge.
+  const priorityColors = PRIORITY_STYLES;
 
   if (loading) {
     return (

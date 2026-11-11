@@ -22,6 +22,10 @@ import {
   Banknote,
   UserX,
   Gavel,
+  Target,
+  ShieldCheck,
+  Layers,
+  Scale,
   type LucideIcon,
 } from 'lucide-react';
 import { OverviewPage } from './pages/OverviewPage';
@@ -39,8 +43,13 @@ import { OrderToBillPage } from './pages/OrderToBillPage';
 import { CollectionsPage } from './pages/CollectionsPage';
 import { CommissionPage } from './pages/CommissionPage';
 import { DisputesPage } from './pages/DisputesPage';
+import { SmartQueuePage } from './pages/SmartQueuePage';
+import { PreventionPage } from './pages/PreventionPage';
+import { AgentPortfolioPage } from './pages/AgentPortfolioPage';
+import { ContractCompliancePage } from './pages/ContractCompliancePage';
 import { LakelinkMark } from './components/LakelinkMark';
 import { DatabricksLogo } from './components/DatabricksLogo';
+import { CommandCenterPanel } from './components/CommandCenterPanel';
 import { useTheme } from './lib/useTheme';
 import { WhoAmIProvider, useWhoAmI } from './lib/whoami';
 import { initials } from './lib/format';
@@ -48,6 +57,7 @@ import { initials } from './lib/format';
 const NAV = [
   { to: '/', label: 'Overview', icon: LayoutGrid, end: true },
   { to: '/queue', label: 'Exception queue', icon: ListChecks, end: false },
+  { to: '/smart-queue', label: 'Smart queue', icon: Target, end: false },
   { to: '/cases', label: 'My cases', icon: Briefcase, end: false },
   { to: '/agents', label: 'Agent Workbench', icon: Bot, end: false },
   { to: '/ask', label: 'Ask (Genie)', icon: Sparkles, end: false },
@@ -56,12 +66,15 @@ const NAV = [
 const AI_NAV = [
   { to: '/recovery', label: 'Recovery', icon: ArrowUpRight, end: false },
   { to: '/alerts', label: 'Risk alerts', icon: Bell, end: false },
-  { to: '/compliance', label: 'Compliance', icon: FileCheck, end: false },
+  { to: '/compliance', label: 'Document compliance', icon: FileCheck, end: false },
   { to: '/partners', label: 'Partner settlement', icon: Handshake, end: false },
   { to: '/order-to-bill', label: 'Order-to-bill', icon: ShoppingCart, end: false },
   { to: '/collections', label: 'Collections intel', icon: Banknote, end: false },
   { to: '/commission', label: 'Commission leakage', icon: UserX, end: false },
   { to: '/disputes', label: 'Billing disputes', icon: Gavel, end: false },
+  { to: '/prevention', label: 'Prevention', icon: ShieldCheck, end: false },
+  { to: '/agent-portfolio', label: 'Agent portfolio', icon: Layers, end: false },
+  { to: '/contracts', label: 'Contract risk', icon: Scale, end: false },
 ];
 
 const SECONDARY_NAV = [
@@ -72,24 +85,28 @@ const SECONDARY_NAV = [
 const TITLES: Record<string, { title: string; sub: string }> = {
   '/': { title: 'Overview', sub: 'Revenue leakage across all reconciliation checks' },
   '/queue': { title: 'Exception queue', sub: 'Triage detected leakage, highest impact first' },
+  '/smart-queue': { title: 'Smart queue', sub: 'AI-optimized work queue — ranked by predicted recovery ROI per analyst-hour' },
   '/cases': { title: 'My cases', sub: 'Cases you are investigating and recovering' },
   '/agents': { title: 'Agent Workbench', sub: 'Deterministic agents over existing RA data — human-approved, no LLM' },
   '/ask': { title: 'Ask (Genie)', sub: 'Natural-language questions over the governed RA data' },
   '/why': { title: 'Why RA matters', sub: 'The business case, the challenges, and why Databricks — before the demo' },
   '/recovery': { title: 'Recovery', sub: 'AI-ranked recovery opportunities with action plans' },
   '/alerts': { title: 'Risk alerts', sub: 'Predictive alerting — emerging leakage signals and structured alerts' },
-  '/compliance': { title: 'Compliance', sub: 'Contract compliance scan — document fields vs billing records' },
+  '/compliance': { title: 'Document compliance', sub: 'Contract compliance scan — document fields vs billing records' },
   '/partners': { title: 'Partner settlement', sub: 'Inter-carrier and wholesale settlement reconciliation' },
   '/order-to-bill': { title: 'Order-to-bill', sub: 'Order, provisioning, and billing state misalignment — check type #13' },
   '/collections': { title: 'Collections intelligence', sub: 'Dunning-leakage correlation — stop collecting wrong amounts' },
   '/commission': { title: 'Commission leakage', sub: 'Agent fraud, clawback failures, and cap violations — 6 sub-check types' },
   '/disputes': { title: 'Billing disputes', sub: 'Fraud patterns, SLA breaches, stale disputes, and regulatory escalation — 7 check types' },
+  '/prevention': { title: 'Prevention intelligence', sub: 'Systemic root causes, upstream controls, and ROI — shift from detection to prevention' },
+  '/agent-portfolio': { title: 'Agent portfolio', sub: 'AI agent categories, attributed exposure and ROI, and coverage gap analysis' },
+  '/contracts': { title: 'Contract risk', sub: 'Violations, expiring contracts, lifecycle risk, and executive summary' },
   '/architecture': { title: 'Architecture', sub: 'The demo mapped onto the Databricks Data + AI Platform' },
 };
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-sidebar-foreground/70">
+    <div className="px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-sidebar-foreground/80">
       {children}
     </div>
   );
@@ -167,13 +184,13 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 
       <nav aria-label="Detection" className="flex flex-col gap-0.5">
         <SectionLabel>Detection</SectionLabel>
-        <div className="flex items-center gap-2.5 rounded-md py-2 pl-3.5 pr-2.5 text-sm text-sidebar-foreground/40">
-          <SearchCheck className="h-4 w-4 shrink-0" />
+        <div role="link" aria-disabled="true" className="flex items-center gap-2.5 rounded-md py-2 pl-3.5 pr-2.5 text-sm text-sidebar-foreground/40 cursor-default">
+          <SearchCheck className="h-4 w-4 shrink-0" aria-hidden="true" />
           <span>Reconciliation rules</span>
           <span className="ml-auto text-[10px] font-medium uppercase tracking-wide">(coming soon)</span>
         </div>
-        <div className="flex items-center gap-2.5 rounded-md py-2 pl-3.5 pr-2.5 text-sm text-sidebar-foreground/40">
-          <Zap className="h-4 w-4 shrink-0" />
+        <div role="link" aria-disabled="true" className="flex items-center gap-2.5 rounded-md py-2 pl-3.5 pr-2.5 text-sm text-sidebar-foreground/40 cursor-default">
+          <Zap className="h-4 w-4 shrink-0" aria-hidden="true" />
           <span>Anomaly models</span>
           <span className="ml-auto text-[10px] font-medium uppercase tracking-wide">(coming soon)</span>
         </div>
@@ -259,10 +276,13 @@ function Layout() {
           </Button>
         </header>
 
-        <main id="main-content" className="flex-1 p-4 md:p-6">
+        <main id="main-content" className="flex-1 p-4 pb-24 sm:pb-4 md:p-6">
           <Outlet />
         </main>
       </div>
+
+      {/* Global Command Center — floating chat button + slide-out panel */}
+      <CommandCenterPanel />
     </div>
   );
 }
@@ -273,6 +293,7 @@ const router = createBrowserRouter([
     children: [
       { path: '/', element: <OverviewPage /> },
       { path: '/queue', element: <QueuePage /> },
+      { path: '/smart-queue', element: <SmartQueuePage /> },
       { path: '/cases', element: <CasesPage /> },
       { path: '/agents', element: <AgentWorkbenchPage /> },
       { path: '/ask', element: <GeniePage /> },
@@ -284,6 +305,9 @@ const router = createBrowserRouter([
       { path: '/collections', element: <CollectionsPage /> },
       { path: '/commission', element: <CommissionPage /> },
       { path: '/disputes', element: <DisputesPage /> },
+      { path: '/prevention', element: <PreventionPage /> },
+      { path: '/agent-portfolio', element: <AgentPortfolioPage /> },
+      { path: '/contracts', element: <ContractCompliancePage /> },
       { path: '/why', element: <WhyItMattersPage /> },
       { path: '/architecture', element: <ArchitecturePage /> },
     ],
