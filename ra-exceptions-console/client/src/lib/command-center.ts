@@ -1,6 +1,7 @@
 // Client API for the Command Center supervisor agent (server/routes/command-center.ts).
 
 import type { ChatMessage } from './types';
+import { friendlyApiError } from './chat';
 
 /** Allowlisted supervisor keys (mirrors AGENT_ENDPOINT_ENV in server/routes/command-center.ts). */
 export type CommandCenterAgent =
@@ -21,7 +22,8 @@ export interface CommandCenterContext {
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error || res.statusText);
+    // V43 L1: friendly copy for the server's 503 "not configured" / credentials errors.
+    throw new Error(friendlyApiError(res.status, body.error, res.statusText, 'Command Center agent'));
   }
   return res.json() as Promise<T>;
 }

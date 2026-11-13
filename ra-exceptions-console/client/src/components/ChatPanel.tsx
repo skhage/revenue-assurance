@@ -27,6 +27,7 @@ export function ChatPanel() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   async function send(text?: string) {
     const content = (text ?? input).trim();
@@ -38,6 +39,8 @@ export function ChatPanel() {
     setInput('');
     setError(null);
     setLoading(true);
+    // V43 L2: a suggested-question button unmounts once messages exist; keep focus in the input.
+    if (text !== undefined) inputRef.current?.focus();
 
     // Scroll to bottom after user message renders.
     requestAnimationFrame(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }));
@@ -122,12 +125,16 @@ export function ChatPanel() {
             </div>
           ))}
           {loading && (
-            <div role="status" aria-live="polite" className="flex items-center gap-2 text-xs text-muted-foreground">
+            <div id="chat-status" role="status" aria-live="polite" className="flex items-center gap-2 text-xs text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> Thinking…
             </div>
           )}
           {error && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+            // V43 M1: role=alert so screen readers announce failures (matches CommandCenterPanel).
+            <div
+              role="alert"
+              className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+            >
               {error}
             </div>
           )}
@@ -136,13 +143,16 @@ export function ChatPanel() {
         {/* Input bar */}
         <div className="flex gap-2">
           <Textarea
+            ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Ask about recovery strategy, exception patterns, or leakage analysis…"
             className="min-h-[2.5rem] resize-none"
             rows={1}
-            disabled={loading}
+            // V43 L2: readOnly (not disabled) keeps keyboard focus in the textarea while a reply loads.
+            readOnly={loading}
+            aria-describedby={loading ? 'chat-status' : undefined}
             aria-label="Chat message input"
           />
           <Button
