@@ -1,7 +1,7 @@
 -- Base KPI aggregates over the unified leakage register.
 -- The Overview page uses /api/analytics/kpis, which excludes Lakebase cases in
 -- Recovered/WrittenOff state before presenting total_exceptions as "open".
--- Source: v_gold_leakage_summary (22 sources, 60 types, ~1.35M rows, ~$60B).
+-- Source: v_gold_leakage_summary (22 sources, 60 types, 1,323,949 rows, ~$58.74B as of the 2026-10-30 rebaseline).
 SELECT
   COUNT(*)                                      AS total_exceptions,
   COALESCE(SUM(amount_at_risk), 0)              AS total_at_risk,

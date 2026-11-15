@@ -89,7 +89,8 @@ function RiskScoreBar({ score }: { score: number }) {
         role="meter"
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={score}
+        aria-valuenow={Math.max(0, Math.min(score, 100))}
+        aria-valuetext={`${score}`}
         aria-label="Risk score"
       >
         <div className={`h-2 rounded-full ${color}`} style={{ width: `${Math.min(score, 100)}%` }} />

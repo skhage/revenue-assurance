@@ -57,7 +57,8 @@ SELECT
   known_leakage_flag
 FROM all_exceptions
 WHERE (:check_type = 'ALL' OR check_type = :check_type)
-  AND (:severity = 'ALL' OR severity = :severity)
+  -- Case-insensitive: v_gold emits lowercase severity since 2026-10-28; the UI sends uppercase (RA-APP-FIX-SEVERITY-FILTER-CASE).
+  AND (UPPER(:severity) = 'ALL' OR UPPER(severity) = UPPER(:severity))
   AND (
         :search = ''
      OR lower(coalesce(account_name, '')) LIKE '%' || lower(:search) || '%'

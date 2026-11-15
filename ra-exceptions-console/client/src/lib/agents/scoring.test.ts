@@ -55,8 +55,12 @@ describe('amountScore', () => {
 });
 
 describe('severityScore', () => {
-  it('ranks HIGH > MEDIUM > LOW/unknown', () => {
-    expect(severityScore('HIGH')).toBe(25);
+  it('ranks CRITICAL > HIGH > MEDIUM > LOW/unknown', () => {
+    expect(severityScore('CRITICAL')).toBe(25);
+    expect(severityScore('critical')).toBe(25);
+    expect(severityScore('HIGH')).toBe(19);
+    expect(severityScore('CRITICAL')).toBeGreaterThan(severityScore('HIGH'));
+    expect(severityScore('HIGH')).toBeGreaterThan(severityScore('MEDIUM'));
     expect(severityScore('MEDIUM')).toBeCloseTo(13, 0);
     expect(severityScore('LOW')).toBe(0);
     expect(severityScore(null)).toBe(0);

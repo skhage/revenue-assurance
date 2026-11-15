@@ -392,7 +392,16 @@ function InvestigationPlaybook({ exception }: { exception: ExceptionRow }) {
       </LoadingRegion>
     );
   }
-  if (error || steps.length === 0) {
+  // #856: suggest_investigation_path now returns steps for all 60 check types, so a
+  // load failure must not be shown as "no playbook" — distinguish the two states.
+  if (error) {
+    return (
+      <div role="alert" className="text-sm text-muted-foreground">
+        Couldn’t load the investigation playbook. Close and reopen this exception to try again.
+      </div>
+    );
+  }
+  if (steps.length === 0) {
     return (
       <div className="text-sm text-muted-foreground">
         No investigation playbook available for this check type.
@@ -746,7 +755,7 @@ export function ExceptionDrawer({ exception, open, onOpenChange, onCaseChange }:
                           }
                         }}
                       >
-                        <SelectTrigger className="h-8 w-[168px]">
+                        <SelectTrigger className="h-8 w-[168px]" aria-label="Change case status">
                           <SelectValue placeholder="Change status…" />
                         </SelectTrigger>
                         <SelectContent>

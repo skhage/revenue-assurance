@@ -154,7 +154,7 @@ function P1AlertBanner() {
         </div>
       </div>
       <Link
-        to="/queue?severity=HIGH"
+        to="/queue?severity=CRITICAL"
         className="shrink-0 rounded-md bg-destructive px-3 py-1.5 text-xs font-medium text-destructive-foreground transition-colors hover:bg-destructive/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       >
         Triage now

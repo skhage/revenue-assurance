@@ -4,7 +4,7 @@
 -- without materializing all ~1.35M exceptions into Postgres.
 --
 -- Source: v_gold_leakage_summary (read-time UNION of 22 sources, 60 types,
--- ~1.35M rows / ~$60B). Includes PII masking via UC row-level security.
+-- 1,323,949 rows / ~$58.74B as of the 2026-10-30 rebaseline). Includes PII masking via UC row-level security.
 -- @param check_type STRING = ALL
 -- @param severity STRING = ALL
 -- @param search STRING
@@ -29,7 +29,7 @@ SELECT
   known_leakage_flag
 FROM all_exceptions
 WHERE (:check_type = 'ALL' OR check_type = :check_type)
-  AND (:severity = 'ALL'  OR severity = :severity)
+  AND (UPPER(:severity) = 'ALL' OR UPPER(severity) = UPPER(:severity))  -- case-safe: view emits lowercase
   AND (
         :search = ''
      OR lower(coalesce(account_name, '')) LIKE '%' || lower(:search) || '%'

@@ -2,14 +2,15 @@
 // (destructive / warning / success / primary / muted) — never raw hex.
 
 const SEV_STYLES: Record<string, string> = {
-  CRITICAL: 'bg-destructive/10 text-destructive dark:text-red-200',
+  // V45 M2: solid fill so CRITICAL is distinguishable from HIGH (6.57:1 light / 6.88:1 dark).
+  CRITICAL: 'bg-destructive text-destructive-foreground',
   HIGH: 'bg-destructive/10 text-destructive',
   MEDIUM: 'bg-warning/15 text-warning',
   LOW: 'bg-muted text-muted-foreground',
 };
 
 const SEV_DOT: Record<string, string> = {
-  CRITICAL: 'bg-destructive',
+  CRITICAL: 'bg-destructive-foreground',
   HIGH: 'bg-destructive',
   MEDIUM: 'bg-warning',
   LOW: 'bg-muted-foreground',

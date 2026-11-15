@@ -24,7 +24,9 @@ export function amountScore(amount: number, allAmounts: number[]): number {
 
 export function severityScore(severity: string | null | undefined): number {
   const key = (severity ?? '').toUpperCase();
-  if (key === 'HIGH') return WEIGHTS.severity;
+  // V45 M3: CRITICAL (41% of the queue) previously fell through to 0 points.
+  if (key === 'CRITICAL') return WEIGHTS.severity; // 25
+  if (key === 'HIGH') return Math.round(WEIGHTS.severity * 0.76 * 10) / 10; // 19
   if (key === 'MEDIUM') return Math.round(WEIGHTS.severity * 0.52 * 10) / 10; // 13
   return 0;
 }

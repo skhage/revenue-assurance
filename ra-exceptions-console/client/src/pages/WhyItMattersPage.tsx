@@ -40,8 +40,9 @@ import {
  *   The stakes → Why it happens → The technical challenge → The people challenge
  *   → Why Databricks → Into the demo.
  * Content is sourced from demo-artifacts/00-problem-overview.md and the customer
- * roleplay deck. Industry figures are labelled as estimates; the ~$601.5M / ~48,108
- * figure is the seeded demo output, never presented as a customer measurement.
+ * roleplay deck. Industry figures are labelled as estimates; the 1.32M exceptions /
+ * 60 check types figure is the demo dataset output (DEC-PM-S4-HEADLINE: narrate the
+ * count, not the all-source $ total), never presented as a customer measurement.
  */
 
 type Tone = 'brand' | 'destructive' | 'warning' | 'success' | 'muted';
@@ -91,7 +92,7 @@ const CHAPTERS: Chapter[] = [
     lead: 'Revenue leakage is service a carrier has delivered but never fully bills, collects, or recognises. It rarely shows up as one broken system — it is value escaping in the gaps between many systems that are each, locally, working correctly. Left alone it compounds: quarter after quarter, a few points of revenue never arrive.',
     stats: [
       { value: '1–5%', label: 'of telecom revenue lost to leakage (PwC industry estimate)', tone: 'destructive' },
-      { value: '~$601.5M', label: 'amount at risk surfaced in this demo dataset (seeded, illustrative)', tone: 'warning' },
+      { value: '1.32M', label: 'exceptions across 60 check types surfaced in this demo dataset (illustrative)', tone: 'warning' },
       { value: '50–70%', label: 'of identified leakage typically recoverable (industry estimate)', tone: 'success' },
     ],
     callout: {

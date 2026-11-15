@@ -179,13 +179,15 @@ export function QueuePage() {
 
         <div className="ml-auto flex items-center gap-2">
           <Select value={severity} onValueChange={pickSeverity}>
-            <SelectTrigger className="h-9 w-[140px]">
+            <SelectTrigger className="h-9 w-[140px]" aria-label="Filter by severity">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="ALL">All severity</SelectItem>
+              <SelectItem value="ALL">All severities</SelectItem>
+              <SelectItem value="CRITICAL">Critical</SelectItem>
               <SelectItem value="HIGH">High</SelectItem>
               <SelectItem value="MEDIUM">Medium</SelectItem>
+              <SelectItem value="LOW">Low</SelectItem>
             </SelectContent>
           </Select>
           <div className="relative">
