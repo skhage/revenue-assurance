@@ -161,7 +161,9 @@ export function PrioritizationPanel({ health, selected, onSelect }: Props) {
           <DemoBadge kind="deterministic" />
         </div>
         <CardDescription>
-          Score = amount (35) + severity (25) + case age (20) + evidence quality (20), highest first. Routing uses a{' '}
+          {/* V46 L2: show the severity tiers, not just the max (mirrors scoring.ts severityScore). */}
+          Score = amount (35) + severity (Critical 25 / High 19 / Medium 13 / Low 0) + case age (20) + evidence
+          quality (20), highest first. Routing uses a{' '}
           <DemoBadge kind="demo-data" /> analyst roster.
         </CardDescription>
       </CardHeader>
