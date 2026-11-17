@@ -2,6 +2,13 @@
 
 RA-AI-ML-RECALIBRATION (2026-10-06): Enhanced with recovery-feedback
 aggregate features at check_type and customer_id grains.
+
+
+RA-ML-FEATURE-BUILD-REPOINT-1116 (2026-11-16): Source repointed from the
+legacy gold_leakage_summary MV to v_gold_leakage_summary, pinned to the
+same 15 core check types (60,952 rows). v_gold lowercases severity, so it
+is re-uppercased here to keep severity_weight identical. Row-level parity
+(EXCEPT ALL both directions) verified 0/0 before the repoint.
 """
 
 from __future__ import annotations
@@ -16,6 +23,26 @@ try:
 except ModuleNotFoundError:
     from mlops.features import FEATURE_COLUMNS, FEATURE_TABLE_NAME
 
+# Core anomaly-model scope (PM decision 2026-11-16: keep 15 types; expanding
+# to all 60 v_gold types needs a separate @pm decision). OTB is excluded
+# because it has its own dedicated scorer (score_order_to_bill).
+CORE_CHECK_TYPES = (
+    "ar_collection_risk",
+    "contract_price_mismatch",
+    "doc_contract_mismatch",
+    "doc_invoice_mismatch",
+    "expired_quote_active",
+    "fx_rate_deviation",
+    "partner_settlement_variance",
+    "rev_rec_timing_mismatch",
+    "revenue_waterfall_integrity",
+    "unauthorized_discount",
+    "usage_data_quality",
+    "usage_late_cdr",
+    "usage_mediation_failure",
+    "usage_partial_rating",
+    "usage_subscriber_mismatch",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,14 +53,29 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_feature_frame(spark: SparkSession, catalog: str, schema: str) -> DataFrame:
-    leakage_table = f"`{catalog}`.`{schema}`.`gold_leakage_summary`"
+    leakage_table = f"`{catalog}`.`{schema}`.`v_gold_leakage_summary`"
+    core_types_sql = ", ".join(f"'{t}'" for t in CORE_CHECK_TYPES)
     scorecard_table = f"`{catalog}`.`{schema}`.`gold_reconciliation_scorecard`"
     customer_table = f"`{catalog}`.`tmf_customer`.`customer`"
     feedback_table = f"`{catalog}`.`{schema}`.`recovery_feedback`"
 
     return spark.sql(
         f"""
-        WITH exception_base AS (
+        WITH source_rows AS (
+          SELECT
+            check_type,
+            UPPER(TRIM(severity)) AS severity,
+            customer_id,
+            account_name,
+            amount_at_risk,
+            source_table,
+            detection_method,
+            known_leakage_flag,
+            reference_id
+          FROM {leakage_table}
+          WHERE check_type IN ({core_types_sql})
+        ),
+        exception_base AS (
           SELECT
             *,
             ROW_NUMBER() OVER (
@@ -45,11 +87,9 @@ def build_feature_frame(spark: SparkSession, catalog: str, schema: str) -> DataF
                 CAST(amount_at_risk AS STRING)
               ORDER BY COALESCE(account_name, ''), COALESCE(detection_method, '')
             ) AS duplicate_ordinal
-          FROM {leakage_table}
+          FROM source_rows
           -- RA-ML-FEATURE-EXCLUDE-OTB: OTB has its own dedicated scorer
-          -- (score_order_to_bill) that builds features directly from
-          -- gold_order_to_bill_leakage. Exclude from general feature table.
-          WHERE check_type != 'order_to_bill_reconciliation'
+          -- (score_order_to_bill); it is not in CORE_CHECK_TYPES.
         ),
         exception_enriched AS (
           SELECT
@@ -160,7 +200,7 @@ def main() -> None:
     )
 
     if feature_frame.limit(1).count() == 0:
-        raise RuntimeError("gold_leakage_summary contains no exceptions to feature-engineer")
+        raise RuntimeError("v_gold_leakage_summary contains no core-scope exceptions to feature-engineer")
 
     feature_client = FeatureEngineeringClient(model_registry_uri="databricks-uc")
     if spark.catalog.tableExists(feature_table):
